@@ -21,6 +21,7 @@ def build_service(
     *,
     dedupe_store: TrackingDedupeStore | None = None,
     trace_id_factory=None,
+    default_requirements: RaidActionRequirements | None = None,
 ) -> tuple[RaidService, TrackingDedupeStore]:
     dedupe_store = dedupe_store or TrackingDedupeStore()
     service = RaidService(
@@ -28,6 +29,13 @@ def build_service(
         allowed_sender_ids={42, 77},
         dedupe_store=dedupe_store,
         preset_replies=("gm", "lfg"),
+        default_requirements=default_requirements
+        or RaidActionRequirements(
+            like=False,
+            repost=False,
+            bookmark=False,
+            reply=False,
+        ),
         trace_id_factory=trace_id_factory or (lambda: "trace-123"),
     )
     return service, dedupe_store
@@ -154,22 +162,29 @@ def test_service_contract_rejects_legacy_single_sender_argument():
         raise AssertionError("Expected TypeError for legacy allowed_sender_id argument")
 
 
-def test_service_contract_rejects_default_requirements_argument():
-    dedupe_store = TrackingDedupeStore()
-
-    try:
-        RaidService(
-            allowed_chat_ids={-1001},
-            allowed_sender_ids={42},
-            dedupe_store=dedupe_store,
-            default_requirements=RaidActionRequirements(
-                like=True,
-                repost=True,
-                bookmark=False,
-                reply=True,
-            ),
+def test_handle_message_merges_default_requirements_into_detected_job():
+    service, _dedupe_store = build_service(
+        default_requirements=RaidActionRequirements(
+            like=False,
+            repost=False,
+            bookmark=True,
+            reply=True,
         )
-    except TypeError as exc:
-        assert "default_requirements" in str(exc)
-    else:
-        raise AssertionError("Expected TypeError for inert default_requirements argument")
+    )
+
+    result = service.handle_message(
+        IncomingMessage(
+            chat_id=-1001,
+            sender_id=42,
+            text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/555",
+        )
+    )
+
+    assert result.kind == "job_detected"
+    assert result.job is not None
+    assert result.job.requirements == RaidActionRequirements(
+        like=True,
+        repost=False,
+        bookmark=True,
+        reply=True,
+    )

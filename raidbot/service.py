@@ -6,6 +6,7 @@ import uuid
 from raidbot.models import (
     IncomingMessage,
     RaidActionJob,
+    RaidActionRequirements,
     RaidDetectionResult,
 )
 from raidbot.parser import parse_raid_message
@@ -17,6 +18,7 @@ class RaidService:
         allowed_sender_ids: set[int],
         dedupe_store=None,
         preset_replies: tuple[str, ...] = (),
+        default_requirements: RaidActionRequirements | None = None,
         trace_id_factory: Callable[[], str] | None = None,
     ) -> None:
         if not allowed_sender_ids:
@@ -28,6 +30,12 @@ class RaidService:
         self.allowed_sender_ids = set(allowed_sender_ids)
         self.dedupe_store = dedupe_store
         self.preset_replies = preset_replies
+        self.default_requirements = default_requirements or RaidActionRequirements(
+            like=False,
+            repost=False,
+            bookmark=False,
+            reply=False,
+        )
         self._trace_id_factory = trace_id_factory or _new_trace_id
 
     def handle_message(self, message: IncomingMessage) -> RaidDetectionResult:
@@ -53,7 +61,7 @@ class RaidService:
             raw_url=raid_match.raw_url,
             chat_id=message.chat_id,
             sender_id=message.sender_id,
-            requirements=raid_match.requirements,
+            requirements=raid_match.requirements.merged_with(self.default_requirements),
             preset_replies=self.preset_replies,
             trace_id=self._trace_id_factory(),
         )

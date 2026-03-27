@@ -54,6 +54,13 @@ class FakeService:
     ) -> None:
         self.allowed_chat_ids = set(config.whitelisted_chat_ids)
         self.allowed_sender_ids = set(config.allowed_sender_ids)
+        self.default_requirements = RaidActionRequirements(
+            like=config.default_action_like,
+            repost=config.default_action_repost,
+            bookmark=config.default_action_bookmark,
+            reply=config.default_action_reply,
+        )
+        self.preset_replies = tuple(config.preset_replies)
         self.detection_result = detection_result or RaidDetectionResult(kind="not_a_raid")
         self.handled_messages: list[IncomingMessage] = []
 
@@ -208,13 +215,15 @@ def build_default_worker(
     events: list[dict],
     now: datetime,
     *,
+    config: DesktopAppConfig | None = None,
     chrome_environment_factory,
     listener_factory=None,
 ):
     from raidbot.desktop.worker import DesktopBotWorker
 
+    config = config or build_config()
     return DesktopBotWorker(
-        config=build_config(),
+        config=config,
         storage=storage,
         emit_event=events.append,
         chrome_environment_factory=chrome_environment_factory,
@@ -701,6 +710,11 @@ async def test_worker_apply_config_updates_live_fields_without_restart() -> None
         whitelisted_chat_ids=[-1001, -2002],
         allowed_sender_ids=[99, 101],
         chrome_profile_directory="Profile 9",
+        preset_replies=("gm", "lfg"),
+        default_action_like=False,
+        default_action_repost=False,
+        default_action_bookmark=True,
+        default_action_reply=False,
     )
 
     await worker.apply_config(new_config)
@@ -708,11 +722,54 @@ async def test_worker_apply_config_updates_live_fields_without_restart() -> None
     assert worker.config == new_config
     assert worker._service.allowed_chat_ids == {-1001, -2002}
     assert worker._service.allowed_sender_ids == {99, 101}
+    assert worker._service.preset_replies == ("gm", "lfg")
+    assert worker._service.default_requirements == RaidActionRequirements(
+        like=False,
+        repost=False,
+        bookmark=True,
+        reply=False,
+    )
     assert worker._pipeline._backend._launcher.profile_directory == "Profile 9"
     assert worker._listener.stop_calls == 0
     assert created_services == []
     assert created_pipelines == []
     assert created_listeners == []
+
+
+def test_worker_build_service_uses_config_default_actions() -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 47, 0)
+    storage = FakeStorage()
+    worker = build_default_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            default_action_like=False,
+            default_action_repost=False,
+            default_action_bookmark=True,
+            default_action_reply=True,
+        ),
+        chrome_environment_factory=lambda: None,
+    )
+
+    service = worker._build_service(worker.config)
+    result = service.handle_message(
+        IncomingMessage(
+            chat_id=-1001,
+            sender_id=42,
+            text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123",
+        )
+    )
+
+    assert result.kind == "job_detected"
+    assert result.job is not None
+    assert result.job.requirements == RaidActionRequirements(
+        like=True,
+        repost=False,
+        bookmark=True,
+        reply=True,
+    )
 
 
 @pytest.mark.asyncio

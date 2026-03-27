@@ -18,7 +18,12 @@ from raidbot.desktop.models import (
     TelegramConnectionState,
 )
 from raidbot.desktop.storage import DesktopStorage
-from raidbot.models import MessageOutcome, RaidDetectionResult, RaidExecutionResult
+from raidbot.models import (
+    MessageOutcome,
+    RaidActionRequirements,
+    RaidDetectionResult,
+    RaidExecutionResult,
+)
 from raidbot.service import RaidService
 from raidbot.telegram_client import TelegramRaidListener
 
@@ -106,6 +111,8 @@ class DesktopBotWorker:
             self._service.allowed_sender_ids = set(config.allowed_sender_ids)
             if hasattr(self._service, "preset_replies"):
                 self._service.preset_replies = tuple(config.preset_replies)
+            if hasattr(self._service, "default_requirements"):
+                self._service.default_requirements = self._default_requirements(config)
 
         self._update_pipeline_profile_directory(config.chrome_profile_directory)
 
@@ -295,6 +302,7 @@ class DesktopBotWorker:
             allowed_sender_ids=set(config.allowed_sender_ids),
             dedupe_store=self._dedupe_store,
             preset_replies=config.preset_replies,
+            default_requirements=self._default_requirements(config),
         )
 
     def _build_pipeline(self, config: DesktopAppConfig) -> Any:
@@ -358,6 +366,14 @@ class DesktopBotWorker:
             if launcher is not None and hasattr(launcher, "profile_directory"):
                 launcher.profile_directory = profile_directory
                 return
+
+    def _default_requirements(self, config: DesktopAppConfig) -> RaidActionRequirements:
+        return RaidActionRequirements(
+            like=config.default_action_like,
+            repost=config.default_action_repost,
+            bookmark=config.default_action_bookmark,
+            reply=config.default_action_reply,
+        )
 
     def _set_bot_state(self, state: BotRuntimeState) -> None:
         self.state.bot_state = state

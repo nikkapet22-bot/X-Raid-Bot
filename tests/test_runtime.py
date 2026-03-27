@@ -74,11 +74,19 @@ def test_build_runtime_wires_browser_pipeline_and_listener(monkeypatch):
             return True
 
     class FakeService:
-        def __init__(self, allowed_chat_ids, allowed_sender_ids, dedupe_store, preset_replies) -> None:
+        def __init__(
+            self,
+            allowed_chat_ids,
+            allowed_sender_ids,
+            dedupe_store,
+            preset_replies,
+            default_requirements,
+        ) -> None:
             self.allowed_chat_ids = allowed_chat_ids
             self.allowed_sender_ids = allowed_sender_ids
             self.dedupe_store = dedupe_store
             self.preset_replies = preset_replies
+            self.default_requirements = default_requirements
             calls.append(
                 (
                     "service",
@@ -87,6 +95,7 @@ def test_build_runtime_wires_browser_pipeline_and_listener(monkeypatch):
                         allowed_sender_ids,
                         dedupe_store,
                         preset_replies,
+                        default_requirements,
                     ),
                 )
             )
@@ -132,12 +141,30 @@ def test_build_runtime_wires_browser_pipeline_and_listener(monkeypatch):
         browser_mode="launch-only",
         executor_name="noop",
         preset_replies=("hello", "world"),
+        default_action_like=False,
+        default_action_repost=True,
+        default_action_bookmark=True,
+        default_action_reply=False,
     )
 
     runtime = runtime_module.build_runtime(settings)
 
     assert ("chrome", (Path(r"C:\Chrome\chrome.exe"), Path(r"C:\ChromeData"), "Profile 3")) in calls
-    assert ("service", ({-1001, -1002}, {42}, runtime.dedupe_store, ("hello", "world"))) in calls
+    assert (
+        "service",
+        (
+            {-1001, -1002},
+            {42},
+            runtime.dedupe_store,
+            ("hello", "world"),
+            RaidActionRequirements(
+                like=False,
+                repost=True,
+                bookmark=True,
+                reply=False,
+            ),
+        ),
+    ) in calls
     assert ("pipeline", (runtime.pipeline.backend, runtime.pipeline.executor)) in calls
     assert (
         "listener",
@@ -152,6 +179,12 @@ def test_build_runtime_wires_browser_pipeline_and_listener(monkeypatch):
     assert runtime.service.allowed_sender_ids == {42}
     assert runtime.service.dedupe_store is runtime.dedupe_store
     assert runtime.service.preset_replies == ("hello", "world")
+    assert runtime.service.default_requirements == RaidActionRequirements(
+        like=False,
+        repost=True,
+        bookmark=True,
+        reply=False,
+    )
     assert isinstance(runtime.pipeline.backend, FakeBackend)
     assert isinstance(runtime.pipeline.backend.launcher, FakeChromeOpener)
     assert runtime.pipeline.backend.launcher.chrome_path == Path(r"C:\Chrome\chrome.exe")
@@ -175,8 +208,16 @@ def test_runtime_message_handler_returns_non_job_results_directly(monkeypatch):
             return True
 
     class FakeService:
-        def __init__(self, allowed_chat_ids, allowed_sender_ids, dedupe_store, preset_replies) -> None:
+        def __init__(
+            self,
+            allowed_chat_ids,
+            allowed_sender_ids,
+            dedupe_store,
+            preset_replies,
+            default_requirements,
+        ) -> None:
             self.dedupe_store = dedupe_store
+            self.default_requirements = default_requirements
 
         def handle_message(self, message):
             calls.append("service")
@@ -272,8 +313,16 @@ def test_runtime_message_handler_marks_dedupe_after_handed_off_execution(monkeyp
             return True
 
     class FakeService:
-        def __init__(self, allowed_chat_ids, allowed_sender_ids, dedupe_store, preset_replies) -> None:
+        def __init__(
+            self,
+            allowed_chat_ids,
+            allowed_sender_ids,
+            dedupe_store,
+            preset_replies,
+            default_requirements,
+        ) -> None:
             self.dedupe_store = dedupe_store
+            self.default_requirements = default_requirements
 
         def handle_message(self, message):
             _ = message

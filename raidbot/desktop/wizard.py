@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from raidbot.desktop.chrome_profiles import ChromeEnvironment, ChromeProfile, detect_chrome_environment
 from raidbot.desktop.models import DesktopAppConfig
+from raidbot.desktop.telegram_setup import SUPPORTED_RAID_BOT_IDENTIFIERS
 
 
 def _create_page_shell(page: QWizardPage, *, title: str, subtitle: str) -> tuple[QVBoxLayout, QWidget]:
@@ -81,6 +82,11 @@ def _parse_int_list_field(text: str, *, field_name: str) -> list[int]:
         except ValueError as exc:
             raise ValueError(f"{field_name} must be valid integers.") from exc
     return parsed_values
+
+
+def _is_supported_raid_candidate_label(label: str) -> bool:
+    normalized = label.strip().lower().lstrip("@")
+    return normalized in SUPPORTED_RAID_BOT_IDENTIFIERS
 
 
 class SetupWizard(QWizard):
@@ -172,13 +178,13 @@ class WelcomePage(QWizardPage):
         _root, self.surface = _create_page_shell(
             self,
             title="Set Up Raid Bot",
-            subtitle="A guided onboarding flow for Telegram access, Raidar matching, and browser setup.",
+            subtitle="A guided onboarding flow for Telegram access, supported raid senders, and a dedicated raid browser profile.",
         )
         layout = _create_surface_layout(self.surface)
 
         self.headline_label = QLabel("Set Up Raid Bot")
         self.description_label = QLabel(
-            "Configure Telegram access, Raidar matching, and the Chrome profile used for raids."
+            "Configure Telegram access, supported raid senders, and the dedicated raid browser profile used for raids."
         )
         self.note_label = QLabel(
             "Chrome should already be logged into X in the profile you select."
@@ -187,8 +193,8 @@ class WelcomePage(QWizardPage):
             "What you'll configure:\n"
             "• Telegram session\n"
             "• Whitelisted chats\n"
-            "• Raidar sender\n"
-            "• Chrome profile"
+            "• Allowed raid senders\n"
+            "• Raid browser profile"
         )
         for label in (
             self.headline_label,
@@ -223,11 +229,11 @@ class TelegramAuthorizationPage(QWizardPage):
         _root, self.surface = _create_page_shell(
             self,
             title="Telegram Access",
-            subtitle="Connect the Telegram session used to discover chats and confirm Raidar senders.",
+            subtitle="Connect the Telegram session used to discover chats and confirm allowed raid senders.",
         )
         surface_layout = _create_surface_layout(self.surface)
         self.helper_label = QLabel(
-            "Enter your Telegram API credentials. If a session already exists, you can continue without re-entering the login code."
+            "Enter your Telegram API credentials. If a session already exists, you can continue without re-entering the login code. This session is used to discover chats and confirm allowed raid senders."
         )
         self.helper_label.setWordWrap(True)
         self.helper_label.setProperty("muted", True)
@@ -400,7 +406,7 @@ class ChatDiscoveryPage(QWizardPage):
 class RaidarSelectionPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Raidar Selection")
+        self.setTitle("Allowed Raid Senders")
         self._loaded = False
         self._default_help_text = (
             "Confirm one or more detected senders when possible. "
@@ -408,14 +414,14 @@ class RaidarSelectionPage(QWizardPage):
         )
         self.candidate_list = QListWidget()
         self.manual_sender_ids_input = QLineEdit()
-        self.confirm_checkbox = QCheckBox("I confirm the selected allowed sender IDs")
+        self.confirm_checkbox = QCheckBox("I confirm the selected Allowed raid sender IDs")
         self.help_label = QLabel("")
         self.status_label = QLabel("")
 
         _root, self.surface = _create_page_shell(
             self,
-            title="Raidar Sender",
-            subtitle="Review the sender candidates inferred from recent chat history and confirm the correct Raidar source.",
+            title="Allowed Raid Senders",
+            subtitle="Review the supported raid bot candidates inferred from recent chat history and confirm the senders that should be allowed.",
         )
         surface_layout = _create_surface_layout(self.surface)
         self.helper_label = QLabel(self._default_help_text)
@@ -446,7 +452,7 @@ class RaidarSelectionPage(QWizardPage):
             return
         wizard = self.wizard()
         if wizard.telegram_service is None:
-            self.status_label.setText("Authorize Telegram and choose at least one chat before inferring Raidar.")
+            self.status_label.setText("Authorize Telegram and choose at least one chat before inferring allowed raid senders.")
             return
         self.status_label.setText("Loading recent sender candidates...")
         try:
@@ -456,23 +462,28 @@ class RaidarSelectionPage(QWizardPage):
                 )
             )
         except Exception as exc:
-            self.status_label.setText(f"Unable to infer Raidar candidates. Details: {exc}")
+            self.status_label.setText(f"Unable to infer supported raid sender candidates. Details: {exc}")
             return
         self.set_candidates(candidates)
         self._loaded = True
 
     def set_candidates(self, candidates) -> None:
         self.candidate_list.clear()
+        preselected_supported_matches = 0
         for candidate in candidates:
             item = QListWidgetItem(candidate.label)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Unchecked)
             item.setData(Qt.ItemDataRole.UserRole, candidate.entity_id)
+            if _is_supported_raid_candidate_label(candidate.label):
+                item.setCheckState(Qt.CheckState.Checked)
+                preselected_supported_matches += 1
             self.candidate_list.addItem(item)
         self.status_label.setText("")
-        if len(candidates) == 1:
-            self.candidate_list.item(0).setCheckState(Qt.CheckState.Checked)
+        if preselected_supported_matches == 1 and len(candidates) == 1:
             self.help_label.setText("One detected sender was preselected. Confirmation is still required.")
+        elif preselected_supported_matches >= 1:
+            self.help_label.setText("Supported raid bot senders were preselected. Confirm any additional allowed senders if needed.")
         elif len(candidates) > 1:
             self.help_label.setText("Multiple sender candidates were found. Confirm any that should be allowed.")
         else:
@@ -530,11 +541,11 @@ class RaidarSelectionPage(QWizardPage):
 class ChromeProfilePage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Chrome Profile")
+        self.setTitle("Raid Browser Profile")
         self._loaded = False
         self.profile_combo = QComboBox()
         self.helper_label = QLabel(
-            "Choose the Chrome profile Raid Bot should use for raids. That profile must already be logged into X."
+            "Choose the dedicated Chrome profile Raid Bot should use for raids. That profile must already be logged into X."
         )
         self.status_label = QLabel("")
         self.profile_combo.currentIndexChanged.connect(
@@ -543,8 +554,8 @@ class ChromeProfilePage(QWizardPage):
 
         _root, self.surface = _create_page_shell(
             self,
-            title="Chrome Profile",
-            subtitle="Pick the local Chrome profile the bot will reuse when it opens raid tabs.",
+            title="Raid Browser Profile",
+            subtitle="Pick the dedicated local Chrome profile the bot will reuse when it opens raid tabs.",
         )
         surface_layout = _create_surface_layout(self.surface)
         self.helper_label.setWordWrap(True)

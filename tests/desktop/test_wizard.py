@@ -133,9 +133,12 @@ def test_welcome_page_contains_structured_intro_content(qtbot, tmp_path: Path) -
     qtbot.addWidget(wizard)
 
     assert "Telegram access" in wizard.welcome_page.description_label.text()
-    assert "Chrome profile" in wizard.welcome_page.description_label.text()
+    assert "supported raid senders" in wizard.welcome_page.description_label.text()
+    assert "dedicated raid browser profile" in wizard.welcome_page.description_label.text()
     assert "already be logged into X" in wizard.welcome_page.note_label.text()
     assert wizard.welcome_page.checklist_label.text()
+    assert "Allowed raid senders" in wizard.welcome_page.checklist_label.text()
+    assert "Raid browser profile" in wizard.welcome_page.checklist_label.text()
 
 
 def test_wizard_buttons_have_visual_variants(qtbot, tmp_path: Path) -> None:
@@ -194,6 +197,24 @@ def test_chat_and_review_pages_expose_guidance_copy(qtbot, tmp_path: Path) -> No
     assert "Setup summary ready for final review." in wizard.review_page.status_label.text()
     assert "Allowed sender IDs: 10" in wizard.review_page.summary.toPlainText()
     assert "Dedicated raid browser profile: Profile 3" in wizard.review_page.summary.toPlainText()
+
+
+def test_wizard_uses_allowed_sender_and_raid_browser_profile_wording(qtbot, tmp_path: Path) -> None:
+    from raidbot.desktop.wizard import SetupWizard
+
+    wizard = SetupWizard(
+        storage=FakeStorage(tmp_path),
+        telegram_service_factory=lambda *_args: None,
+        chrome_environment=build_chrome_environment(),
+    )
+    qtbot.addWidget(wizard)
+
+    assert wizard.telegram_page.helper_label.text().endswith("confirm allowed raid senders.")
+    assert wizard.raidar_page.title() == "Allowed Raid Senders"
+    assert "detected senders" in wizard.raidar_page.helper_label.text()
+    assert "Allowed raid sender IDs" in wizard.raidar_page.confirm_checkbox.text()
+    assert wizard.chrome_page.title() == "Raid Browser Profile"
+    assert "dedicated Chrome profile" in wizard.chrome_page.helper_label.text()
 
 
 def test_telegram_page_allows_existing_session_without_phone_or_code(qtbot, tmp_path: Path) -> None:
@@ -438,6 +459,30 @@ def test_raidar_page_requires_confirmation_and_supports_multiple_selected_sender
     assert wizard.raidar_page.selected_sender_ids() == [10, 20, 77]
 
 
+def test_raidar_page_preselects_supported_bot_candidates_even_with_fallbacks(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    from raidbot.desktop.wizard import SetupWizard
+
+    wizard = SetupWizard(
+        storage=FakeStorage(tmp_path),
+        telegram_service_factory=lambda *_args: FakeTelegramSetupService(),
+        chrome_environment=build_chrome_environment(),
+    )
+    qtbot.addWidget(wizard)
+
+    wizard.raidar_page.set_candidates(
+        [
+            RaidarCandidate(entity_id=10, label="@raidar"),
+            RaidarCandidate(entity_id=20, label="Alice"),
+        ]
+    )
+
+    assert wizard.raidar_page.candidate_list.item(0).checkState() == Qt.CheckState.Checked
+    assert wizard.raidar_page.candidate_list.item(1).checkState() == Qt.CheckState.Unchecked
+
+
 def test_chat_raidar_and_chrome_page_loading_errors_stay_visible_and_retryable(
     qtbot,
     tmp_path: Path,
@@ -460,7 +505,7 @@ def test_chat_raidar_and_chrome_page_loading_errors_stay_visible_and_retryable(
     wizard.chrome_page.initializePage()
 
     assert wizard.chat_page.status_label.text() == "Unable to load chats for review. Details: chat boom"
-    assert wizard.raidar_page.status_label.text() == "Unable to infer Raidar candidates. Details: raidar boom"
+    assert wizard.raidar_page.status_label.text() == "Unable to infer supported raid sender candidates. Details: raidar boom"
     assert wizard.chrome_page.status_label.text() == "Unable to detect Chrome profiles. Details: chrome boom"
 
     service.chat_error = None

@@ -7,7 +7,7 @@ from raidbot.chrome import ChromeOpener
 from raidbot.browser.backends import LaunchOnlyBrowserBackend
 from raidbot.browser.executors.noop import NoOpRaidExecutor
 from raidbot.browser.pipeline import BrowserPipeline
-from raidbot.models import IncomingMessage
+from raidbot.models import IncomingMessage, RaidActionRequirements
 from raidbot.dedupe import InMemoryOpenedUrlStore
 from raidbot.service import RaidService
 from raidbot.telegram_client import TelegramRaidListener
@@ -29,6 +29,12 @@ def build_runtime(settings) -> Runtime:
         allowed_sender_ids=settings.allowed_sender_ids,
         dedupe_store=dedupe_store,
         preset_replies=settings.preset_replies,
+        default_requirements=RaidActionRequirements(
+            like=settings.default_action_like,
+            repost=settings.default_action_repost,
+            bookmark=settings.default_action_bookmark,
+            reply=settings.default_action_reply,
+        ),
     )
 
     backend = _build_browser_backend(settings)

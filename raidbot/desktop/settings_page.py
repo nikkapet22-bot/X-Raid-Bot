@@ -165,10 +165,10 @@ class SettingsPage(QWidget):
         self.allowed_senders_hint_label.setProperty("muted", True)
         self.allowed_senders_hint_label.setWordWrap(True)
         routing_layout.addRow("", self.allowed_senders_hint_label)
-        routing_layout.addRow("Chrome profile", self.profile_combo)
+        routing_layout.addRow("Raid browser profile", self.profile_combo)
         self.routing_section, self.routing_surface = self._build_section(
             title="Routing",
-            description="Configure the chat whitelist, sender allowlist, and Chrome profile.",
+            description="Configure the chat whitelist, sender allowlist, and dedicated raid browser profile.",
             content_layout=routing_layout,
         )
         layout.addWidget(self.routing_section)

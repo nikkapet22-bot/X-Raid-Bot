@@ -10,6 +10,14 @@ class RaidActionRequirements:
     bookmark: bool
     reply: bool
 
+    def merged_with(self, defaults: "RaidActionRequirements") -> "RaidActionRequirements":
+        return RaidActionRequirements(
+            like=self.like or defaults.like,
+            repost=self.repost or defaults.repost,
+            bookmark=self.bookmark or defaults.bookmark,
+            reply=self.reply or defaults.reply,
+        )
+
 
 @dataclass(frozen=True)
 class RaidActionJob:
