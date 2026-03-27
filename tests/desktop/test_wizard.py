@@ -183,6 +183,7 @@ def test_chat_and_review_pages_expose_guidance_copy(qtbot, tmp_path: Path) -> No
     wizard.chat_page.set_chats([AccessibleChat(chat_id=1, title="Alpha Room")])
     wizard.chat_page.chat_list.item(0).setCheckState(Qt.CheckState.Checked)
     wizard.raidar_page.set_candidates([RaidarCandidate(entity_id=10, label="@raidar")])
+    wizard.raidar_page.candidate_list.item(0).setCheckState(Qt.CheckState.Checked)
     wizard.raidar_page.confirm_checkbox.setChecked(True)
     wizard.chrome_page.set_profiles(build_chrome_environment().profiles)
     wizard.chrome_page.profile_combo.setCurrentIndex(1)
@@ -191,6 +192,8 @@ def test_chat_and_review_pages_expose_guidance_copy(qtbot, tmp_path: Path) -> No
     assert "Review your setup" in wizard.review_page.helper_label.text()
     assert "Review details will appear once the setup data is ready." in wizard.review_page.empty_label.text()
     assert "Setup summary ready for final review." in wizard.review_page.status_label.text()
+    assert "Allowed sender IDs: 10" in wizard.review_page.summary.toPlainText()
+    assert "Dedicated raid browser profile: Profile 3" in wizard.review_page.summary.toPlainText()
 
 
 def test_telegram_page_allows_existing_session_without_phone_or_code(qtbot, tmp_path: Path) -> None:
@@ -262,8 +265,9 @@ def test_telegram_page_change_clears_cached_service_and_downstream_state(
     wizard.chat_page.chat_list.item(0).setCheckState(Qt.CheckState.Checked)
     wizard.chat_page._loaded = True
     wizard.raidar_page.set_candidates([RaidarCandidate(entity_id=10, label="@raidar")])
+    wizard.raidar_page.candidate_list.item(0).setCheckState(Qt.CheckState.Checked)
     wizard.raidar_page.confirm_checkbox.setChecked(True)
-    wizard.raidar_page.manual_sender_id_input.setText("77")
+    wizard.raidar_page.manual_sender_ids_input.setText("77, 88")
     wizard.raidar_page._loaded = True
 
     wizard.telegram_page.phone_input.setText("+40123456789")
@@ -274,8 +278,8 @@ def test_telegram_page_change_clears_cached_service_and_downstream_state(
     assert wizard.chat_page.chat_list.count() == 0
     assert wizard.chat_page.status_label.text() == "No chats are loaded yet. Authorize Telegram first, then return here to discover accessible chats."
     assert wizard.raidar_page._loaded is False
-    assert wizard.raidar_page.candidate_combo.count() == 0
-    assert wizard.raidar_page.manual_sender_id_input.text() == ""
+    assert wizard.raidar_page.candidate_list.count() == 0
+    assert wizard.raidar_page.manual_sender_ids_input.text() == ""
     assert wizard.raidar_page.confirm_checkbox.isChecked() is False
     assert wizard.raidar_page.status_label.text() == ""
 
@@ -307,22 +311,23 @@ def test_chat_selection_change_invalidates_cached_raidar_selection_and_recompute
     wizard.chat_page.set_chats(service.chats)
     wizard.chat_page.chat_list.item(0).setCheckState(Qt.CheckState.Checked)
     wizard.raidar_page.initializePage()
-    wizard.raidar_page.manual_sender_id_input.setText("77")
+    wizard.raidar_page.candidate_list.item(0).setCheckState(Qt.CheckState.Checked)
+    wizard.raidar_page.manual_sender_ids_input.setText("77")
     wizard.raidar_page.confirm_checkbox.setChecked(True)
 
     wizard.chat_page.chat_list.item(0).setCheckState(Qt.CheckState.Unchecked)
     wizard.chat_page.chat_list.item(1).setCheckState(Qt.CheckState.Checked)
 
     assert wizard.raidar_page._loaded is False
-    assert wizard.raidar_page.candidate_combo.count() == 0
-    assert wizard.raidar_page.manual_sender_id_input.text() == ""
+    assert wizard.raidar_page.candidate_list.count() == 0
+    assert wizard.raidar_page.manual_sender_ids_input.text() == ""
     assert wizard.raidar_page.confirm_checkbox.isChecked() is False
 
     wizard.raidar_page.initializePage()
 
     assert service.candidate_requests == [(1,), (2,)]
-    assert wizard.raidar_page.candidate_combo.count() == 1
-    assert wizard.raidar_page.candidate_combo.itemText(0) == "@beta"
+    assert wizard.raidar_page.candidate_list.count() == 1
+    assert wizard.raidar_page.candidate_list.item(0).text() == "@beta"
 
 
 def test_telegram_page_creates_session_directory_before_authorize(qtbot, tmp_path: Path) -> None:
@@ -386,7 +391,7 @@ def test_review_page_rejects_invalid_numeric_fields_without_crashing(
     wizard.telegram_page.authorized = True
     wizard.chat_page.set_chats([AccessibleChat(chat_id=1, title="Alpha Room")])
     wizard.chat_page.chat_list.item(0).setCheckState(Qt.CheckState.Checked)
-    wizard.raidar_page.manual_sender_id_input.setText("bad-sender")
+    wizard.raidar_page.manual_sender_ids_input.setText("bad-sender")
     wizard.raidar_page.confirm_checkbox.setChecked(True)
     wizard.chrome_page.set_profiles(build_chrome_environment().profiles)
     wizard.chrome_page.profile_combo.setCurrentIndex(1)
@@ -394,10 +399,10 @@ def test_review_page_rejects_invalid_numeric_fields_without_crashing(
 
     assert wizard.review_page.validatePage() is False
     assert storage.saved_configs == []
-    assert wizard.review_page.status_label.text() == "Raidar sender ID must be a valid integer."
+    assert wizard.review_page.status_label.text() == "Allowed sender IDs must be valid integers."
 
 
-def test_raidar_page_requires_confirmation_and_allows_manual_sender_fallback(
+def test_raidar_page_requires_confirmation_and_supports_multiple_selected_senders(
     qtbot,
     tmp_path: Path,
 ) -> None:
@@ -424,11 +429,13 @@ def test_raidar_page_requires_confirmation_and_allows_manual_sender_fallback(
 
     assert wizard.raidar_page.isComplete() is False
 
-    wizard.raidar_page.manual_sender_id_input.setText("77")
+    wizard.raidar_page.candidate_list.item(0).setCheckState(Qt.CheckState.Checked)
+    wizard.raidar_page.candidate_list.item(1).setCheckState(Qt.CheckState.Checked)
+    wizard.raidar_page.manual_sender_ids_input.setText("77")
     wizard.raidar_page.confirm_checkbox.setChecked(True)
 
     assert wizard.raidar_page.isComplete() is True
-    assert wizard.raidar_page.selected_sender_id() == 77
+    assert wizard.raidar_page.selected_sender_ids() == [10, 20, 77]
 
 
 def test_chat_raidar_and_chrome_page_loading_errors_stay_visible_and_retryable(
@@ -472,7 +479,7 @@ def test_chat_raidar_and_chrome_page_loading_errors_stay_visible_and_retryable(
     assert wizard.chrome_page.profile_combo.count() == 2
 
 
-def test_review_page_saves_config_and_start_now_flag(qtbot, tmp_path: Path) -> None:
+def test_review_page_saves_multi_sender_config_and_start_now_flag(qtbot, tmp_path: Path) -> None:
     from raidbot.desktop.wizard import SetupWizard
 
     storage = FakeStorage(tmp_path)
@@ -491,13 +498,23 @@ def test_review_page_saves_config_and_start_now_flag(qtbot, tmp_path: Path) -> N
     wizard.telegram_page.authorized = True
     wizard.chat_page.set_chats([AccessibleChat(chat_id=1, title="Alpha Room")])
     wizard.chat_page.chat_list.item(0).setCheckState(Qt.CheckState.Checked)
-    wizard.raidar_page.set_candidates([RaidarCandidate(entity_id=10, label="@raidar")])
+    wizard.raidar_page.set_candidates(
+        [
+            RaidarCandidate(entity_id=10, label="@raidar"),
+            RaidarCandidate(entity_id=20, label="@delugeraidbot"),
+        ]
+    )
+    wizard.raidar_page.candidate_list.item(0).setCheckState(Qt.CheckState.Checked)
+    wizard.raidar_page.candidate_list.item(1).setCheckState(Qt.CheckState.Checked)
+    wizard.raidar_page.manual_sender_ids_input.setText("77")
     wizard.raidar_page.confirm_checkbox.setChecked(True)
     wizard.chrome_page.set_profiles(build_chrome_environment().profiles)
     wizard.chrome_page.profile_combo.setCurrentIndex(1)
     wizard.review_page.start_now_checkbox.setChecked(True)
     wizard.review_page.initializePage()
 
+    assert "Allowed sender IDs: 10, 20, 77" in wizard.review_page.summary.toPlainText()
+    assert "Dedicated raid browser profile: Profile 3" in wizard.review_page.summary.toPlainText()
     assert wizard.review_page.validatePage() is True
     assert len(storage.saved_configs) == 1
     assert storage.saved_configs[0] == DesktopAppConfig(
@@ -506,7 +523,7 @@ def test_review_page_saves_config_and_start_now_flag(qtbot, tmp_path: Path) -> N
         telegram_session_path=tmp_path / "telegram" / "raidbot.session",
         telegram_phone_number="+40123456789",
         whitelisted_chat_ids=[1],
-        raidar_sender_id=10,
+        allowed_sender_ids=[10, 20, 77],
         chrome_profile_directory="Profile 3",
     )
     assert wizard.start_now_requested is True

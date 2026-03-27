@@ -70,6 +70,19 @@ def _parse_int_field(text: str, *, field_name: str) -> int:
         raise ValueError(f"{field_name} must be a valid integer.") from exc
 
 
+def _parse_int_list_field(text: str, *, field_name: str) -> list[int]:
+    values = [chunk.strip() for chunk in text.replace("\n", ",").split(",")]
+    parsed_values: list[int] = []
+    for value in values:
+        if not value:
+            continue
+        try:
+            parsed_values.append(int(value))
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be valid integers.") from exc
+    return parsed_values
+
+
 class SetupWizard(QWizard):
     NextButton = QWizard.WizardButton.NextButton
     BackButton = QWizard.WizardButton.BackButton
@@ -147,7 +160,7 @@ class SetupWizard(QWizard):
             telegram_session_path=self.session_path(),
             telegram_phone_number=self.telegram_page.phone_input.text().strip() or None,
             whitelisted_chat_ids=self.chat_page.selected_chat_ids(),
-            raidar_sender_id=self.raidar_page.selected_sender_id(),
+            allowed_sender_ids=self.raidar_page.selected_sender_ids(),
             chrome_profile_directory=self.chrome_page.selected_profile_directory(),
         )
 
@@ -389,10 +402,13 @@ class RaidarSelectionPage(QWizardPage):
         super().__init__()
         self.setTitle("Raidar Selection")
         self._loaded = False
-        self._default_help_text = "Use the detected candidates when possible. If Raidar cannot be inferred, enter the sender ID manually."
-        self.candidate_combo = QComboBox()
-        self.manual_sender_id_input = QLineEdit()
-        self.confirm_checkbox = QCheckBox("I confirm the selected Raidar sender")
+        self._default_help_text = (
+            "Confirm one or more detected senders when possible. "
+            "If discovery misses an edge case, add sender IDs manually."
+        )
+        self.candidate_list = QListWidget()
+        self.manual_sender_ids_input = QLineEdit()
+        self.confirm_checkbox = QCheckBox("I confirm the selected allowed sender IDs")
         self.help_label = QLabel("")
         self.status_label = QLabel("")
 
@@ -408,8 +424,10 @@ class RaidarSelectionPage(QWizardPage):
         surface_layout.addWidget(self.helper_label)
 
         layout = QFormLayout()
-        layout.addRow("Detected candidates", self.candidate_combo)
-        layout.addRow("Manual sender ID", self.manual_sender_id_input)
+        self.candidate_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.manual_sender_ids_input.setPlaceholderText("Example: 12345, 67890")
+        layout.addRow("Detected candidates", self.candidate_list)
+        layout.addRow("Manual sender IDs", self.manual_sender_ids_input)
         layout.addRow(self.confirm_checkbox)
         layout.addRow(self.help_label)
         layout.addRow(self.status_label)
@@ -417,10 +435,8 @@ class RaidarSelectionPage(QWizardPage):
         self.help_label.setWordWrap(True)
         self.status_label.setWordWrap(True)
 
-        self.candidate_combo.currentIndexChanged.connect(
-            lambda _index: self.completeChanged.emit()
-        )
-        self.manual_sender_id_input.textChanged.connect(
+        self.candidate_list.itemChanged.connect(lambda _item: self.completeChanged.emit())
+        self.manual_sender_ids_input.textChanged.connect(
             lambda _text: self.completeChanged.emit()
         )
         self.confirm_checkbox.toggled.connect(lambda _checked: self.completeChanged.emit())
@@ -446,17 +462,21 @@ class RaidarSelectionPage(QWizardPage):
         self._loaded = True
 
     def set_candidates(self, candidates) -> None:
-        self.candidate_combo.clear()
+        self.candidate_list.clear()
         for candidate in candidates:
-            self.candidate_combo.addItem(candidate.label, candidate.entity_id)
+            item = QListWidgetItem(candidate.label)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, candidate.entity_id)
+            self.candidate_list.addItem(item)
         self.status_label.setText("")
         if len(candidates) == 1:
-            self.candidate_combo.setCurrentIndex(0)
-            self.help_label.setText("One exact Raidar match was preselected. Confirmation is still required.")
+            self.candidate_list.item(0).setCheckState(Qt.CheckState.Checked)
+            self.help_label.setText("One detected sender was preselected. Confirmation is still required.")
         elif len(candidates) > 1:
-            self.help_label.setText("Multiple candidates found. Confirm one or enter a manual sender ID.")
+            self.help_label.setText("Multiple sender candidates were found. Confirm any that should be allowed.")
         else:
-            self.help_label.setText("No exact Raidar match found. Use the manual sender ID fallback.")
+            self.help_label.setText("No exact supported bot match found. Use the manual sender ID fallback.")
         self.completeChanged.emit()
 
     def reset_for_telegram_reauth(self) -> None:
@@ -467,27 +487,42 @@ class RaidarSelectionPage(QWizardPage):
 
     def _clear_selection_state(self) -> None:
         self._loaded = False
-        self.candidate_combo.clear()
-        self.manual_sender_id_input.clear()
+        self.candidate_list.clear()
+        self.manual_sender_ids_input.clear()
         self.confirm_checkbox.setChecked(False)
         self.help_label.setText(self._default_help_text)
         self.status_label.clear()
         self.completeChanged.emit()
 
+    def selected_sender_ids(self) -> list[int]:
+        selected_sender_ids = []
+        for index in range(self.candidate_list.count()):
+            item = self.candidate_list.item(index)
+            if item.checkState() == Qt.CheckState.Checked:
+                selected_sender_ids.append(
+                    _parse_int_field(str(item.data(Qt.ItemDataRole.UserRole)), field_name="Allowed sender IDs")
+                )
+        manual_sender_ids = _parse_int_list_field(
+            self.manual_sender_ids_input.text(),
+            field_name="Allowed sender IDs",
+        )
+        ordered_sender_ids: list[int] = []
+        for sender_id in [*selected_sender_ids, *manual_sender_ids]:
+            if sender_id not in ordered_sender_ids:
+                ordered_sender_ids.append(sender_id)
+        return ordered_sender_ids
+
     def selected_sender_id(self) -> int | None:
-        manual_text = self.manual_sender_id_input.text().strip()
-        if manual_text:
-            return _parse_int_field(manual_text, field_name="Raidar sender ID")
-        value = self.candidate_combo.currentData()
-        if value is None:
+        selected_sender_ids = self.selected_sender_ids()
+        if not selected_sender_ids:
             return None
-        return _parse_int_field(str(value), field_name="Raidar sender ID")
+        return selected_sender_ids[0]
 
     def isComplete(self) -> bool:
         if not self.confirm_checkbox.isChecked():
             return False
         try:
-            return self.selected_sender_id() is not None
+            return bool(self.selected_sender_ids())
         except ValueError:
             return False
 
@@ -598,8 +633,8 @@ class ReviewPage(QWizardPage):
                 [
                     f"API ID: {config.telegram_api_id}",
                     f"Chats: {', '.join(str(chat_id) for chat_id in config.whitelisted_chat_ids)}",
-                    f"Raidar sender: {config.raidar_sender_id}",
-                    f"Chrome profile: {config.chrome_profile_directory}",
+                    f"Allowed sender IDs: {', '.join(str(sender_id) for sender_id in config.allowed_sender_ids)}",
+                    f"Dedicated raid browser profile: {config.chrome_profile_directory}",
                 ]
             )
         )
