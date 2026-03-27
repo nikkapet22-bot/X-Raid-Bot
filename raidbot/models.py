@@ -12,6 +12,7 @@ class IncomingMessage:
 
 @dataclass(frozen=True)
 class MessageOutcome:
+    # Compatibility contract for the existing service/runtime path.
     action: str
     reason: str
     normalized_url: str | None = None
