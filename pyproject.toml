@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "raidbot"
+version = "0.1.0"
+description = "Telegram raid opener daemon"
+requires-python = ">=3.10"
+dependencies = [
+    "telethon",
+    "python-dotenv",
+    "PySide6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-qt",
+]
+
+[tool.setuptools.packages.find]
+include = ["raidbot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,364 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QFrame,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+    QStyle,
+)
+
+from raidbot.desktop.chrome_profiles import detect_chrome_environment
+from raidbot.desktop.models import DesktopAppState
+from raidbot.desktop.settings_page import SettingsPage
+from raidbot.desktop.telegram_setup import TelegramSetupService
+from raidbot.desktop.theme import CARD_OBJECT_NAME, SECTION_OBJECT_NAME
+from raidbot.desktop.tray import TrayController
+
+
+class MainWindow(QMainWindow):
+    def __init__(
+        self,
+        *,
+        controller,
+        storage,
+        tray_controller_factory=TrayController,
+        confirm_close=None,
+        available_profiles_loader=None,
+        session_status_loader=None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.controller = controller
+        self.storage = storage
+        self.confirm_close = confirm_close or self._confirm_close
+        self.available_profiles_loader = (
+            available_profiles_loader or self._load_available_profiles
+        )
+        self.session_status_loader = session_status_loader or self._load_session_status
+        self.bot_state = "stopped"
+        self.connection_state = "disconnected"
+
+        self.setWindowTitle("Raid Bot")
+
+        self.bot_state_label = QLabel("")
+        self.connection_state_label = QLabel("")
+        self.command_bot_state_label = QLabel("")
+        self.command_connection_state_label = QLabel("")
+        self.raids_opened_label = QLabel("0")
+        self.duplicates_label = QLabel("0")
+        self.non_matching_label = QLabel("0")
+        self.open_failures_label = QLabel("0")
+        self.last_successful_label = QLabel("")
+        self.last_error_label = QLabel("")
+        self.activity_list = QListWidget()
+
+        self.start_button = QPushButton("Start")
+        self.stop_button = QPushButton("Stop")
+        self.start_button.setProperty("variant", "primary")
+        self.stop_button.setProperty("variant", "danger")
+        self.start_button.clicked.connect(self.controller.start_bot)
+        self.stop_button.clicked.connect(self.controller.stop_bot)
+
+        central_widget = QWidget()
+        central_layout = QVBoxLayout(central_widget)
+
+        tabs = QTabWidget()
+        tabs.addTab(self._build_dashboard_tab(), "Dashboard")
+        self.settings_page = SettingsPage(
+            config=self.controller.config,
+            available_profiles=self.available_profiles_loader(),
+            session_status=self.session_status_loader(),
+            reauthorize_available=hasattr(self.controller, "reauthorize_session"),
+        )
+        self.settings_page.applyRequested.connect(self.controller.apply_config)
+        if hasattr(self.controller, "reauthorize_session"):
+            self.settings_page.reauthorizeRequested.connect(
+                self.controller.reauthorize_session
+            )
+        tabs.addTab(self.settings_page, "Settings")
+        central_layout.addWidget(tabs)
+
+        self.setCentralWidget(central_widget)
+
+        self._connect_controller_signals()
+        self._apply_state(self.storage.load_state(), include_activity=True)
+        self._ensure_window_icon()
+        self.tray_controller = tray_controller_factory(
+            window=self,
+            controller=self.controller,
+            icon=self.windowIcon(),
+            initial_bot_state=self.bot_state,
+        )
+
+    def _build_dashboard_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setSpacing(16)
+
+        self.command_status_row = self._build_command_status_row()
+        layout.addWidget(self.command_status_row)
+
+        self.status_panel = self._build_status_panel()
+        layout.addWidget(self.status_panel)
+
+        metrics_row = QHBoxLayout()
+        metrics_row.setSpacing(12)
+        self.metric_cards = [
+            self._build_metric_card("Raids Opened", self.raids_opened_label),
+            self._build_metric_card("Duplicates", self.duplicates_label),
+            self._build_metric_card("Non-matching", self.non_matching_label),
+            self._build_metric_card("Open Failures", self.open_failures_label),
+        ]
+        for card in self.metric_cards:
+            metrics_row.addWidget(card)
+        layout.addLayout(metrics_row)
+
+        self.activity_panel = self._build_activity_panel()
+        self.error_panel = self._build_error_panel()
+        layout.addWidget(self.activity_panel)
+        layout.addWidget(self.error_panel)
+        layout.addStretch()
+        return widget
+
+    def _build_command_status_row(self) -> QWidget:
+        row, surface = self._build_panel("commandStatusRow")
+        layout = QHBoxLayout(surface)
+        layout.setSpacing(12)
+        layout.addWidget(self.start_button)
+        layout.addWidget(self.stop_button)
+        layout.addStretch()
+        layout.addWidget(
+            self._build_compact_status_block(
+                "Bot", self.command_bot_state_label, "commandBotStateLabel"
+            )
+        )
+        layout.addWidget(
+            self._build_compact_status_block(
+                "Telegram",
+                self.command_connection_state_label,
+                "commandConnectionStateLabel",
+            )
+        )
+        return row
+
+    def _build_status_panel(self) -> QWidget:
+        panel, surface = self._build_panel("statusPanel")
+        layout = QVBoxLayout(surface)
+        layout.setSpacing(10)
+        layout.addWidget(self._build_section_title("System Status"))
+        layout.addWidget(
+            self._build_helper_label("Monitor bot runtime and Telegram connectivity.")
+        )
+
+        status_layout = QFormLayout()
+        status_layout.addRow("Bot state", self.bot_state_label)
+        status_layout.addRow("Telegram", self.connection_state_label)
+        status_layout.addRow("Last successful raid", self.last_successful_label)
+        layout.addLayout(status_layout)
+        return panel
+
+    def _build_metric_card(self, title: str, value_label: QLabel) -> QFrame:
+        card = QFrame()
+        card.setObjectName(CARD_OBJECT_NAME)
+        layout = QVBoxLayout(card)
+        layout.setSpacing(6)
+        title_label = QLabel(title)
+        title_label.setProperty("muted", "true")
+        layout.addWidget(title_label)
+        layout.addWidget(value_label)
+        layout.addStretch()
+        return card
+
+    def _build_activity_panel(self) -> QWidget:
+        panel, surface = self._build_panel("activityPanel")
+        layout = QVBoxLayout(surface)
+        layout.setSpacing(10)
+        layout.addWidget(self._build_section_title("Recent Activity"))
+        layout.addWidget(
+            self._build_helper_label(
+                "New raid actions appear here as the bot processes messages."
+            )
+        )
+        layout.addWidget(self.activity_list)
+        return panel
+
+    def _build_error_panel(self) -> QWidget:
+        panel, surface = self._build_panel("errorPanel")
+        layout = QVBoxLayout(surface)
+        layout.setSpacing(10)
+        layout.addWidget(self._build_section_title("Last Error"))
+        layout.addWidget(
+            self._build_helper_label("If something breaks, the latest issue is pinned here.")
+        )
+        layout.addWidget(self.last_error_label)
+        return panel
+
+    def _build_compact_status_block(
+        self, title: str, value_label: QLabel, object_name: str
+    ) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(2)
+        layout.setContentsMargins(0, 0, 0, 0)
+        title_label = QLabel(title)
+        title_label.setProperty("muted", "true")
+        value_label.setObjectName(object_name)
+        layout.addWidget(title_label)
+        layout.addWidget(value_label)
+        return container
+
+    def _build_panel(self, object_name: str) -> tuple[QWidget, QWidget]:
+        panel = QWidget()
+        panel.setObjectName(object_name)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+
+        surface = QWidget()
+        surface.setObjectName(SECTION_OBJECT_NAME)
+        panel_layout.addWidget(surface)
+        return panel, surface
+
+    def _build_section_title(self, text: str) -> QLabel:
+        label = QLabel(text)
+        return label
+
+    def _build_helper_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setProperty("muted", "true")
+        return label
+
+    def _connect_controller_signals(self) -> None:
+        self.controller.botStateChanged.connect(self._update_bot_state)
+        self.controller.connectionStateChanged.connect(self._update_connection_state)
+        self.controller.statsChanged.connect(self._apply_stats_state)
+        self.controller.activityAdded.connect(self._append_activity_entry)
+        self.controller.errorRaised.connect(self.last_error_label.setText)
+
+    def _update_bot_state(self, state: str) -> None:
+        self.bot_state = state
+        self.bot_state_label.setText(state)
+        self.command_bot_state_label.setText(state)
+
+    def _update_connection_state(self, state: str) -> None:
+        self.connection_state = state
+        self.connection_state_label.setText(state)
+        self.command_connection_state_label.setText(state)
+
+    def _apply_state(
+        self, state: DesktopAppState, *, include_activity: bool = False
+    ) -> None:
+        self._update_bot_state(state.bot_state.value)
+        self._update_connection_state(state.connection_state.value)
+        self.raids_opened_label.setText(str(state.raids_opened))
+        self.duplicates_label.setText(str(state.duplicates_skipped))
+        self.non_matching_label.setText(str(state.non_matching_skipped))
+        self.open_failures_label.setText(str(state.open_failures))
+        self.last_successful_label.setText(state.last_successful_raid_open_at or "")
+        self.last_error_label.setText(state.last_error or "")
+        if include_activity:
+            self.activity_list.clear()
+            for entry in state.activity:
+                self.activity_list.addItem(self._format_activity(entry))
+
+    def _apply_stats_state(self, state: DesktopAppState) -> None:
+        self._apply_state(state, include_activity=False)
+
+    def _append_activity_entry(self, entry) -> None:
+        self.activity_list.addItem(self._format_activity(entry))
+
+    def _format_activity(self, entry) -> str:
+        timestamp = entry.timestamp
+        if isinstance(timestamp, datetime):
+            timestamp_text = timestamp.isoformat()
+        else:
+            timestamp_text = str(timestamp)
+        parts = [timestamp_text, entry.action]
+        if entry.url:
+            parts.append(entry.url)
+        if entry.reason:
+            parts.append(entry.reason)
+        return " | ".join(parts)
+
+    def _ensure_window_icon(self) -> None:
+        if not self.windowIcon().isNull():
+            return
+        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        if not icon.isNull():
+            self.setWindowIcon(icon)
+
+    def handle_minimize_requested(self) -> None:
+        self.hide()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if self.isMinimized():
+            self.handle_minimize_requested()
+            self.setWindowState(Qt.WindowState.WindowNoState)
+
+    def closeEvent(self, event) -> None:
+        if not self._should_wait_for_shutdown():
+            event.accept()
+            return
+
+        if not self.confirm_close():
+            event.ignore()
+            return
+
+        if self.controller.stop_bot_and_wait():
+            event.accept()
+            return
+        event.ignore()
+
+    def _should_wait_for_shutdown(self) -> bool:
+        if hasattr(self.controller, "is_bot_active"):
+            return bool(self.controller.is_bot_active())
+        return self.bot_state in {"starting", "running", "stopping"}
+
+    def _confirm_close(self) -> bool:
+        return (
+            QMessageBox.question(
+                self,
+                "Stop bot and exit",
+                "The bot is still running. Stop it and close the app?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            == QMessageBox.StandardButton.Yes
+        )
+
+    def _load_available_profiles(self) -> list[str]:
+        try:
+            environment = detect_chrome_environment()
+        except Exception:
+            return [self.controller.config.chrome_profile_directory]
+        profiles = [profile.directory_name for profile in environment.profiles]
+        if self.controller.config.chrome_profile_directory not in profiles:
+            profiles.append(self.controller.config.chrome_profile_directory)
+        return profiles
+
+    def _load_session_status(self) -> str:
+        try:
+            service = TelegramSetupService(
+                api_id=self.controller.config.telegram_api_id,
+                api_hash=self.controller.config.telegram_api_hash,
+                session_path=self.controller.config.telegram_session_path,
+            )
+            status = asyncio.run(
+                asyncio.wait_for(service.get_session_status(), timeout=1.0)
+            )
+        except Exception:
+            return "unknown"
+        return getattr(status, "value", str(status))

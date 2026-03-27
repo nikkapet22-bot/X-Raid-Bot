@@ -1,0 +1,17 @@
+.venv/
+.env
+*.session
+.pytest_cache/
+logs/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.coverage
+.tmp_appdata*/
+.codex_smoke_appdata_final/
+APPDATA_DIR/
+ignored/
+telegram/
+desktop_smoke_stdout.log
+desktop_smoke_stderr.log
+Screenshot_*.png

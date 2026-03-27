@@ -1,0 +1,637 @@
+from __future__ import annotations
+
+import os
+from datetime import datetime
+from pathlib import Path
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtGui import QCloseEvent, QIcon
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+
+from raidbot.desktop.models import (
+    ActivityEntry,
+    BotRuntimeState,
+    DesktopAppConfig,
+    DesktopAppState,
+    TelegramConnectionState,
+)
+from raidbot.desktop.telegram_setup import AccessibleChat, RaidarCandidate, SessionStatus
+
+
+def build_config(**overrides) -> DesktopAppConfig:
+    values = {
+        "telegram_api_id": 123456,
+        "telegram_api_hash": "hash-value",
+        "telegram_session_path": Path("raidbot.session"),
+        "telegram_phone_number": "+40123456789",
+        "whitelisted_chat_ids": [-1001],
+        "raidar_sender_id": 42,
+        "chrome_profile_directory": "Profile 3",
+    }
+    values.update(overrides)
+    return DesktopAppConfig(**values)
+
+
+class FakeStorage:
+    def __init__(
+        self,
+        *,
+        state: DesktopAppState | None = None,
+        config: DesktopAppConfig | None = None,
+        base_dir: Path | None = None,
+    ) -> None:
+        self._state = state or DesktopAppState()
+        self._config = config or build_config()
+        self.base_dir = base_dir or Path(".")
+
+    def load_state(self) -> DesktopAppState:
+        return self._state
+
+    def load_config(self) -> DesktopAppConfig:
+        return self._config
+
+
+class FakeTelegramSetupService:
+    async def authorize(self, **_kwargs) -> SessionStatus:
+        return SessionStatus.authorized
+
+    async def list_accessible_chats(self) -> list[AccessibleChat]:
+        return [AccessibleChat(chat_id=-1001, title="Raid Group")]
+
+    async def infer_recent_sender_candidates(self, _chat_ids) -> list[RaidarCandidate]:
+        return [RaidarCandidate(entity_id=42, label="@raidar")]
+
+
+class FakeController(QObject):
+    botStateChanged = Signal(str)
+    connectionStateChanged = Signal(str)
+    statsChanged = Signal(object)
+    activityAdded = Signal(object)
+    errorRaised = Signal(str)
+
+    def __init__(self, config: DesktopAppConfig | None = None) -> None:
+        super().__init__()
+        self.config = config or build_config()
+        self.start_calls = 0
+        self.stop_calls = 0
+        self.apply_calls = []
+        self.active = False
+        self.botStateChanged.connect(self._sync_active_state)
+
+    def start_bot(self) -> None:
+        self.start_calls += 1
+        self.active = True
+
+    def stop_bot(self) -> None:
+        self.stop_calls += 1
+        self.active = False
+
+    def stop_bot_and_wait(self) -> bool:
+        self.stop_calls += 1
+        self.active = False
+        return True
+
+    def apply_config(self, config: DesktopAppConfig) -> None:
+        self.config = config
+        self.apply_calls.append(config)
+
+    def is_bot_active(self) -> bool:
+        return self.active
+
+    def _sync_active_state(self, state: str) -> None:
+        self.active = state in {"starting", "running", "stopping"}
+
+
+def build_window(controller: FakeController, storage: FakeStorage, **overrides):
+    from raidbot.desktop.main_window import MainWindow
+
+    values = {
+        "controller": controller,
+        "storage": storage,
+        "tray_controller_factory": lambda *args, **kwargs: None,
+        "available_profiles_loader": lambda: ["Default", "Profile 3", "Profile 9"],
+        "session_status_loader": lambda: "authorized",
+    }
+    values.update(overrides)
+    return MainWindow(**values)
+
+
+class FakeAction:
+    def __init__(self, text: str, callback=None) -> None:
+        self._text = text
+        self.callback = callback
+        self._enabled = True
+
+    def text(self) -> str:
+        return self._text
+
+    def setText(self, text: str) -> None:
+        self._text = text
+
+    def setEnabled(self, enabled: bool) -> None:
+        self._enabled = enabled
+
+    def isEnabled(self) -> bool:
+        return self._enabled
+
+    def trigger(self) -> None:
+        if self.callback is not None and self._enabled:
+            self.callback()
+
+
+class FakeMenu:
+    def __init__(self) -> None:
+        self.actions = []
+
+    def addAction(self, text: str, callback=None):
+        action = FakeAction(text, callback)
+        self.actions.append(action)
+        return action
+
+
+class FakeTrayIconSignal:
+    def __init__(self) -> None:
+        self._callbacks = []
+
+    def connect(self, callback) -> None:
+        self._callbacks.append(callback)
+
+    def emit(self, value) -> None:
+        for callback in self._callbacks:
+            callback(value)
+
+
+class FakeTrayIcon:
+    def __init__(self, _icon=None, _parent=None) -> None:
+        self.activated = FakeTrayIconSignal()
+        self.context_menu = None
+        self.visible = False
+
+    def setContextMenu(self, menu) -> None:
+        self.context_menu = menu
+
+    def show(self) -> None:
+        self.visible = True
+
+    def hide(self) -> None:
+        self.visible = False
+
+
+def test_main_window_initializes_from_persisted_state_and_updates_from_signals(qtbot) -> None:
+    storage = FakeStorage(
+        state=DesktopAppState(
+            bot_state=BotRuntimeState.stopped,
+            connection_state=TelegramConnectionState.disconnected,
+            raids_opened=4,
+            duplicates_skipped=2,
+            non_matching_skipped=3,
+            open_failures=1,
+            last_successful_raid_open_at="2026-03-26T10:00:00",
+            activity=[
+                ActivityEntry(
+                    timestamp=datetime(2026, 3, 26, 9, 55, 0),
+                    action="opened",
+                    url="https://x.com/i/status/100",
+                    reason="raid_opened",
+                )
+            ],
+            last_error="boom",
+        )
+    )
+    controller = FakeController()
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    assert window.bot_state_label.text() == "stopped"
+    assert window.connection_state_label.text() == "disconnected"
+    assert window.raids_opened_label.text() == "4"
+    assert window.last_error_label.text() == "boom"
+    assert window.activity_list.count() == 1
+
+    updated_state = DesktopAppState(
+        bot_state=BotRuntimeState.running,
+        connection_state=TelegramConnectionState.connected,
+        raids_opened=5,
+        duplicates_skipped=2,
+        non_matching_skipped=3,
+        open_failures=1,
+        last_successful_raid_open_at="2026-03-26T10:10:00",
+        activity=[],
+        last_error="new-error",
+    )
+    try:
+        controller.botStateChanged.emit("running")
+        controller.connectionStateChanged.emit("connected")
+        controller.statsChanged.emit(updated_state)
+        controller.activityAdded.emit(
+            ActivityEntry(
+                timestamp=datetime(2026, 3, 26, 10, 10, 0),
+                action="opened",
+                url="https://x.com/i/status/200",
+                reason="raid_opened",
+            )
+        )
+        controller.errorRaised.emit("new-error")
+
+        assert window.bot_state_label.text() == "running"
+        assert window.connection_state_label.text() == "connected"
+        assert window.raids_opened_label.text() == "5"
+        assert window.last_successful_label.text() == "2026-03-26T10:10:00"
+        assert window.last_error_label.text() == "new-error"
+        assert window.activity_list.count() == 2
+    finally:
+        controller.botStateChanged.emit("stopped")
+
+
+def test_main_window_dashboard_exposes_metric_cards_and_panels(qtbot) -> None:
+    from raidbot.desktop.main_window import MainWindow
+    from raidbot.desktop.theme import SECTION_OBJECT_NAME
+
+    window = MainWindow(controller=FakeController(), storage=FakeStorage())
+    qtbot.addWidget(window)
+
+    assert window.command_status_row.objectName() == "commandStatusRow"
+    assert window.command_bot_state_label.objectName() == "commandBotStateLabel"
+    assert window.command_connection_state_label.objectName() == "commandConnectionStateLabel"
+    assert window.status_panel.objectName() == "statusPanel"
+    assert len(window.metric_cards) == 4
+    assert window.activity_panel.objectName() == "activityPanel"
+    assert window.error_panel.objectName() == "errorPanel"
+    assert window.command_status_row.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
+    assert window.status_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
+    assert window.activity_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
+    assert window.error_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
+
+
+def test_main_window_uses_visible_fallback_icon_for_tray(qtbot) -> None:
+    from raidbot.desktop.main_window import MainWindow
+
+    captured = {}
+
+    def tray_factory(**kwargs):
+        captured["icon_is_null"] = kwargs["icon"].isNull()
+        return object()
+
+    window = MainWindow(
+        controller=FakeController(),
+        storage=FakeStorage(),
+        tray_controller_factory=tray_factory,
+    )
+    qtbot.addWidget(window)
+
+    assert captured["icon_is_null"] is False
+    assert window.windowIcon().isNull() is False
+
+
+def test_main_window_start_button_uses_primary_variant(qtbot) -> None:
+    from raidbot.desktop.main_window import MainWindow
+
+    window = MainWindow(controller=FakeController(), storage=FakeStorage())
+    qtbot.addWidget(window)
+
+    assert window.start_button.property("variant") == "primary"
+
+
+def test_running_window_minimizes_to_tray_on_minimize(qtbot) -> None:
+    controller = FakeController()
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+    window.show()
+
+    window.handle_minimize_requested()
+
+    assert window.isHidden() is True
+
+
+def test_setup_window_minimize_behaves_like_normal_window_minimize(qtbot, tmp_path: Path) -> None:
+    from raidbot.desktop.chrome_profiles import ChromeEnvironment, ChromeProfile
+    from raidbot.desktop.wizard import SetupWizard
+
+    wizard = SetupWizard(
+        storage=FakeStorage(base_dir=tmp_path),
+        telegram_service_factory=lambda *_args: FakeTelegramSetupService(),
+        chrome_environment=ChromeEnvironment(
+            chrome_path=Path(r"C:\Chrome\chrome.exe"),
+            user_data_dir=Path(r"C:\Chrome\User Data"),
+            profiles=[ChromeProfile(directory_name="Profile 3", label="Raid")],
+        ),
+    )
+    qtbot.addWidget(wizard)
+    wizard.show()
+    wizard.showMinimized()
+    qtbot.waitUntil(
+        lambda: bool(wizard.windowState() & Qt.WindowState.WindowMinimized)
+    )
+
+    assert wizard.isHidden() is False
+
+
+def test_close_during_setup_exits_normally(qtbot, tmp_path: Path) -> None:
+    from raidbot.desktop.chrome_profiles import ChromeEnvironment, ChromeProfile
+    from raidbot.desktop.wizard import SetupWizard
+
+    wizard = SetupWizard(
+        storage=FakeStorage(base_dir=tmp_path),
+        telegram_service_factory=lambda *_args: FakeTelegramSetupService(),
+        chrome_environment=ChromeEnvironment(
+            chrome_path=Path(r"C:\Chrome\chrome.exe"),
+            user_data_dir=Path(r"C:\Chrome\User Data"),
+            profiles=[ChromeProfile(directory_name="Profile 3", label="Raid")],
+        ),
+    )
+    qtbot.addWidget(wizard)
+
+    event = QCloseEvent()
+    QApplication.sendEvent(wizard, event)
+
+    assert event.isAccepted() is True
+
+
+def test_close_while_stopped_exits_normally(qtbot) -> None:
+    controller = FakeController()
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert event.isAccepted() is True
+    assert controller.stop_calls == 0
+
+
+def test_close_while_running_requests_confirmation_before_exit(qtbot) -> None:
+    controller = FakeController()
+    controller.active = True
+    confirmations = []
+    window = build_window(
+        controller,
+        FakeStorage(),
+        confirm_close=lambda: confirmations.append("asked") or True,
+    )
+    qtbot.addWidget(window)
+    controller.botStateChanged.emit("running")
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert confirmations == ["asked"]
+    assert event.isAccepted() is True
+    assert controller.stop_calls == 1
+
+
+def test_close_while_running_uses_synchronous_shutdown_on_controller(qtbot) -> None:
+    class BlockingShutdownController(FakeController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stop_and_wait_calls = 0
+
+        def stop_bot(self) -> None:
+            raise AssertionError("closeEvent should use stop_bot_and_wait")
+
+        def stop_bot_and_wait(self) -> None:
+            self.stop_and_wait_calls += 1
+            return True
+
+    controller = BlockingShutdownController()
+    controller.active = True
+    window = build_window(
+        controller,
+        FakeStorage(),
+        confirm_close=lambda: True,
+    )
+    qtbot.addWidget(window)
+    controller.botStateChanged.emit("running")
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert controller.stop_and_wait_calls == 1
+    assert event.isAccepted() is True
+
+
+def test_close_while_stopping_still_waits_for_active_controller_shutdown(qtbot) -> None:
+    controller = FakeController()
+    controller.active = True
+    window = build_window(
+        controller,
+        FakeStorage(),
+        confirm_close=lambda: True,
+    )
+    qtbot.addWidget(window)
+    controller.botStateChanged.emit("stopping")
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert controller.stop_calls == 1
+    assert event.isAccepted() is True
+
+
+def test_close_while_running_uses_default_confirmation_dialog(qtbot, monkeypatch) -> None:
+    from raidbot.desktop import main_window as main_window_module
+    from PySide6.QtWidgets import QMessageBox
+
+    controller = FakeController()
+    controller.active = True
+    asked = []
+
+    def fake_question(*_args, **_kwargs):
+        asked.append("asked")
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(main_window_module.QMessageBox, "question", fake_question)
+
+    window = build_window(controller, FakeStorage(), confirm_close=None)
+    qtbot.addWidget(window)
+    controller.botStateChanged.emit("running")
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert asked == ["asked"]
+    assert event.isAccepted() is False
+    assert controller.stop_calls == 0
+
+
+def test_tray_toggle_action_tracks_runtime_state_model(qtbot) -> None:
+    from raidbot.desktop.tray import TrayController
+
+    controller = FakeController()
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+    tray = TrayController(
+        window=window,
+        controller=controller,
+        icon=QIcon(),
+        tray_icon_factory=FakeTrayIcon,
+        menu_factory=FakeMenu,
+        initial_bot_state="stopped",
+    )
+
+    assert tray.toggle_action.text() == "Start bot"
+    controller.botStateChanged.emit("running")
+    assert tray.toggle_action.text() == "Stop bot"
+    assert tray.toggle_action.isEnabled() is True
+    controller.botStateChanged.emit("starting")
+    assert tray.toggle_action.text() == "Starting..."
+    assert tray.toggle_action.isEnabled() is False
+    tray.toggle_action.trigger()
+    assert controller.start_calls == 0
+    controller.botStateChanged.emit("stopping")
+    assert tray.toggle_action.text() == "Stopping..."
+    assert tray.toggle_action.isEnabled() is False
+    tray.toggle_action.trigger()
+    assert controller.stop_calls == 0
+    controller.botStateChanged.emit("setup_required")
+    assert tray.toggle_action.text() == "Setup required"
+    assert tray.toggle_action.isEnabled() is False
+    tray.toggle_action.trigger()
+    assert controller.start_calls == 0
+    controller.botStateChanged.emit("error")
+    assert tray.toggle_action.text() == "Retry start"
+    assert tray.toggle_action.isEnabled() is True
+    tray.toggle_action.trigger()
+    assert controller.start_calls == 1
+    controller.botStateChanged.emit("stopped")
+    assert tray.toggle_action.text() == "Start bot"
+
+
+def test_tray_click_restores_main_window(qtbot) -> None:
+    from raidbot.desktop.tray import TrayController
+
+    controller = FakeController()
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+    tray = TrayController(
+        window=window,
+        controller=controller,
+        icon=QIcon(),
+        tray_icon_factory=FakeTrayIcon,
+        menu_factory=FakeMenu,
+        initial_bot_state="stopped",
+    )
+    window.show()
+    window.hide()
+
+    tray._handle_activated(QSystemTrayIcon.ActivationReason.Trigger)
+
+    assert window.isVisible() is True
+
+
+def test_main_window_feeds_settings_page_real_profiles_and_session_status(qtbot) -> None:
+    from raidbot.desktop.main_window import MainWindow
+
+    controller = FakeController()
+    window = MainWindow(
+        controller=controller,
+        storage=FakeStorage(),
+        tray_controller_factory=lambda *args, **kwargs: None,
+        available_profiles_loader=lambda: ["Default", "Profile 3", "Profile 9"],
+        session_status_loader=lambda: "authorized",
+    )
+    qtbot.addWidget(window)
+
+    assert window.settings_page.session_status_label.text() == "authorized"
+    assert window.settings_page.profile_combo.count() == 3
+    assert window.settings_page.profile_combo.currentText() == "Profile 3"
+    assert window.settings_page.reauthorize_button.isEnabled() is False
+    assert "delete the saved desktop config file" in window.settings_page.reauthorize_hint_label.text().lower()
+    assert "restart the app" in window.settings_page.reauthorize_hint_label.text().lower()
+
+
+def test_main_window_default_loaders_feed_settings_page(qtbot, monkeypatch) -> None:
+    from raidbot.desktop import main_window as main_window_module
+    from raidbot.desktop.chrome_profiles import ChromeEnvironment, ChromeProfile
+    from raidbot.desktop.main_window import MainWindow
+
+    class FakeTelegramSetupService:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def get_session_status(self):
+            return SessionStatus.authorized
+
+    monkeypatch.setattr(
+        main_window_module,
+        "detect_chrome_environment",
+        lambda: ChromeEnvironment(
+            chrome_path=Path(r"C:\Chrome\chrome.exe"),
+            user_data_dir=Path(r"C:\Chrome\User Data"),
+            profiles=[
+                ChromeProfile(directory_name="Default", label="Default"),
+                ChromeProfile(directory_name="Profile 3", label="Raid"),
+                ChromeProfile(directory_name="Profile 9", label="Alt"),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "TelegramSetupService",
+        FakeTelegramSetupService,
+    )
+
+    controller = FakeController()
+    window = MainWindow(
+        controller=controller,
+        storage=FakeStorage(),
+        tray_controller_factory=lambda *args, **kwargs: None,
+    )
+    qtbot.addWidget(window)
+
+    assert window.settings_page.session_status_label.text() == "authorized"
+    assert [window.settings_page.profile_combo.itemText(index) for index in range(window.settings_page.profile_combo.count())] == [
+        "Default",
+        "Profile 3",
+        "Profile 9",
+    ]
+    assert window.settings_page.profile_combo.currentText() == "Profile 3"
+    assert window.settings_page.reauthorize_button.isEnabled() is False
+
+
+def test_main_window_keeps_reauthorize_enabled_when_controller_supports_it(qtbot) -> None:
+    from raidbot.desktop.main_window import MainWindow
+
+    class ReauthorizeController(FakeController):
+        def reauthorize_session(self) -> None:
+            self.reauthorize_calls = getattr(self, "reauthorize_calls", 0) + 1
+
+    controller = ReauthorizeController()
+    window = MainWindow(
+        controller=controller,
+        storage=FakeStorage(),
+        tray_controller_factory=lambda *args, **kwargs: None,
+        available_profiles_loader=lambda: ["Default", "Profile 3"],
+        session_status_loader=lambda: "authorized",
+    )
+    qtbot.addWidget(window)
+
+    assert window.settings_page.reauthorize_button.isEnabled() is True
+    assert window.settings_page.reauthorize_button.property("variant") == "secondary"
+
+
+def test_main_window_reauthorize_button_calls_controller_when_supported(qtbot) -> None:
+    from raidbot.desktop.main_window import MainWindow
+
+    class ReauthorizeController(FakeController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reauthorize_calls = 0
+
+        def reauthorize_session(self) -> None:
+            self.reauthorize_calls += 1
+
+    controller = ReauthorizeController()
+    window = MainWindow(
+        controller=controller,
+        storage=FakeStorage(),
+        tray_controller_factory=lambda *args, **kwargs: None,
+        available_profiles_loader=lambda: ["Default", "Profile 3"],
+        session_status_loader=lambda: "authorized",
+    )
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.settings_page.reauthorize_button, Qt.MouseButton.LeftButton)
+
+    assert controller.reauthorize_calls == 1
