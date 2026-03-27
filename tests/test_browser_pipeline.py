@@ -324,6 +324,26 @@ def test_controlled_session_backend_passes_through_executor_result() -> None:
     ]
 
 
+def test_controlled_session_backend_passes_through_executor_failure_result() -> None:
+    job = build_job()
+    session = FakeSession(ready=True)
+    executor = RecordingExecutor(
+        RaidExecutionResult(kind="executor_failed", handed_off=True)
+    )
+    backend = ControlledSessionBrowserBackend(session_factory=lambda: session)
+
+    result = backend.execute(job, executor, should_continue=lambda: True)
+
+    assert result.kind == "executor_failed"
+    assert result.handed_off is True
+    assert executor.calls == [(job, session)]
+    assert session.events == [
+        ("navigate", job.normalized_url),
+        "wait_until_ready",
+        "close",
+    ]
+
+
 def test_controlled_session_backend_reports_session_close_failure_after_handoff() -> None:
     job = build_job()
     session = FakeSession(ready=True, close_error=RuntimeError("close failed"))
