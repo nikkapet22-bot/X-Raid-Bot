@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from raidbot.browser.models import (
+    RaidActionJob,
+    RaidActionRequirements,
+    RaidDetectionResult,
+    RaidExecutionResult,
+)
+
 
 @dataclass(frozen=True)
 class IncomingMessage:
@@ -22,3 +29,14 @@ class MessageOutcome:
 class RaidMatch:
     raw_url: str
     normalized_url: str
+
+
+__all__ = [
+    "IncomingMessage",
+    "MessageOutcome",
+    "RaidMatch",
+    "RaidActionRequirements",
+    "RaidActionJob",
+    "RaidDetectionResult",
+    "RaidExecutionResult",
+]
