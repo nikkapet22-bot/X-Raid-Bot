@@ -1,4 +1,4 @@
-# raidbot
+# X-Raid-Bot
 
 ## Desktop app
 
