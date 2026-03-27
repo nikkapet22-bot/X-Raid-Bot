@@ -29,6 +29,7 @@ class SessionStatus(str, Enum):
 
 PromptCallback = Callable[[], str | Awaitable[str]]
 ClientFactory = Callable[[str, int, str], Any]
+SUPPORTED_RAID_BOT_IDENTIFIERS = ("raidar", "delugeraidbot", "d.raidbot")
 
 
 class TelegramSetupService:
@@ -153,16 +154,16 @@ class TelegramSetupService:
                     sender_counts[entity_id] += 1
 
             strict_matches = detect_raidar_candidates(senders.values())
-            if strict_matches:
-                return strict_matches
-
-            return [
+            strict_match_ids = {candidate.entity_id for candidate in strict_matches}
+            fallback_candidates = [
                 RaidarCandidate(entity_id=entity_id, label=_label_for_entity(senders[entity_id]))
                 for entity_id, _count in sorted(
                     sender_counts.items(),
                     key=lambda item: (-item[1], _label_for_entity(senders[item[0]]).lower()),
                 )
+                if entity_id not in strict_match_ids
             ]
+            return [*strict_matches, *fallback_candidates]
         finally:
             await _maybe_await(client.disconnect())
 
@@ -204,21 +205,15 @@ class TelegramSetupService:
 
 
 def detect_raidar_candidates(entities: Iterable[Any]) -> list[RaidarCandidate]:
-    entity_list = list(entities)
-    exact_username = [
-        RaidarCandidate(entity_id=int(entity.id), label=_label_for_entity(entity))
-        for entity in entity_list
-        if (getattr(entity, "username", None) or "").lower() == "raidar"
-    ]
-    if exact_username:
-        return exact_username
-
-    exact_name = [
-        RaidarCandidate(entity_id=int(entity.id), label=_label_for_entity(entity))
-        for entity in entity_list
-        if _display_name(entity) == "Raidar"
-    ]
-    return exact_name
+    candidates: list[RaidarCandidate] = []
+    seen_entity_ids: set[int] = set()
+    for entity in entities:
+        entity_id = int(entity.id)
+        if entity_id in seen_entity_ids or not _is_supported_raid_bot(entity):
+            continue
+        seen_entity_ids.add(entity_id)
+        candidates.append(RaidarCandidate(entity_id=entity_id, label=_label_for_entity(entity)))
+    return candidates
 
 
 def _display_name(entity: Any) -> str:
@@ -235,6 +230,15 @@ def _label_for_entity(entity: Any) -> str:
     if username:
         return f"@{username}"
     return _display_name(entity)
+
+
+def _is_supported_raid_bot(entity: Any) -> bool:
+    username = (getattr(entity, "username", None) or "").strip().lower()
+    display_name = _display_name(entity).strip().lower()
+    return (
+        username in SUPPORTED_RAID_BOT_IDENTIFIERS
+        or display_name in SUPPORTED_RAID_BOT_IDENTIFIERS
+    )
 
 
 async def _resolve_callback(callback: PromptCallback) -> str:

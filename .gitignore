@@ -15,3 +15,4 @@ telegram/
 desktop_smoke_stdout.log
 desktop_smoke_stderr.log
 Screenshot_*.png
+.worktrees/

@@ -1,131 +1,190 @@
-from raidbot.dedupe import InMemoryOpenedUrlStore
-from raidbot.models import IncomingMessage
+from raidbot.models import IncomingMessage, RaidActionRequirements
 from raidbot.service import RaidService
-
-
-class FakeOpener:
-    def __init__(self) -> None:
-        self.opened_urls: list[str] = []
-
-    def open(self, url: str) -> None:
-        self.opened_urls.append(url)
-
-
-class RaisingOpener:
-    def open(self, url: str) -> None:
-        raise RuntimeError("chrome launch failed")
 
 
 class TrackingDedupeStore:
     def __init__(self) -> None:
-        self.marked_urls: list[str] = []
+        self.contains_calls: list[str] = []
+        self.mark_calls: list[str] = []
+        self.existing: set[str] = set()
 
     def contains(self, url: str) -> bool:
-        return False
+        self.contains_calls.append(url)
+        return url in self.existing
 
     def mark_if_new(self, url: str) -> bool:
-        self.marked_urls.append(url)
+        self.mark_calls.append(url)
         return True
 
 
-def build_service() -> tuple[RaidService, FakeOpener]:
-    opener = FakeOpener()
+def build_service(
+    *,
+    dedupe_store: TrackingDedupeStore | None = None,
+    trace_id_factory=None,
+    default_requirements: RaidActionRequirements | None = None,
+) -> tuple[RaidService, TrackingDedupeStore]:
+    dedupe_store = dedupe_store or TrackingDedupeStore()
     service = RaidService(
         allowed_chat_ids={-1001},
-        allowed_sender_id=42,
-        opener=opener,
-        dedupe_store=InMemoryOpenedUrlStore(),
-    )
-    return service, opener
-
-
-def test_handle_message_opens_a_new_matching_raid():
-    service, opener = build_service()
-
-    outcome = service.handle_message(
-        IncomingMessage(
-            chat_id=-1001,
-            sender_id=42,
-            text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123",
-        )
-    )
-
-    assert outcome.action == "opened"
-    assert outcome.reason == "raid_opened"
-    assert outcome.normalized_url == "https://x.com/i/status/123"
-    assert opener.opened_urls == ["https://x.com/i/status/123"]
-
-
-def test_handle_message_skips_duplicate_raid_urls():
-    service, opener = build_service()
-    message = IncomingMessage(
-        chat_id=-1001,
-        sender_id=42,
-        text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123",
-    )
-
-    first_outcome = service.handle_message(message)
-    second_outcome = service.handle_message(message)
-
-    assert first_outcome.action == "opened"
-    assert second_outcome.action == "skipped"
-    assert second_outcome.reason == "duplicate"
-    assert second_outcome.normalized_url == "https://x.com/i/status/123"
-    assert opener.opened_urls == ["https://x.com/i/status/123"]
-
-
-def test_handle_message_skips_when_opening_fails():
-    dedupe_store = TrackingDedupeStore()
-    service = RaidService(
-        allowed_chat_ids={-1001},
-        allowed_sender_id=42,
-        opener=RaisingOpener(),
+        allowed_sender_ids={42, 77},
         dedupe_store=dedupe_store,
+        preset_replies=("gm", "lfg"),
+        default_requirements=default_requirements
+        or RaidActionRequirements(
+            like=False,
+            repost=False,
+            bookmark=False,
+            reply=False,
+        ),
+        trace_id_factory=trace_id_factory or (lambda: "trace-123"),
     )
+    return service, dedupe_store
 
-    outcome = service.handle_message(
+
+def test_handle_message_detects_job_for_allowed_sender():
+    service, dedupe_store = build_service()
+
+    result = service.handle_message(
         IncomingMessage(
             chat_id=-1001,
-            sender_id=42,
-            text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123",
+            sender_id=77,
+            text="Like + Repost now\n\nhttps://x.com/i/status/123",
         )
     )
 
-    assert outcome.action == "skipped"
-    assert outcome.reason == "open_failed"
-    assert outcome.normalized_url == "https://x.com/i/status/123"
-    assert dedupe_store.marked_urls == []
+    assert result.kind == "job_detected"
+    assert result.normalized_url == "https://x.com/i/status/123"
+    assert result.job is not None
+    assert result.job.chat_id == -1001
+    assert result.job.sender_id == 77
+    assert result.job.raw_url == "https://x.com/i/status/123"
+    assert result.job.normalized_url == "https://x.com/i/status/123"
+    assert result.job.requirements == RaidActionRequirements(
+        like=True,
+        repost=True,
+        bookmark=False,
+        reply=False,
+    )
+    assert result.job.preset_replies == ("gm", "lfg")
+    assert result.job.trace_id == "trace-123"
+    assert dedupe_store.contains_calls == ["https://x.com/i/status/123"]
+    assert dedupe_store.mark_calls == []
+
+
+def test_handle_message_returns_duplicate_before_job_creation():
+    dedupe_store = TrackingDedupeStore()
+    dedupe_store.existing.add("https://x.com/i/status/123")
+    trace_invocations: list[str] = []
+    service, _ = build_service(
+        dedupe_store=dedupe_store,
+        trace_id_factory=lambda: trace_invocations.append("called") or "trace-999",
+    )
+
+    result = service.handle_message(
+        IncomingMessage(
+            chat_id=-1001,
+            sender_id=42,
+            text="Like + Repost now\n\nhttps://x.com/i/status/123",
+        )
+    )
+
+    assert result.kind == "duplicate"
+    assert result.normalized_url == "https://x.com/i/status/123"
+    assert result.job is None
+    assert trace_invocations == []
+    assert dedupe_store.contains_calls == ["https://x.com/i/status/123"]
+    assert dedupe_store.mark_calls == []
 
 
 def test_handle_message_rejects_non_whitelisted_chats():
-    service, opener = build_service()
+    service, dedupe_store = build_service()
 
-    outcome = service.handle_message(
+    result = service.handle_message(
         IncomingMessage(
             chat_id=-9999,
             sender_id=42,
-            text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123",
+            text="Like + Repost now\n\nhttps://x.com/i/status/123",
         )
     )
 
-    assert outcome.action == "skipped"
-    assert outcome.reason == "chat_not_whitelisted"
-    assert outcome.normalized_url is None
-    assert opener.opened_urls == []
+    assert result.kind == "chat_rejected"
+    assert result.normalized_url is None
+    assert result.job is None
+    assert dedupe_store.contains_calls == []
 
 
 def test_handle_message_rejects_wrong_sender_id():
-    service, opener = build_service()
+    service, dedupe_store = build_service()
 
-    outcome = service.handle_message(
+    result = service.handle_message(
         IncomingMessage(
             chat_id=-1001,
             sender_id=777,
-            text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123",
+            text="Like + Repost now\n\nhttps://x.com/i/status/123",
         )
     )
 
-    assert outcome.action == "skipped"
-    assert outcome.reason == "sender_not_allowed"
-    assert outcome.normalized_url is None
-    assert opener.opened_urls == []
+    assert result.kind == "sender_rejected"
+    assert result.normalized_url is None
+    assert result.job is None
+    assert dedupe_store.contains_calls == []
+
+
+def test_handle_message_returns_not_a_raid_for_non_matching_text():
+    service, dedupe_store = build_service()
+
+    result = service.handle_message(
+        IncomingMessage(
+            chat_id=-1001,
+            sender_id=42,
+            text="hello world no raid markers here",
+        )
+    )
+
+    assert result.kind == "not_a_raid"
+    assert result.normalized_url is None
+    assert result.job is None
+    assert dedupe_store.contains_calls == []
+
+
+def test_service_contract_rejects_legacy_single_sender_argument():
+    dedupe_store = TrackingDedupeStore()
+
+    try:
+        RaidService(
+            allowed_chat_ids={-1001},
+            allowed_sender_id=42,
+            dedupe_store=dedupe_store,
+        )
+    except TypeError as exc:
+        assert "allowed_sender_id" in str(exc)
+    else:
+        raise AssertionError("Expected TypeError for legacy allowed_sender_id argument")
+
+
+def test_handle_message_merges_default_requirements_into_detected_job():
+    service, _dedupe_store = build_service(
+        default_requirements=RaidActionRequirements(
+            like=False,
+            repost=False,
+            bookmark=True,
+            reply=True,
+        )
+    )
+
+    result = service.handle_message(
+        IncomingMessage(
+            chat_id=-1001,
+            sender_id=42,
+            text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/555",
+        )
+    )
+
+    assert result.kind == "job_detected"
+    assert result.job is not None
+    assert result.job.requirements == RaidActionRequirements(
+        like=True,
+        repost=False,
+        bookmark=True,
+        reply=True,
+    )

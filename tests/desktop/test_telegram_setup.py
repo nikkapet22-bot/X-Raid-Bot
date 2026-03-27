@@ -112,18 +112,20 @@ def _write_session_artifacts(session_file: Path, content: str = "session") -> No
         (session_file.parent / f"{session_file.name}{suffix}").write_text(content, encoding="utf-8")
 
 
-def test_detect_raidar_candidates_prefers_exact_username() -> None:
+def test_detect_raidar_candidates_recognizes_supported_exact_usernames_and_names() -> None:
     from raidbot.desktop.telegram_setup import detect_raidar_candidates
 
     candidates = detect_raidar_candidates(
         [
-            FakeEntity(10, username="raidar"),
-            FakeEntity(20, username="not-raidar", first_name="Raidar"),
+            FakeEntity(10, username="DelugeRaidBot"),
+            FakeEntity(20, first_name="d.raidbot"),
+            FakeEntity(30, title="raidar"),
+            FakeEntity(40, username="not-raidar", first_name="Raidar Alt"),
         ]
     )
 
-    assert [candidate.entity_id for candidate in candidates] == [10]
-    assert candidates[0].label == "@raidar"
+    assert [candidate.entity_id for candidate in candidates] == [10, 20, 30]
+    assert [candidate.label for candidate in candidates] == ["@DelugeRaidBot", "d.raidbot", "raidar"]
 
 
 def test_detect_raidar_candidates_falls_back_to_display_name() -> None:
@@ -404,5 +406,37 @@ async def test_list_accessible_chats_and_infer_recent_sender_candidates(tmp_path
         (1001, "Alpha Room"),
         (2002, "Beta Room"),
     ]
-    assert [candidate.entity_id for candidate in candidates] == [10]
-    assert candidates[0].label == "@raidar"
+    assert [candidate.entity_id for candidate in candidates] == [10, 20]
+    assert [candidate.label for candidate in candidates] == ["@raidar", "Alice"]
+
+
+@pytest.mark.asyncio
+async def test_infer_recent_sender_candidates_prefers_supported_exact_bot_matches(tmp_path: Path) -> None:
+    from raidbot.desktop.telegram_setup import TelegramSetupService
+
+    supported_bot = FakeEntity(10, username="delugeraidbot")
+    other_supported_bot = FakeEntity(30, first_name="d.raidbot")
+    frequent_sender = FakeEntity(20, first_name="Alice")
+    state = {
+        "authorized": True,
+        "messages": {
+            1001: [
+                FakeMessage(sender=frequent_sender),
+                FakeMessage(sender=frequent_sender),
+                FakeMessage(sender=supported_bot),
+                FakeMessage(sender=frequent_sender),
+                FakeMessage(sender=other_supported_bot),
+            ],
+        },
+    }
+    service = TelegramSetupService(
+        api_id=123456,
+        api_hash="hash-value",
+        session_path=tmp_path / "raidbot.session",
+        client_factory=build_client_factory(state),
+    )
+
+    candidates = await service.infer_recent_sender_candidates([1001])
+
+    assert [candidate.entity_id for candidate in candidates] == [10, 30, 20]
+    assert [candidate.label for candidate in candidates] == ["@delugeraidbot", "d.raidbot", "Alice"]
