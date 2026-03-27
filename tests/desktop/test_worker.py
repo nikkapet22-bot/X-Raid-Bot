@@ -359,6 +359,100 @@ def test_worker_records_browser_session_failed_result() -> None:
     assert events[-1] == {"type": "error", "message": "browser_startup_failure"}
 
 
+def test_worker_does_not_count_navigation_failure_as_successful_raid() -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 12, 0)
+    storage = FakeStorage()
+    job = build_job()
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result=RaidDetectionResult.job_detected(job),
+        ),
+        pipeline_factory=lambda config: FakePipeline(
+            config,
+            execution_result=RaidExecutionResult(
+                kind="navigation_failure",
+                handed_off=False,
+            ),
+        ),
+    )
+    worker._service = FakeService(
+        worker.config,
+        detection_result=RaidDetectionResult.job_detected(job),
+    )
+    worker._pipeline = FakePipeline(
+        worker.config,
+        execution_result=RaidExecutionResult(
+            kind="navigation_failure",
+            handed_off=False,
+        ),
+    )
+
+    outcome = worker._handle_message(build_message())
+
+    assert outcome.kind == "navigation_failure"
+    assert worker.state.raids_opened == 0
+    assert worker.state.last_successful_raid_open_at is None
+    assert worker.state.browser_session_failed == 1
+    assert worker.state.session_closed == 1
+    assert [entry.action for entry in worker.state.activity] == [
+        "raid_detected",
+        "browser_session_failed",
+        "session_closed",
+    ]
+
+
+def test_worker_does_not_count_page_ready_timeout_as_successful_raid() -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 13, 0)
+    storage = FakeStorage()
+    job = build_job()
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result=RaidDetectionResult.job_detected(job),
+        ),
+        pipeline_factory=lambda config: FakePipeline(
+            config,
+            execution_result=RaidExecutionResult(
+                kind="page_ready_timeout",
+                handed_off=False,
+            ),
+        ),
+    )
+    worker._service = FakeService(
+        worker.config,
+        detection_result=RaidDetectionResult.job_detected(job),
+    )
+    worker._pipeline = FakePipeline(
+        worker.config,
+        execution_result=RaidExecutionResult(
+            kind="page_ready_timeout",
+            handed_off=False,
+        ),
+    )
+
+    outcome = worker._handle_message(build_message())
+
+    assert outcome.kind == "page_ready_timeout"
+    assert worker.state.raids_opened == 0
+    assert worker.state.last_successful_raid_open_at is None
+    assert worker.state.browser_session_failed == 1
+    assert worker.state.session_closed == 1
+    assert [entry.action for entry in worker.state.activity] == [
+        "raid_detected",
+        "browser_session_failed",
+        "session_closed",
+    ]
+
+
 def test_worker_records_cancellation_before_executor() -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 15, 0)
@@ -577,7 +671,14 @@ async def test_worker_run_emits_state_changes_and_stop_uses_listener() -> None:
         "connection_state_changed",
         "bot_state_changed",
     ]
-    assert "connection_state_changed" in [event["type"] for event in events]
+    connection_events = [
+        event for event in events if event["type"] == "connection_state_changed"
+    ]
+    assert [event["state"] for event in connection_events] == [
+        "connecting",
+        "connected",
+        "disconnected",
+    ]
 
 
 @pytest.mark.asyncio

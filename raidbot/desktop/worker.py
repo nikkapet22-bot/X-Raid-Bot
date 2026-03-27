@@ -75,7 +75,8 @@ class DesktopBotWorker:
                 self._set_connection_state(TelegramConnectionState.reconnecting)
                 continue
 
-            self._set_connection_state(TelegramConnectionState.disconnected)
+            if self.state.connection_state is not TelegramConnectionState.disconnected:
+                self._set_connection_state(TelegramConnectionState.disconnected)
             if self.state.bot_state is not BotRuntimeState.stopped:
                 self._set_bot_state(BotRuntimeState.stopped)
             break
@@ -173,11 +174,6 @@ class DesktopBotWorker:
             return
 
         if kind in {"navigation_failure", "page_ready_timeout"}:
-            self._record_activity(
-                "browser_session_opened",
-                reason=kind,
-                url=url,
-            )
             self._record_activity(
                 "browser_session_failed",
                 reason=kind,
