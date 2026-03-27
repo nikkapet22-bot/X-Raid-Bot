@@ -69,19 +69,43 @@ class DesktopStorage:
             "telegram_session_path": str(config.telegram_session_path),
             "telegram_phone_number": config.telegram_phone_number,
             "whitelisted_chat_ids": list(config.whitelisted_chat_ids),
-            "raidar_sender_id": config.raidar_sender_id,
+            "allowed_sender_ids": list(config.allowed_sender_ids),
             "chrome_profile_directory": config.chrome_profile_directory,
+            "browser_mode": config.browser_mode,
+            "executor_name": config.executor_name,
+            "preset_replies": list(config.preset_replies),
+            "default_action_like": config.default_action_like,
+            "default_action_repost": config.default_action_repost,
+            "default_action_bookmark": config.default_action_bookmark,
+            "default_action_reply": config.default_action_reply,
         }
 
     def _config_from_data(self, data: dict[str, Any]) -> DesktopAppConfig:
+        allowed_sender_ids = data.get("allowed_sender_ids")
+        if allowed_sender_ids is None:
+            legacy_sender_id = self._maybe_int(data.get("raidar_sender_id"))
+            allowed_sender_ids = [] if legacy_sender_id is None else [legacy_sender_id]
         return DesktopAppConfig(
             telegram_api_id=int(data["telegram_api_id"]),
             telegram_api_hash=str(data["telegram_api_hash"]),
             telegram_session_path=Path(data["telegram_session_path"]),
             telegram_phone_number=data.get("telegram_phone_number"),
             whitelisted_chat_ids=[int(chat_id) for chat_id in data["whitelisted_chat_ids"]],
-            raidar_sender_id=self._maybe_int(data.get("raidar_sender_id")),
+            allowed_sender_ids=[int(sender_id) for sender_id in allowed_sender_ids],
             chrome_profile_directory=str(data["chrome_profile_directory"]),
+            browser_mode=str(data.get("browser_mode", "launch-only")),
+            executor_name=str(data.get("executor_name", "noop")),
+            preset_replies=tuple(str(reply) for reply in data.get("preset_replies", [])),
+            default_action_like=self._maybe_bool(data.get("default_action_like"), default=True),
+            default_action_repost=self._maybe_bool(
+                data.get("default_action_repost"),
+                default=True,
+            ),
+            default_action_bookmark=self._maybe_bool(
+                data.get("default_action_bookmark"),
+                default=False,
+            ),
+            default_action_reply=self._maybe_bool(data.get("default_action_reply"), default=True),
         )
 
     def _state_to_data(self, state: DesktopAppState) -> dict[str, Any]:
@@ -93,6 +117,13 @@ class DesktopStorage:
             "duplicates_skipped": state.duplicates_skipped,
             "non_matching_skipped": state.non_matching_skipped,
             "open_failures": state.open_failures,
+            "sender_rejected": state.sender_rejected,
+            "browser_session_failed": state.browser_session_failed,
+            "page_ready": state.page_ready,
+            "executor_not_configured": state.executor_not_configured,
+            "executor_succeeded": state.executor_succeeded,
+            "executor_failed": state.executor_failed,
+            "session_closed": state.session_closed,
             "last_successful_raid_open_at": state.last_successful_raid_open_at,
             "activity": [self._activity_to_data(entry) for entry in activity],
             "last_error": state.last_error,
@@ -109,6 +140,13 @@ class DesktopStorage:
             duplicates_skipped=int(data.get("duplicates_skipped", 0)),
             non_matching_skipped=int(data.get("non_matching_skipped", 0)),
             open_failures=int(data.get("open_failures", 0)),
+            sender_rejected=int(data.get("sender_rejected", 0)),
+            browser_session_failed=int(data.get("browser_session_failed", 0)),
+            page_ready=int(data.get("page_ready", 0)),
+            executor_not_configured=int(data.get("executor_not_configured", 0)),
+            executor_succeeded=int(data.get("executor_succeeded", 0)),
+            executor_failed=int(data.get("executor_failed", 0)),
+            session_closed=int(data.get("session_closed", 0)),
             last_successful_raid_open_at=data.get("last_successful_raid_open_at"),
             activity=activity[-_ACTIVITY_LIMIT:],
             last_error=data.get("last_error"),
@@ -144,6 +182,11 @@ class DesktopStorage:
         if value is None:
             return None
         return int(value)
+
+    def _maybe_bool(self, value: Any, *, default: bool) -> bool:
+        if value is None:
+            return default
+        return bool(value)
 
     def _normalize_bot_state(self, state: BotRuntimeState) -> BotRuntimeState:
         if state in {

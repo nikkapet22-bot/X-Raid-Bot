@@ -4,12 +4,14 @@ from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -40,11 +42,27 @@ def _parse_int_list(text: str, *, field_name: str) -> list[int]:
     return values
 
 
+def _parse_required_int_list(text: str, *, field_name: str) -> list[int]:
+    value = text.strip()
+    if not value:
+        raise ValueError(f"{field_name} is required.")
+    return _parse_int_list(value, field_name=field_name)
+
+
 def _require_text(text: str, *, field_name: str) -> str:
     value = text.strip()
     if not value:
         raise ValueError(f"{field_name} is required.")
     return value
+
+
+def _parse_reply_pool(text: str) -> tuple[str, ...]:
+    replies = []
+    for line in text.splitlines():
+        value = line.strip()
+        if value:
+            replies.append(value)
+    return tuple(replies)
 
 
 class SettingsPage(QWidget):
@@ -126,12 +144,11 @@ class SettingsPage(QWidget):
         routing_layout = QFormLayout()
         routing_layout.setContentsMargins(0, 0, 0, 0)
         whitelist_text = ", ".join(str(chat_id) for chat_id in config.whitelisted_chat_ids)
+        allowed_sender_text = ", ".join(str(sender_id) for sender_id in config.allowed_sender_ids)
         self.whitelist_input = QLineEdit(whitelist_text)
-        self.raidar_sender_input = QLineEdit(
-            "" if config.raidar_sender_id is None else str(config.raidar_sender_id)
-        )
+        self.allowed_senders_input = QLineEdit(allowed_sender_text)
         self.whitelist_input.setPlaceholderText("Comma-separated chat IDs")
-        self.raidar_sender_input.setPlaceholderText("Raidar sender ID")
+        self.allowed_senders_input.setPlaceholderText("Comma-separated sender IDs")
         self.profile_combo = QComboBox()
         for profile in available_profiles:
             self.profile_combo.addItem(profile)
@@ -143,19 +160,57 @@ class SettingsPage(QWidget):
         routing_hint.setProperty("muted", True)
         routing_hint.setWordWrap(True)
         routing_layout.addRow("", routing_hint)
-        routing_layout.addRow("Raidar sender", self.raidar_sender_input)
-        self.raidar_sender_hint_label = QLabel("Required to start the bot.")
-        self.raidar_sender_hint_label.setProperty("muted", True)
-        self.raidar_sender_hint_label.setWordWrap(True)
-        routing_layout.addRow("", self.raidar_sender_hint_label)
+        routing_layout.addRow("Allowed senders", self.allowed_senders_input)
+        self.allowed_senders_hint_label = QLabel("Required to start the bot.")
+        self.allowed_senders_hint_label.setProperty("muted", True)
+        self.allowed_senders_hint_label.setWordWrap(True)
+        routing_layout.addRow("", self.allowed_senders_hint_label)
         routing_layout.addRow("Chrome profile", self.profile_combo)
-        routing_layout.addRow(self.status_label)
         self.routing_section, self.routing_surface = self._build_section(
             title="Routing",
-            description="Configure the chat whitelist, Raidar sender, and Chrome profile.",
+            description="Configure the chat whitelist, sender allowlist, and Chrome profile.",
             content_layout=routing_layout,
         )
         layout.addWidget(self.routing_section)
+
+        automation_layout = QFormLayout()
+        automation_layout.setContentsMargins(0, 0, 0, 0)
+        self.browser_mode_combo = QComboBox()
+        for mode in ["launch-only", config.browser_mode]:
+            if self.browser_mode_combo.findText(mode) < 0:
+                self.browser_mode_combo.addItem(mode)
+        browser_mode_index = self.browser_mode_combo.findText(config.browser_mode)
+        if browser_mode_index >= 0:
+            self.browser_mode_combo.setCurrentIndex(browser_mode_index)
+        self.executor_name_label = QLabel(config.executor_name)
+        self.reply_pool_input = QPlainTextEdit("\n".join(config.preset_replies))
+        self.reply_pool_input.setPlaceholderText("One preset reply per line")
+        self.like_toggle = QCheckBox("Like")
+        self.like_toggle.setChecked(config.default_action_like)
+        self.repost_toggle = QCheckBox("Repost")
+        self.repost_toggle.setChecked(config.default_action_repost)
+        self.bookmark_toggle = QCheckBox("Bookmark")
+        self.bookmark_toggle.setChecked(config.default_action_bookmark)
+        self.reply_toggle = QCheckBox("Reply")
+        self.reply_toggle.setChecked(config.default_action_reply)
+        action_toggle_row = QHBoxLayout()
+        action_toggle_row.setContentsMargins(0, 0, 0, 0)
+        action_toggle_row.addWidget(self.like_toggle)
+        action_toggle_row.addWidget(self.repost_toggle)
+        action_toggle_row.addWidget(self.bookmark_toggle)
+        action_toggle_row.addWidget(self.reply_toggle)
+        action_toggle_row.addStretch(1)
+        automation_layout.addRow("Browser mode", self.browser_mode_combo)
+        automation_layout.addRow("Executor", self.executor_name_label)
+        automation_layout.addRow("Preset replies", self.reply_pool_input)
+        automation_layout.addRow("Default actions", action_toggle_row)
+        automation_layout.addRow(self.status_label)
+        self.automation_section, self.automation_surface = self._build_section(
+            title="Automation",
+            description="Manage browser handoff mode, shared reply pool, and default actions.",
+            content_layout=automation_layout,
+        )
+        layout.addWidget(self.automation_section)
 
         self.save_button = QPushButton("Save")
         self.save_button.setProperty("variant", "primary")
@@ -219,7 +274,10 @@ class SettingsPage(QWidget):
 
     def _build_config(self) -> DesktopAppConfig:
         whitelist = _parse_int_list(self.whitelist_input.text(), field_name="Chat whitelist")
-        raidar_sender = _require_text(self.raidar_sender_input.text(), field_name="Raidar sender ID")
+        allowed_sender_ids = _parse_required_int_list(
+            self.allowed_senders_input.text(),
+            field_name="Allowed sender IDs",
+        )
         return DesktopAppConfig(
             telegram_api_id=_parse_int_field(self.api_id_input.text(), field_name="Telegram API ID"),
             telegram_api_hash=_require_text(
@@ -229,6 +287,13 @@ class SettingsPage(QWidget):
             telegram_session_path=Path(self._session_path),
             telegram_phone_number=self._phone_number,
             whitelisted_chat_ids=whitelist,
-            raidar_sender_id=_parse_int_field(raidar_sender, field_name="Raidar sender ID"),
+            allowed_sender_ids=allowed_sender_ids,
             chrome_profile_directory=self.profile_combo.currentText(),
+            browser_mode=self.browser_mode_combo.currentText(),
+            executor_name=self.executor_name_label.text(),
+            preset_replies=_parse_reply_pool(self.reply_pool_input.toPlainText()),
+            default_action_like=self.like_toggle.isChecked(),
+            default_action_repost=self.repost_toggle.isChecked(),
+            default_action_bookmark=self.bookmark_toggle.isChecked(),
+            default_action_reply=self.reply_toggle.isChecked(),
         )

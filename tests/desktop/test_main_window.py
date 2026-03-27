@@ -27,8 +27,15 @@ def build_config(**overrides) -> DesktopAppConfig:
         "telegram_session_path": Path("raidbot.session"),
         "telegram_phone_number": "+40123456789",
         "whitelisted_chat_ids": [-1001],
-        "raidar_sender_id": 42,
+        "allowed_sender_ids": [42],
         "chrome_profile_directory": "Profile 3",
+        "browser_mode": "launch-only",
+        "executor_name": "noop",
+        "preset_replies": ("gm",),
+        "default_action_like": True,
+        "default_action_repost": True,
+        "default_action_bookmark": False,
+        "default_action_reply": True,
     }
     values.update(overrides)
     return DesktopAppConfig(**values)
@@ -188,13 +195,20 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
             duplicates_skipped=2,
             non_matching_skipped=3,
             open_failures=1,
+            sender_rejected=5,
+            browser_session_failed=6,
+            page_ready=7,
+            executor_not_configured=8,
+            executor_succeeded=9,
+            executor_failed=10,
+            session_closed=11,
             last_successful_raid_open_at="2026-03-26T10:00:00",
             activity=[
                 ActivityEntry(
                     timestamp=datetime(2026, 3, 26, 9, 55, 0),
-                    action="opened",
+                    action="sender_rejected",
                     url="https://x.com/i/status/100",
-                    reason="raid_opened",
+                    reason="sender 42 not allowed",
                 )
             ],
             last_error="boom",
@@ -207,8 +221,16 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
     assert window.bot_state_label.text() == "stopped"
     assert window.connection_state_label.text() == "disconnected"
     assert window.raids_opened_label.text() == "4"
+    assert window.sender_rejected_label.text() == "5"
+    assert window.browser_session_failed_label.text() == "6"
+    assert window.page_ready_label.text() == "7"
+    assert window.executor_not_configured_label.text() == "8"
+    assert window.executor_succeeded_label.text() == "9"
+    assert window.executor_failed_label.text() == "10"
+    assert window.session_closed_label.text() == "11"
     assert window.last_error_label.text() == "boom"
     assert window.activity_list.count() == 1
+    assert "Sender Rejected" in window.activity_list.item(0).text()
 
     updated_state = DesktopAppState(
         bot_state=BotRuntimeState.running,
@@ -217,6 +239,13 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
         duplicates_skipped=2,
         non_matching_skipped=3,
         open_failures=1,
+        sender_rejected=12,
+        browser_session_failed=13,
+        page_ready=14,
+        executor_not_configured=15,
+        executor_succeeded=16,
+        executor_failed=17,
+        session_closed=18,
         last_successful_raid_open_at="2026-03-26T10:10:00",
         activity=[],
         last_error="new-error",
@@ -228,9 +257,9 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
         controller.activityAdded.emit(
             ActivityEntry(
                 timestamp=datetime(2026, 3, 26, 10, 10, 0),
-                action="opened",
+                action="executor_failed",
                 url="https://x.com/i/status/200",
-                reason="raid_opened",
+                reason="executor crashed",
             )
         )
         controller.errorRaised.emit("new-error")
@@ -238,9 +267,17 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
         assert window.bot_state_label.text() == "running"
         assert window.connection_state_label.text() == "connected"
         assert window.raids_opened_label.text() == "5"
+        assert window.sender_rejected_label.text() == "12"
+        assert window.browser_session_failed_label.text() == "13"
+        assert window.page_ready_label.text() == "14"
+        assert window.executor_not_configured_label.text() == "15"
+        assert window.executor_succeeded_label.text() == "16"
+        assert window.executor_failed_label.text() == "17"
+        assert window.session_closed_label.text() == "18"
         assert window.last_successful_label.text() == "2026-03-26T10:10:00"
         assert window.last_error_label.text() == "new-error"
         assert window.activity_list.count() == 2
+        assert "Executor Failed" in window.activity_list.item(1).text()
     finally:
         controller.botStateChanged.emit("stopped")
 
@@ -256,13 +293,23 @@ def test_main_window_dashboard_exposes_metric_cards_and_panels(qtbot) -> None:
     assert window.command_bot_state_label.objectName() == "commandBotStateLabel"
     assert window.command_connection_state_label.objectName() == "commandConnectionStateLabel"
     assert window.status_panel.objectName() == "statusPanel"
-    assert len(window.metric_cards) == 4
+    assert len(window.metric_cards) == 11
     assert window.activity_panel.objectName() == "activityPanel"
     assert window.error_panel.objectName() == "errorPanel"
     assert window.command_status_row.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
     assert window.status_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
     assert window.activity_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
     assert window.error_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
+
+
+def test_main_window_settings_page_shows_browser_mode_and_executor(qtbot) -> None:
+    from raidbot.desktop.main_window import MainWindow
+
+    window = MainWindow(controller=FakeController(), storage=FakeStorage())
+    qtbot.addWidget(window)
+
+    assert window.settings_page.browser_mode_combo.currentText() == "launch-only"
+    assert window.settings_page.executor_name_label.text() == "noop"
 
 
 def test_main_window_uses_visible_fallback_icon_for_tray(qtbot) -> None:
