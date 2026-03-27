@@ -15,7 +15,6 @@ class Settings:
     chrome_path: Path
     chrome_user_data_dir: Path
     chrome_profile_directory: str
-    raidar_sender_id: int | None = None
     browser_mode: str = "launch-only"
     executor_name: str = "noop"
     preset_replies: tuple[str, ...] = ()
@@ -38,7 +37,6 @@ class Settings:
             chrome_path=Path(_require("CHROME_PATH")),
             chrome_user_data_dir=Path(_require("CHROME_USER_DATA_DIR")),
             chrome_profile_directory=_require("CHROME_PROFILE_DIRECTORY"),
-            raidar_sender_id=_optional_int("RAIDAR_SENDER_ID"),
             browser_mode=_optional_str("BROWSER_MODE", "launch-only"),
             executor_name=_optional_str("EXECUTOR_NAME", "noop"),
             preset_replies=_parse_str_list("PRESET_REPLIES"),
@@ -86,13 +84,6 @@ def _optional_str(name: str, default: str) -> str:
     if value is None or not value.strip():
         return default
     return value.strip()
-
-
-def _optional_int(name: str) -> int | None:
-    value = os.getenv(name)
-    if value is None or not value.strip():
-        return None
-    return int(value.strip())
 
 
 def _optional_bool(name: str, default: bool) -> bool:

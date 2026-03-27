@@ -143,3 +143,18 @@ def test_handle_message_returns_not_a_raid_for_non_matching_text():
     assert result.normalized_url is None
     assert result.job is None
     assert dedupe_store.contains_calls == []
+
+
+def test_service_contract_rejects_legacy_single_sender_argument():
+    dedupe_store = TrackingDedupeStore()
+
+    try:
+        RaidService(
+            allowed_chat_ids={-1001},
+            allowed_sender_id=42,
+            dedupe_store=dedupe_store,
+        )
+    except TypeError as exc:
+        assert "allowed_sender_id" in str(exc)
+    else:
+        raise AssertionError("Expected TypeError for legacy allowed_sender_id argument")

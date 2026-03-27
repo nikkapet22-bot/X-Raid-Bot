@@ -15,27 +15,19 @@ class RaidService:
     def __init__(
         self,
         allowed_chat_ids: set[int],
-        allowed_sender_ids: set[int] | None = None,
+        allowed_sender_ids: set[int],
         dedupe_store=None,
         preset_replies: tuple[str, ...] = (),
         default_requirements: RaidActionRequirements | None = None,
         trace_id_factory: Callable[[], str] | None = None,
-        *,
-        allowed_sender_id: int | None = None,
-        opener=None,
     ) -> None:
-        resolved_sender_ids = set(allowed_sender_ids or ())
-        if allowed_sender_id is not None:
-            resolved_sender_ids.add(allowed_sender_id)
-        if not resolved_sender_ids:
+        if not allowed_sender_ids:
             raise ValueError("RaidService requires at least one allowed sender id")
         if dedupe_store is None:
             raise ValueError("RaidService requires a dedupe_store")
 
         self.allowed_chat_ids = allowed_chat_ids
-        self.allowed_sender_ids = resolved_sender_ids
-        self.allowed_sender_id = allowed_sender_id
-        self.opener = opener
+        self.allowed_sender_ids = set(allowed_sender_ids)
         self.dedupe_store = dedupe_store
         self.preset_replies = preset_replies
         self.default_requirements = default_requirements or RaidActionRequirements(

@@ -53,6 +53,7 @@ def test_settings_from_env_falls_back_to_single_sender_id_when_allowlist_missing
     settings = Settings.from_env()
 
     assert settings.allowed_sender_ids == {999888777}
+    assert not hasattr(settings, "raidar_sender_id")
 
 
 def test_settings_from_env_rejects_missing_required_values(monkeypatch, tmp_path):
