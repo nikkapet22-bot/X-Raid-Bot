@@ -28,12 +28,6 @@ def build_service(
         allowed_sender_ids={42, 77},
         dedupe_store=dedupe_store,
         preset_replies=("gm", "lfg"),
-        default_requirements=RaidActionRequirements(
-            like=True,
-            repost=True,
-            bookmark=False,
-            reply=True,
-        ),
         trace_id_factory=trace_id_factory or (lambda: "trace-123"),
     )
     return service, dedupe_store
@@ -158,3 +152,24 @@ def test_service_contract_rejects_legacy_single_sender_argument():
         assert "allowed_sender_id" in str(exc)
     else:
         raise AssertionError("Expected TypeError for legacy allowed_sender_id argument")
+
+
+def test_service_contract_rejects_default_requirements_argument():
+    dedupe_store = TrackingDedupeStore()
+
+    try:
+        RaidService(
+            allowed_chat_ids={-1001},
+            allowed_sender_ids={42},
+            dedupe_store=dedupe_store,
+            default_requirements=RaidActionRequirements(
+                like=True,
+                repost=True,
+                bookmark=False,
+                reply=True,
+            ),
+        )
+    except TypeError as exc:
+        assert "default_requirements" in str(exc)
+    else:
+        raise AssertionError("Expected TypeError for inert default_requirements argument")

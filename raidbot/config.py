@@ -110,7 +110,9 @@ def _parse_str_list(name: str) -> tuple[str, ...]:
 
 def _parse_allowed_sender_ids() -> set[int]:
     allowlist = os.getenv("ALLOWED_SENDER_IDS")
-    if allowlist is not None and allowlist.strip():
+    if allowlist is not None:
+        if not allowlist.strip():
+            raise ValueError("Missing required setting: ALLOWED_SENDER_IDS")
         return _parse_int_csv(allowlist, "ALLOWED_SENDER_IDS")
 
     return {_require_int("RAIDAR_SENDER_ID")}

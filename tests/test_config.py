@@ -56,6 +56,32 @@ def test_settings_from_env_falls_back_to_single_sender_id_when_allowlist_missing
     assert not hasattr(settings, "raidar_sender_id")
 
 
+def test_settings_from_env_rejects_blank_allowlist_when_present(monkeypatch, tmp_path):
+    set_required_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("ALLOWED_SENDER_IDS", "   ")
+    monkeypatch.setenv("RAIDAR_SENDER_ID", "999888777")
+
+    try:
+        Settings.from_env()
+    except ValueError as exc:
+        assert "ALLOWED_SENDER_IDS" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for blank ALLOWED_SENDER_IDS")
+
+
+def test_settings_from_env_rejects_invalid_default_action_boolean(monkeypatch, tmp_path):
+    set_required_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("ALLOWED_SENDER_IDS", "42")
+    monkeypatch.setenv("DEFAULT_ACTION_LIKE", "sometimes")
+
+    try:
+        Settings.from_env()
+    except ValueError as exc:
+        assert "DEFAULT_ACTION_LIKE" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for invalid DEFAULT_ACTION_LIKE")
+
+
 def test_settings_from_env_rejects_missing_required_values(monkeypatch, tmp_path):
     set_required_env(monkeypatch, tmp_path)
     monkeypatch.delenv("TELEGRAM_API_ID", raising=False)
