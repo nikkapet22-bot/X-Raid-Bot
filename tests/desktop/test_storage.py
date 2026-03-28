@@ -224,6 +224,89 @@ def test_storage_loads_legacy_bot_action_slots_as_disabled_defaults(tmp_path) ->
     assert all(slot.updated_at is None for slot in loaded.bot_action_slots)
 
 
+def test_storage_normalizes_malformed_bot_action_slots_to_fixed_layout(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        json.dumps(
+            {
+                "telegram_api_id": 123456,
+                "telegram_api_hash": "api-hash",
+                "telegram_session_path": "sessions/raid.session",
+                "telegram_phone_number": "+15555550123",
+                "whitelisted_chat_ids": [1001, 1002],
+                "allowed_sender_ids": [424242],
+                "allowed_sender_entries": ["@raidar"],
+                "chrome_profile_directory": "Profile 1",
+                "auto_run_settle_ms": 1800,
+                "bot_action_slots": [
+                    {
+                        "key": "wrong-1",
+                        "label": "X",
+                        "enabled": True,
+                        "template_path": "templates/slot-1.png",
+                        "updated_at": "2026-03-28T12:00:00",
+                    },
+                    {
+                        "enabled": False,
+                        "template_path": "templates/slot-2.png",
+                        "updated_at": "2026-03-28T12:01:00",
+                    },
+                    {
+                        "key": "wrong-3",
+                        "label": "Z",
+                        "enabled": True,
+                    },
+                    {
+                        "key": "wrong-4",
+                        "label": "Q",
+                        "enabled": True,
+                        "template_path": "templates/slot-4.png",
+                    },
+                    {
+                        "key": "wrong-5",
+                        "label": "IGNORED",
+                        "enabled": True,
+                        "template_path": "templates/slot-5.png",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+
+    assert loaded.bot_action_slots == (
+        BotActionSlotConfig(
+            key="slot_1_r",
+            label="R",
+            enabled=True,
+            template_path=Path("templates/slot-1.png"),
+            updated_at="2026-03-28T12:00:00",
+        ),
+        BotActionSlotConfig(
+            key="slot_2_l",
+            label="L",
+            enabled=False,
+            template_path=Path("templates/slot-2.png"),
+            updated_at="2026-03-28T12:01:00",
+        ),
+        BotActionSlotConfig(
+            key="slot_3_r",
+            label="R",
+            enabled=True,
+        ),
+        BotActionSlotConfig(
+            key="slot_4_b",
+            label="B",
+            enabled=True,
+            template_path=Path("templates/slot-4.png"),
+        ),
+    )
+
+
 def test_storage_load_state_defaults_new_pipeline_counters_to_zero(tmp_path) -> None:
     from raidbot.desktop.storage import DesktopStorage
 

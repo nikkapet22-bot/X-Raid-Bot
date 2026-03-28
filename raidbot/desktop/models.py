@@ -33,12 +33,18 @@ class BotActionSlotConfig:
     updated_at: str | None = None
 
 
+_DEFAULT_BOT_ACTION_SLOT_LAYOUT: tuple[tuple[str, str], ...] = (
+    ("slot_1_r", "R"),
+    ("slot_2_l", "L"),
+    ("slot_3_r", "R"),
+    ("slot_4_b", "B"),
+)
+
+
 def default_bot_action_slots() -> tuple[BotActionSlotConfig, ...]:
-    return (
-        BotActionSlotConfig(key="slot_1_r", label="R"),
-        BotActionSlotConfig(key="slot_2_l", label="L"),
-        BotActionSlotConfig(key="slot_3_r", label="R"),
-        BotActionSlotConfig(key="slot_4_b", label="B"),
+    return tuple(
+        BotActionSlotConfig(key=key, label=label)
+        for key, label in _DEFAULT_BOT_ACTION_SLOT_LAYOUT
     )
 
 
@@ -145,18 +151,28 @@ class DesktopAppConfig:
     def _coerce_bot_action_slots(
         self, bot_action_slots: Sequence[BotActionSlotConfig] | None
     ) -> tuple[BotActionSlotConfig, ...]:
-        if bot_action_slots is None:
-            return default_bot_action_slots()
-        return tuple(
-            BotActionSlotConfig(
-                key=str(slot.key),
-                label=str(slot.label),
-                enabled=bool(slot.enabled),
-                template_path=Path(slot.template_path) if slot.template_path is not None else None,
-                updated_at=slot.updated_at,
+        normalized_slots: list[BotActionSlotConfig] = []
+        provided_slots = tuple(bot_action_slots or ())
+        for index, default_slot in enumerate(default_bot_action_slots()):
+            provided_slot = provided_slots[index] if index < len(provided_slots) else None
+            normalized_slots.append(
+                BotActionSlotConfig(
+                    key=default_slot.key,
+                    label=default_slot.label,
+                    enabled=bool(provided_slot.enabled) if provided_slot is not None else False,
+                    template_path=(
+                        Path(provided_slot.template_path)
+                        if provided_slot is not None and provided_slot.template_path is not None
+                        else None
+                    ),
+                    updated_at=(
+                        str(provided_slot.updated_at)
+                        if provided_slot is not None and provided_slot.updated_at is not None
+                        else None
+                    ),
+                )
             )
-            for slot in bot_action_slots
-        )
+        return tuple(normalized_slots)
 
 
 @dataclass
