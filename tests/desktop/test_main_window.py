@@ -131,6 +131,7 @@ class FakeController(QObject):
         self.automation_run_calls = []
         self.automation_dry_run_calls = []
         self.bot_action_slot_template_updates = []
+        self.bot_action_slot_test_calls = []
         self.bot_action_slot_enabled_updates = []
         self.auto_run_settle_ms_updates = []
         self.available_windows = [build_window_info()]
@@ -264,6 +265,9 @@ class FakeController(QObject):
             enabled=enabled,
         )
         self.apply_config(replace(self.config, bot_action_slots=tuple(updated_slots)))
+
+    def test_bot_action_slot(self, slot_index: int) -> None:
+        self.bot_action_slot_test_calls.append(slot_index)
 
     def _sync_active_state(self, state: str) -> None:
         self.active = state in {"starting", "running", "stopping"}
@@ -725,6 +729,51 @@ def test_main_window_capture_updates_bot_action_slot_via_controller(qtbot) -> No
         window.bot_actions_page.slot_boxes[0].template_status_label.text()
         == str(captured_path)
     )
+
+
+def test_main_window_test_button_calls_controller_slot_test(qtbot) -> None:
+    controller = FakeController()
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.bot_actions_page.slot_boxes[0].test_button, Qt.MouseButton.LeftButton)
+
+    assert controller.bot_action_slot_test_calls == [0]
+
+
+def test_main_window_slot_test_events_show_simple_status(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    window.controller.botActionRunEvent.emit(
+        {
+            "type": "slot_test_started",
+            "slot_index": 0,
+            "message": "Slot 1 (R): testing",
+        }
+    )
+    assert window.bot_actions_page.status_label.text() == "Status: Slot 1 (R): testing"
+
+    window.controller.botActionRunEvent.emit(
+        {
+            "type": "slot_test_failed",
+            "slot_index": 0,
+            "reason": "match_not_found",
+            "message": "Slot 1 (R): image not found",
+        }
+    )
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Slot 1 (R): image not found"
+    )
+
+    window.controller.botActionRunEvent.emit(
+        {
+            "type": "slot_test_succeeded",
+            "slot_index": 0,
+            "message": "Slot 1 (R): success",
+        }
+    )
+    assert window.bot_actions_page.status_label.text() == "Status: Slot 1 (R): success"
 
 
 def test_main_window_capture_cancel_with_existing_path_does_not_persist_noop(qtbot) -> None:

@@ -111,6 +111,9 @@ class MainWindow(QMainWindow):
             config=self.controller.config,
         )
         self.bot_actions_page.slotCaptureRequested.connect(self._capture_bot_action_slot)
+        self.bot_actions_page.slotTestRequested.connect(
+            self.controller.test_bot_action_slot
+        )
         self.bot_actions_page.slotEnabledChanged.connect(
             self.controller.set_bot_action_slot_enabled
         )
@@ -484,7 +487,12 @@ class MainWindow(QMainWindow):
 
     def _handle_bot_actions_run_event(self, event: dict[str, object]) -> None:
         event_type = str(event.get("type", ""))
-        if event_type == "automation_run_started":
+        if event_type in {"slot_test_started", "slot_test_succeeded", "slot_test_failed"}:
+            self._bot_actions_status_text = str(event.get("message", "Idle"))
+            self._bot_actions_current_slot_text = None
+            self._bot_actions_last_error_text = None
+            self._clear_bot_actions_run_snapshot()
+        elif event_type == "automation_run_started":
             self._bot_actions_status_text = "Running"
             self._bot_actions_current_slot_text = None
             self._snapshot_bot_actions_run_slots()
