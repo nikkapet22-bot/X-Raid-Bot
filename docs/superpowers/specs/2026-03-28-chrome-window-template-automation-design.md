@@ -95,7 +95,6 @@ Each step should contain:
 - `name`
 - `template_path`
 - `match_threshold`
-- `match_method`
 - `max_search_seconds`
 - `max_scroll_attempts`
 - `scroll_amount`
@@ -103,6 +102,11 @@ Each step should contain:
 - `post_click_settle_ms`
 - optional `click_offset_x`
 - optional `click_offset_y`
+
+For the first version:
+
+- `scroll_amount` should be a signed mouse-wheel step count, with negative values meaning scroll down and positive values meaning scroll up
+- `click_offset_x` and `click_offset_y` should be pixel offsets from the matched template center
 
 The runner should process steps strictly in order. It should not skip ahead or dynamically reorder steps based on what else appears in the window.
 
@@ -122,7 +126,7 @@ The first version should use classic template matching. This is more predictable
 The scoring contract should be explicit in the spec and persisted data:
 
 - the first version should use OpenCV normalized template matching with a score range of `0.0` to `1.0`
-- `match_method` should default to `TM_CCOEFF_NORMED`
+- the first version should use only `TM_CCOEFF_NORMED`; alternate template methods are out of scope
 - `match_threshold` should be interpreted only against that normalized score range
 - "best match" should mean the highest score above threshold in the current frame
 - "location shifts materially" should mean the best-match center moves by more than `max(10 px, 0.25 * min(template_width, template_height))`
@@ -170,9 +174,10 @@ The desktop app should gain a new automation area with four parts:
 
 2. `Sequence editor`
    - ordered step list
+   - sequence-level target-window rule editor with clear/reset control
    - template file picker and replace/remove controls
    - template preview
-   - step settings for threshold, match method, search time, scroll attempts, scroll amount, click attempts, settle delay, and offsets
+   - step settings for threshold, search time, scroll attempts, scroll amount, click attempts, settle delay, and offsets
 
 3. `Runner panel`
    - select target Chrome window
@@ -252,6 +257,7 @@ The module should fail safely and visibly in these cases:
 - user presses stop
 
 Each failure should identify the exact step and reason in the activity panel.
+Step-bound failures should include the blocking step. Run-level failures that occur before step execution starts should include the run-level reason and no step identifier.
 
 ## Testing
 
