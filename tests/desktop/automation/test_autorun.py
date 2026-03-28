@@ -214,3 +214,39 @@ def test_autorun_processor_failure_pauses_and_leaves_context_open() -> None:
         ("running", 0, "https://x.com/i/status/123", None),
         ("paused", 0, None, "image_match_not_found"),
     ]
+
+
+def test_autorun_processor_keeps_running_state_when_new_admission_fails_mid_run() -> None:
+    failures: list[tuple[str, str, str]] = []
+    default_sequence = {"value": "seq-1"}
+    processor_ref: dict[str, AutoRunProcessor] = {}
+
+    def execute_raid(_item, _context, _sequence_id):
+        default_sequence["value"] = None
+        admitted = processor_ref["processor"].admit(build_item("https://x.com/i/status/999", "raid-2"))
+        assert admitted is False
+        return True, None
+
+    processor = AutoRunProcessor(
+        auto_run_enabled=lambda: True,
+        default_sequence_id=lambda: default_sequence["value"],
+        pre_open_check=lambda _item: build_window(handle=15),
+        open_raid=lambda item, window: OpenedRaidContext(
+            normalized_url=item.normalized_url,
+            opened_at=3.0,
+            window_handle=window.handle,
+            profile_directory="Profile 3",
+        ),
+        execute_raid=execute_raid,
+        close_raid=lambda _context: None,
+        on_failure=lambda item, reason, _context: failures.append((item.trace_id, reason, processor_ref["processor"].state)),
+    )
+    processor_ref["processor"] = processor
+
+    assert processor.admit(build_item()) is True
+
+    processed = processor.process_next()
+
+    assert processed is True
+    assert failures == [("raid-2", "default_sequence_missing", "running")]
+    assert processor.state == "idle"

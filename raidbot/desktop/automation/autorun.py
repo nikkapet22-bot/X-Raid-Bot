@@ -82,7 +82,8 @@ class AutoRunProcessor:
             return False
         if not self._default_sequence_id():
             self._last_error = "default_sequence_missing"
-            self._state = "paused"
+            if self._state != "running":
+                self._state = "paused"
             self._on_failure(item, self._last_error, None)
             self._emit_status()
             return False
