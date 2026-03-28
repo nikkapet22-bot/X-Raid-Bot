@@ -28,6 +28,9 @@ def test_desktop_app_config_holds_required_values() -> None:
         default_action_repost=False,
         default_action_bookmark=True,
         default_action_reply=False,
+        auto_run_enabled=True,
+        default_auto_sequence_id="seq-1",
+        auto_run_settle_ms=1500,
     )
 
     assert config.telegram_api_id == 123
@@ -44,6 +47,9 @@ def test_desktop_app_config_holds_required_values() -> None:
     assert config.default_action_repost is False
     assert config.default_action_bookmark is True
     assert config.default_action_reply is False
+    assert config.auto_run_enabled is True
+    assert config.default_auto_sequence_id == "seq-1"
+    assert config.auto_run_settle_ms == 1500
 
 
 def test_desktop_model_enums_expose_expected_values() -> None:
@@ -78,6 +84,10 @@ def test_desktop_app_state_defaults_are_stopped_and_disconnected() -> None:
     assert state.session_closed == 0
     assert state.activity == []
     assert state.last_successful_raid_open_at is None
+    assert state.automation_queue_state == "idle"
+    assert state.automation_queue_length == 0
+    assert state.automation_current_url is None
+    assert state.automation_last_error is None
 
 
 def test_desktop_app_config_exposes_legacy_sender_property_for_compatibility() -> None:

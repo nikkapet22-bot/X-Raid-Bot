@@ -40,6 +40,9 @@ class DesktopAppConfig:
     default_action_repost: bool
     default_action_bookmark: bool
     default_action_reply: bool
+    auto_run_enabled: bool
+    default_auto_sequence_id: str | None
+    auto_run_settle_ms: int
 
     def __init__(
         self,
@@ -59,6 +62,9 @@ class DesktopAppConfig:
         default_action_repost: bool = True,
         default_action_bookmark: bool = False,
         default_action_reply: bool = True,
+        auto_run_enabled: bool = False,
+        default_auto_sequence_id: str | None = None,
+        auto_run_settle_ms: int = 1500,
     ) -> None:
         self.telegram_api_id = telegram_api_id
         self.telegram_api_hash = telegram_api_hash
@@ -77,6 +83,9 @@ class DesktopAppConfig:
         self.default_action_repost = default_action_repost
         self.default_action_bookmark = default_action_bookmark
         self.default_action_reply = default_action_reply
+        self.auto_run_enabled = auto_run_enabled
+        self.default_auto_sequence_id = default_auto_sequence_id
+        self.auto_run_settle_ms = auto_run_settle_ms
 
     @property
     def raidar_sender_id(self) -> int | None:
@@ -123,3 +132,7 @@ class DesktopAppState:
     last_successful_raid_open_at: str | None = None
     activity: list[ActivityEntry] = field(default_factory=list)
     last_error: str | None = None
+    automation_queue_state: str = "idle"
+    automation_queue_length: int = 0
+    automation_current_url: str | None = None
+    automation_last_error: str | None = None

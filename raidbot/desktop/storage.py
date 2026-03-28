@@ -79,6 +79,9 @@ class DesktopStorage:
             "default_action_repost": config.default_action_repost,
             "default_action_bookmark": config.default_action_bookmark,
             "default_action_reply": config.default_action_reply,
+            "auto_run_enabled": config.auto_run_enabled,
+            "default_auto_sequence_id": config.default_auto_sequence_id,
+            "auto_run_settle_ms": config.auto_run_settle_ms,
         }
 
     def _config_from_data(self, data: dict[str, Any]) -> DesktopAppConfig:
@@ -107,6 +110,13 @@ class DesktopStorage:
                 default=False,
             ),
             default_action_reply=self._maybe_bool(data.get("default_action_reply"), default=True),
+            auto_run_enabled=self._maybe_bool(data.get("auto_run_enabled"), default=False),
+            default_auto_sequence_id=data.get("default_auto_sequence_id"),
+            auto_run_settle_ms=(
+                int(data["auto_run_settle_ms"])
+                if data.get("auto_run_settle_ms") is not None
+                else 1500
+            ),
         )
 
     def _state_to_data(self, state: DesktopAppState) -> dict[str, Any]:
@@ -128,6 +138,10 @@ class DesktopStorage:
             "last_successful_raid_open_at": state.last_successful_raid_open_at,
             "activity": [self._activity_to_data(entry) for entry in activity],
             "last_error": state.last_error,
+            "automation_queue_state": state.automation_queue_state,
+            "automation_queue_length": state.automation_queue_length,
+            "automation_current_url": state.automation_current_url,
+            "automation_last_error": state.automation_last_error,
         }
 
     def _state_from_data(self, data: dict[str, Any]) -> DesktopAppState:
@@ -151,6 +165,14 @@ class DesktopStorage:
             last_successful_raid_open_at=data.get("last_successful_raid_open_at"),
             activity=activity[-_ACTIVITY_LIMIT:],
             last_error=data.get("last_error"),
+            automation_queue_state=str(data.get("automation_queue_state") or "idle"),
+            automation_queue_length=(
+                int(data["automation_queue_length"])
+                if data.get("automation_queue_length") is not None
+                else 0
+            ),
+            automation_current_url=data.get("automation_current_url"),
+            automation_last_error=data.get("automation_last_error"),
         )
 
     def _normalize_loaded_state(self, state: DesktopAppState) -> DesktopAppState:

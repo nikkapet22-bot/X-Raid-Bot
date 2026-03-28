@@ -48,6 +48,9 @@ def test_config_round_trip(tmp_path) -> None:
         default_action_repost=False,
         default_action_bookmark=True,
         default_action_reply=False,
+        auto_run_enabled=True,
+        default_auto_sequence_id="seq-1",
+        auto_run_settle_ms=1500,
     )
 
     storage.save_config(config)
@@ -88,6 +91,10 @@ def test_state_round_trip_includes_activity_entries(tmp_path) -> None:
             )
         ],
         last_error="boom",
+        automation_queue_state="running",
+        automation_queue_length=3,
+        automation_current_url="https://example.com/current",
+        automation_last_error="queue boom",
     )
 
     storage.save_state(state)
@@ -99,6 +106,10 @@ def test_state_round_trip_includes_activity_entries(tmp_path) -> None:
     assert loaded.activity[0].action == "opened_raid"
     assert loaded.activity[0].url == "https://x.com/i/status/123"
     assert loaded.activity[0].reason == "matched active raid"
+    assert loaded.automation_queue_state == "running"
+    assert loaded.automation_queue_length == 3
+    assert loaded.automation_current_url == "https://example.com/current"
+    assert loaded.automation_last_error == "queue boom"
     assert storage.state_path.exists()
 
 
@@ -131,6 +142,9 @@ def test_storage_loads_legacy_single_sender_as_allowlist(tmp_path) -> None:
     assert loaded.default_action_repost is True
     assert loaded.default_action_bookmark is False
     assert loaded.default_action_reply is True
+    assert loaded.auto_run_enabled is False
+    assert loaded.default_auto_sequence_id is None
+    assert loaded.auto_run_settle_ms == 1500
 
 
 def test_storage_load_state_defaults_new_pipeline_counters_to_zero(tmp_path) -> None:
@@ -164,6 +178,10 @@ def test_storage_load_state_defaults_new_pipeline_counters_to_zero(tmp_path) -> 
     assert loaded.executor_succeeded == 0
     assert loaded.executor_failed == 0
     assert loaded.session_closed == 0
+    assert loaded.automation_queue_state == "idle"
+    assert loaded.automation_queue_length == 0
+    assert loaded.automation_current_url is None
+    assert loaded.automation_last_error is None
 
 
 def test_load_state_normalizes_stale_live_runtime_states(tmp_path) -> None:
