@@ -118,6 +118,10 @@ class FakeWindowManager:
     def list_chrome_windows(self) -> list[object]:
         return list(self.windows)
 
+    def find_owned_chrome_window(self, profile_directory: str):
+        _ = profile_directory
+        return self.windows[0] if self.windows else None
+
 
 class FakeAutomationRuntime:
     def __init__(
@@ -296,6 +300,8 @@ def build_worker(
     listener_factory=None,
     automation_runtime_factory=None,
     chrome_opener_factory=None,
+    manual_run_active=None,
+    auto_run_wait=None,
 ):
     from raidbot.desktop.worker import DesktopBotWorker
 
@@ -330,6 +336,8 @@ def build_worker(
         listener_factory=listener_factory or default_listener_factory,
         automation_runtime_factory=automation_runtime_factory,
         chrome_opener_factory=chrome_opener_factory,
+        manual_run_active=manual_run_active,
+        auto_run_wait=auto_run_wait,
         now=lambda: now,
     )
     return worker, created_services, created_pipelines, created_listeners
@@ -345,6 +353,8 @@ def build_default_worker(
     listener_factory=None,
     automation_runtime_factory=None,
     chrome_opener_factory=None,
+    manual_run_active=None,
+    auto_run_wait=None,
 ):
     from raidbot.desktop.worker import DesktopBotWorker
 
@@ -357,6 +367,8 @@ def build_default_worker(
         listener_factory=listener_factory or (lambda **kwargs: FakeListener()),
         automation_runtime_factory=automation_runtime_factory,
         chrome_opener_factory=chrome_opener_factory,
+        manual_run_active=manual_run_active,
+        auto_run_wait=auto_run_wait,
         now=lambda: now,
     )
 
@@ -518,6 +530,179 @@ def test_worker_queues_detected_links_and_processes_fifo(tmp_path) -> None:
     assert current_urls == [first_url, None, second_url, None]
     assert [event["sequence_id"] for event in started] == ["seq-1", "seq-1"]
     assert [event["sequence_id"] for event in succeeded] == ["seq-1", "seq-1"]
+
+
+def test_worker_leaves_auto_run_queued_while_manual_automation_is_active_and_resumes_after_release(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 3, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    AutomationStorage(tmp_path).save_sequences([build_sequence()])
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    manual_run_active = {"value": True}
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=9,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ]
+        )
+        return runtime
+
+    worker, _created_services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+        manual_run_active=lambda: manual_run_active["value"],
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(build_message())
+
+    assert outcome.kind == "job_detected"
+    assert opener.open_calls == []
+    assert runtime is not None
+    assert runtime.run_calls == []
+    assert worker.state.automation_queue_state == "queued"
+    assert worker.state.automation_queue_length == 1
+
+    manual_run_active["value"] = False
+
+    worker.notify_manual_automation_finished()
+
+    assert opener.open_calls == [("https://x.com/i/status/123", 9)]
+    assert runtime.run_calls == [("seq-1", 9)]
+    assert worker.state.automation_queue_state == "idle"
+    assert worker.state.automation_queue_length == 0
+
+
+def test_worker_applies_auto_run_settle_delay_before_running_sequence(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 4, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    AutomationStorage(tmp_path).save_sequences([build_sequence()])
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    calls: list[tuple[str, float | int | None]] = []
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=17,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+            on_run_sequence=lambda _sequence, handle: calls.append(("run", handle)),
+        )
+        return runtime
+
+    worker, _created_services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+            auto_run_settle_ms=2200,
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+        auto_run_wait=lambda seconds: calls.append(("wait", seconds)),
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(build_message())
+
+    assert outcome.kind == "job_detected"
+    assert opener.open_calls == [("https://x.com/i/status/123", 17)]
+    assert runtime is not None
+    assert runtime.run_calls == [("seq-1", 17)]
+    assert calls == [("wait", 2.2), ("run", 17)]
+
+
+def test_worker_fails_safe_when_owned_chrome_window_cannot_be_proven(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 5, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    AutomationStorage(tmp_path).save_sequences([build_sequence()])
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+
+    class UnownedChromeWindowManager:
+        def list_chrome_windows(self) -> list[object]:
+            return [
+                WindowInfo(
+                    handle=23,
+                    title="Personal - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                ),
+                WindowInfo(
+                    handle=24,
+                    title="Work - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=0.5,
+                ),
+            ]
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime()
+        runtime.window_manager = UnownedChromeWindowManager()
+        return runtime
+
+    worker, _created_services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(build_message())
+
+    assert outcome.kind == "job_detected"
+    assert opener.open_calls == []
+    assert runtime is not None
+    assert runtime.run_calls == []
+    assert worker.state.automation_queue_state == "paused"
+    assert worker.state.automation_queue_length == 0
+    assert worker.state.automation_last_error == "target_window_not_found"
 
 
 def test_worker_leaves_pending_queue_unopened_when_auto_run_is_disabled_mid_run(tmp_path) -> None:

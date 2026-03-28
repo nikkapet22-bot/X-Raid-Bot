@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from raidbot.desktop.automation.input import InputDriver, validate_click_target
-from raidbot.desktop.automation.windowing import WindowInfo, WindowManager, choose_window_for_rule
+from raidbot.desktop.automation.windowing import (
+    WindowInfo,
+    WindowManager,
+    choose_window_for_rule,
+    find_existing_chrome_window,
+)
 
 
 def test_choose_window_for_rule_prefers_most_recent_focus() -> None:
@@ -88,6 +93,49 @@ def test_window_manager_keeps_most_recently_focused_matching_window_across_refre
     assert choose_window_for_rule(second, "X - Chrome").handle == 1
     assert second[0].last_focused_at == 10.0
     assert second[1].last_focused_at == 0.0
+
+
+def test_find_existing_chrome_window_accepts_single_candidate_when_profile_cannot_be_proven() -> None:
+    manager = WindowManager(
+        list_windows=lambda: [
+            WindowInfo(
+                handle=7,
+                title="RaidBot - Chrome",
+                bounds=(0, 0, 100, 100),
+                last_focused_at=1.0,
+            )
+        ],
+        restore_window=lambda _handle: True,
+        focus_window=lambda _handle: True,
+    )
+
+    chosen = find_existing_chrome_window(manager, "Profile 3")
+
+    assert chosen is not None
+    assert chosen.handle == 7
+
+
+def test_find_existing_chrome_window_fails_closed_for_ambiguous_candidates() -> None:
+    manager = WindowManager(
+        list_windows=lambda: [
+            WindowInfo(
+                handle=7,
+                title="RaidBot - Chrome",
+                bounds=(0, 0, 100, 100),
+                last_focused_at=1.0,
+            ),
+            WindowInfo(
+                handle=8,
+                title="Personal - Chrome",
+                bounds=(0, 0, 100, 100),
+                last_focused_at=0.8,
+            ),
+        ],
+        restore_window=lambda _handle: True,
+        focus_window=lambda _handle: True,
+    )
+
+    assert find_existing_chrome_window(manager, "Profile 3") is None
 
 
 def test_input_driver_moves_waits_and_clicks() -> None:

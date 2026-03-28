@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+import time
 from typing import Any
 
 from raidbot.browser.backends import LaunchOnlyBrowserBackend
@@ -49,6 +50,8 @@ class DesktopBotWorker:
         automation_runtime_factory: Callable[[EmitEvent], Any] | None = None,
         chrome_opener_factory: Callable[..., Any] | None = None,
         chrome_environment_factory: Callable[[], Any] = detect_chrome_environment,
+        manual_run_active: Callable[[], bool] | None = None,
+        auto_run_wait: Callable[[float], None] | None = None,
         now: NowFactory = datetime.utcnow,
     ) -> None:
         self.config = config
@@ -60,6 +63,8 @@ class DesktopBotWorker:
         self.automation_runtime_factory = automation_runtime_factory
         self.chrome_opener_factory = chrome_opener_factory
         self.chrome_environment_factory = chrome_environment_factory
+        self.manual_run_active = manual_run_active or (lambda: False)
+        self.auto_run_wait = auto_run_wait or time.sleep
         self.now = now
 
         self.state = self.storage.load_state()
@@ -200,6 +205,14 @@ class DesktopBotWorker:
             processor._state = "idle"
         self._sync_automation_status()
 
+    def notify_manual_automation_finished(self) -> None:
+        processor = self._automation_processor
+        if processor is None or not self.config.auto_run_enabled:
+            return
+        if processor.state != "queued" or not processor.queue_length:
+            return
+        self._drain_automation_queue()
+
     def _handle_connection_state_change(self, state: str) -> None:
         connection_state = TelegramConnectionState(state)
         self._set_connection_state(connection_state)
@@ -260,7 +273,10 @@ class DesktopBotWorker:
         window_manager = getattr(runtime, "window_manager", None)
         if window_manager is None:
             return None
-        return find_existing_chrome_window(window_manager)
+        return find_existing_chrome_window(
+            window_manager,
+            self.config.chrome_profile_directory,
+        )
 
     def _find_default_automation_sequence(self):
         sequence_id = self.config.default_auto_sequence_id
@@ -308,6 +324,8 @@ class DesktopBotWorker:
             url=context.normalized_url,
             window_handle=context.window_handle,
         )
+        if self.config.auto_run_settle_ms > 0:
+            self.auto_run_wait(self.config.auto_run_settle_ms / 1000.0)
         result = runtime.run_sequence(sequence, selected_window_handle=context.window_handle)
         status = getattr(result, "status", None)
         failure_reason = getattr(result, "failure_reason", None)
@@ -396,6 +414,8 @@ class DesktopBotWorker:
         if processor is None:
             return
         while processor.queue_length and self.config.auto_run_enabled:
+            if self.manual_run_active():
+                break
             if processor.state == "paused":
                 break
             progressed = processor.process_next()

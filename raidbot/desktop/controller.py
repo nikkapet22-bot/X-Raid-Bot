@@ -70,6 +70,8 @@ async def _resolve_job(job: Callable[[], Any] | Any) -> Any:
 
 
 class DesktopController(QObject):
+    _QUEUE_OWNS_SLOT_ERROR = "Automation queue owns the execution slot"
+
     botStateChanged = Signal(str)
     connectionStateChanged = Signal(str)
     statsChanged = Signal(object)
@@ -113,6 +115,8 @@ class DesktopController(QObject):
         self._automation_runner: AsyncWorkerRunner | Any | None = None
         self._automation_sequences = self._load_automation_sequences()
         self._automation_run_state = "idle"
+        self._automation_queue_state = "idle"
+        self._automation_queue_length = 0
         self._workerEventReceived.connect(self._handle_worker_event)
         self._submissionFailed.connect(self.errorRaised.emit)
         self._automationEventReceived.connect(self._handle_automation_event)
@@ -130,6 +134,7 @@ class DesktopController(QObject):
             config=self.config,
             storage=self.storage,
             emit_event=self._receive_worker_event,
+            manual_run_active=self._manual_automation_running,
         )
         self._runner = self.runner_factory()
         self._runner.start(lambda: self._worker.run())
@@ -205,6 +210,9 @@ class DesktopController(QObject):
         if sequence is None:
             self.errorRaised.emit(f"Unknown automation sequence: {sequence_id}")
             return
+        if self._automation_queue_blocks_manual_actions():
+            self.errorRaised.emit(self._QUEUE_OWNS_SLOT_ERROR)
+            return
         runtime = self._load_automation_runtime()
         if runtime is None:
             return
@@ -225,6 +233,9 @@ class DesktopController(QObject):
         sequence = self._find_automation_sequence(sequence_id)
         if sequence is None:
             self.errorRaised.emit(f"Unknown automation sequence: {sequence_id}")
+            return
+        if self._automation_queue_blocks_manual_actions():
+            self.errorRaised.emit(self._QUEUE_OWNS_SLOT_ERROR)
             return
         runtime = self._load_automation_runtime()
         if runtime is None:
@@ -305,9 +316,11 @@ class DesktopController(QObject):
         elif event_type == "error":
             self.errorRaised.emit(str(event.get("message", "")))
         elif event_type == "automation_queue_state_changed":
-            self.automationQueueStateChanged.emit(str(event.get("state", "idle")))
+            self._automation_queue_state = str(event.get("state", "idle"))
+            self.automationQueueStateChanged.emit(self._automation_queue_state)
         elif event_type == "automation_queue_length_changed":
-            self.automationQueueLengthChanged.emit(int(event.get("length", 0)))
+            self._automation_queue_length = int(event.get("length", 0))
+            self.automationQueueLengthChanged.emit(self._automation_queue_length)
         elif event_type == "automation_current_url_changed":
             self.automationCurrentUrlChanged.emit(event.get("url"))
         elif event_type in {
@@ -397,6 +410,17 @@ class DesktopController(QObject):
         self._automation_run_state = state
         self.automationRunStateChanged.emit(state)
 
+    def _manual_automation_running(self) -> bool:
+        return self._automation_run_state == "running"
+
+    def _automation_queue_blocks_manual_actions(self) -> bool:
+        return self._automation_queue_state in {"queued", "running", "paused"}
+
+    def _notify_worker_manual_run_finished(self) -> None:
+        if self._worker is None or self._runner is None or not self._runner.is_running():
+            return
+        self._submit_to_runner(lambda: self._worker.notify_manual_automation_finished())
+
     @Slot(object)
     def _handle_automation_event(self, event: dict[str, Any]) -> None:
         self.automationRunEvent.emit(event)
@@ -428,3 +452,4 @@ class DesktopController(QObject):
                     }
                 )
         self._set_automation_run_state("idle")
+        self._notify_worker_manual_run_finished()
