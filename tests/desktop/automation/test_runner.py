@@ -102,11 +102,16 @@ def _sequence(*steps: AutomationStep, target_window_rule: str | None = None) -> 
     )
 
 
-def _window(handle: int = 7, *, title: str = "RaidBot - Chrome") -> WindowInfo:
+def _window(
+    handle: int = 7,
+    *,
+    title: str = "RaidBot - Chrome",
+    bounds: tuple[int, int, int, int] = (0, 0, 100, 100),
+) -> WindowInfo:
     return WindowInfo(
         handle=handle,
         title=title,
-        bounds=(0, 0, 100, 100),
+        bounds=bounds,
         last_focused_at=1.0,
     )
 
@@ -201,6 +206,26 @@ def test_runner_rejects_click_offset_outside_window_bounds() -> None:
     assert result.status == "failed"
     assert result.failure_reason == "invalid_click_target"
     assert runner.input_driver.clicks == []
+
+
+def test_runner_converts_match_coordinates_to_screen_space() -> None:
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window(bounds=(100, 200, 300, 400))]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match(), None]),
+        input_driver=FakeInputDriver(),
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=FakeClock().now,
+        sleep=FakeClock().sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(_step()),
+        selected_window=_window(bounds=(100, 200, 300, 400)),
+    )
+
+    assert result.status == "completed"
+    assert runner.input_driver.clicks == [(125, 215)]
 
 
 def test_runner_dry_run_reports_match_without_clicking() -> None:

@@ -168,9 +168,10 @@ class SequenceRunner:
                         }
                     )
                     while click_attempts < step.max_click_attempts:
+                        left, top, _right, _bottom = window.bounds
                         point = (
-                            match.center_x + step.click_offset_x,
-                            match.center_y + step.click_offset_y,
+                            left + match.center_x + step.click_offset_x,
+                            top + match.center_y + step.click_offset_y,
                         )
                         if not validate_click_target(window.bounds, point):
                             return RunResult(
