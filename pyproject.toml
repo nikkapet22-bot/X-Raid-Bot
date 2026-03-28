@@ -11,6 +11,10 @@ dependencies = [
     "telethon",
     "python-dotenv",
     "PySide6",
+    "numpy",
+    "opencv-python-headless",
+    "mss",
+    { version = "pywin32", markers = "sys_platform == 'win32'" },
 ]
 
 [project.optional-dependencies]

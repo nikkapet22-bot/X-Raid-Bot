@@ -30,6 +30,7 @@ class DesktopStorage:
         self.base_dir = base_dir
         self.config_path = base_dir / "config.json"
         self.state_path = base_dir / "state.json"
+        self.automation_sequences_path = base_dir / "automation_sequences.json"
 
     def is_first_run(self) -> bool:
         return not self.config_path.exists()
