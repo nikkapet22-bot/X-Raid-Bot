@@ -10,6 +10,8 @@ from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
+from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
+from raidbot.desktop.automation.windowing import WindowInfo
 from raidbot.desktop.models import (
     ActivityEntry,
     BotRuntimeState,
@@ -32,6 +34,35 @@ def build_config(**overrides) -> DesktopAppConfig:
     }
     values.update(overrides)
     return DesktopAppConfig(**values)
+
+
+def build_sequence(sequence_id: str = "seq-1") -> AutomationSequence:
+    return AutomationSequence(
+        id=sequence_id,
+        name="Chrome Flow",
+        target_window_rule="RaidBot",
+        steps=[
+            AutomationStep(
+                name="Open menu",
+                template_path=Path("templates/menu.png"),
+                match_threshold=0.9,
+                max_search_seconds=1.0,
+                max_scroll_attempts=1,
+                scroll_amount=-120,
+                max_click_attempts=1,
+                post_click_settle_ms=100,
+            )
+        ],
+    )
+
+
+def build_window_info(handle: int = 7, title: str = "RaidBot - Chrome") -> WindowInfo:
+    return WindowInfo(
+        handle=handle,
+        title=title,
+        bounds=(0, 0, 100, 100),
+        last_focused_at=1.0,
+    )
 
 
 class FakeStorage:
@@ -70,13 +101,22 @@ class FakeController(QObject):
     statsChanged = Signal(object)
     activityAdded = Signal(object)
     errorRaised = Signal(str)
+    automationSequencesChanged = Signal(object)
+    automationRunEvent = Signal(object)
+    automationRunStateChanged = Signal(str)
 
     def __init__(self, config: DesktopAppConfig | None = None) -> None:
         super().__init__()
         self.config = config or build_config()
         self.start_calls = 0
         self.stop_calls = 0
+        self.automation_stop_calls = 0
         self.apply_calls = []
+        self.saved_sequences = [build_sequence()]
+        self.deleted_sequence_ids = []
+        self.automation_run_calls = []
+        self.automation_dry_run_calls = []
+        self.available_windows = [build_window_info()]
         self.active = False
         self.botStateChanged.connect(self._sync_active_state)
 
@@ -99,6 +139,43 @@ class FakeController(QObject):
 
     def is_bot_active(self) -> bool:
         return self.active
+
+    def list_automation_sequences(self):
+        return list(self.saved_sequences)
+
+    def save_automation_sequence(self, sequence: AutomationSequence) -> None:
+        self.saved_sequences = [
+            item for item in self.saved_sequences if item.id != sequence.id
+        ] + [sequence]
+        self.automationSequencesChanged.emit(self.list_automation_sequences())
+
+    def delete_automation_sequence(self, sequence_id: str) -> None:
+        self.deleted_sequence_ids.append(sequence_id)
+        self.saved_sequences = [
+            item for item in self.saved_sequences if item.id != sequence_id
+        ]
+        self.automationSequencesChanged.emit(self.list_automation_sequences())
+
+    def list_target_windows(self):
+        return list(self.available_windows)
+
+    def start_automation_run(
+        self, sequence_id: str, selected_window_handle: int | None
+    ) -> None:
+        self.automation_run_calls.append((sequence_id, selected_window_handle))
+
+    def dry_run_automation_step(
+        self,
+        sequence_id: str,
+        step_index: int,
+        selected_window_handle: int | None,
+    ) -> None:
+        self.automation_dry_run_calls.append(
+            (sequence_id, step_index, selected_window_handle)
+        )
+
+    def stop_automation_run(self) -> None:
+        self.automation_stop_calls += 1
 
     def _sync_active_state(self, state: str) -> None:
         self.active = state in {"starting", "running", "stopping"}
@@ -263,6 +340,77 @@ def test_main_window_dashboard_exposes_metric_cards_and_panels(qtbot) -> None:
     assert window.status_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
     assert window.activity_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
     assert window.error_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
+
+
+def test_main_window_adds_automation_tab(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    assert window.tabs.tabText(2) == "Automation"
+    assert window.automation_page.sequence_list.count() == 1
+
+
+def test_automation_page_emits_start_and_save_requests(qtbot) -> None:
+    from raidbot.desktop.automation.page import AutomationPage
+
+    page = AutomationPage(
+        sequences=[build_sequence()],
+        windows=[build_window_info()],
+    )
+    qtbot.addWidget(page)
+    saved = []
+    started = []
+    page.sequenceSaveRequested.connect(saved.append)
+    page.runRequested.connect(lambda sequence_id, handle: started.append((sequence_id, handle)))
+
+    page.sequence_name_input.setText("Updated Chrome Flow")
+    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(page.start_button, Qt.MouseButton.LeftButton)
+
+    assert saved[-1].name == "Updated Chrome Flow"
+    assert started == [("seq-1", None)]
+
+
+def test_automation_page_emits_dry_run_request(qtbot) -> None:
+    from raidbot.desktop.automation.page import AutomationPage
+
+    page = AutomationPage(
+        sequences=[build_sequence()],
+        windows=[build_window_info()],
+    )
+    qtbot.addWidget(page)
+    captured = []
+    page.dryRunRequested.connect(
+        lambda sequence_id, step_index, handle: captured.append(
+            (sequence_id, step_index, handle)
+        )
+    )
+
+    page.window_combo.setCurrentIndex(1)
+    qtbot.mouseClick(page.dry_run_button, Qt.MouseButton.LeftButton)
+
+    assert captured == [("seq-1", 0, 7)]
+
+
+def test_automation_page_displays_dry_run_match_without_clicking(qtbot) -> None:
+    from raidbot.desktop.automation.page import AutomationPage
+
+    page = AutomationPage(
+        sequences=[build_sequence()],
+        windows=[build_window_info()],
+    )
+    qtbot.addWidget(page)
+
+    page.handle_run_event(
+        {
+            "type": "dry_run_match_found",
+            "step_index": 0,
+            "window_handle": 7,
+            "score": 0.97,
+        }
+    )
+
+    assert "0.97" in page.status_label.text()
 
 
 def test_main_window_uses_visible_fallback_icon_for_tray(qtbot) -> None:

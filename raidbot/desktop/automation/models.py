@@ -10,7 +10,7 @@ class AutomationStep:
     name: str
     template_path: Path
     match_threshold: float
-    max_search_seconds: int
+    max_search_seconds: float
     max_scroll_attempts: int
     scroll_amount: int
     max_click_attempts: int
@@ -24,5 +24,22 @@ class AutomationStep:
 class AutomationSequence:
     id: str
     name: str
-    target_window_rule: dict[str, Any] | None = None
+    target_window_rule: str | None = None
     steps: list[AutomationStep] = field(default_factory=list)
+
+
+@dataclass
+class MatchResult:
+    score: float
+    top_left_x: int
+    top_left_y: int
+    width: int
+    height: int
+
+    @property
+    def center_x(self) -> int:
+        return self.top_left_x + (self.width // 2)
+
+    @property
+    def center_y(self) -> int:
+        return self.top_left_y + (self.height // 2)

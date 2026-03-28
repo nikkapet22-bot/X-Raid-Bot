@@ -14,7 +14,7 @@ dependencies = [
     "numpy",
     "opencv-python-headless",
     "mss",
-    { version = "pywin32", markers = "sys_platform == 'win32'" },
+    "pywin32; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

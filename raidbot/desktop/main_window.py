@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from raidbot.desktop.chrome_profiles import detect_chrome_environment
+from raidbot.desktop.automation.page import AutomationPage
 from raidbot.desktop.models import DesktopAppState
 from raidbot.desktop.settings_page import SettingsPage
 from raidbot.desktop.telegram_setup import TelegramSetupService
@@ -74,8 +75,8 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         central_layout = QVBoxLayout(central_widget)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._build_dashboard_tab(), "Dashboard")
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_dashboard_tab(), "Dashboard")
         self.settings_page = SettingsPage(
             config=self.controller.config,
             available_profiles=self.available_profiles_loader(),
@@ -87,8 +88,27 @@ class MainWindow(QMainWindow):
             self.settings_page.reauthorizeRequested.connect(
                 self.controller.reauthorize_session
             )
-        tabs.addTab(self.settings_page, "Settings")
-        central_layout.addWidget(tabs)
+        self.tabs.addTab(self.settings_page, "Settings")
+        self.automation_page = AutomationPage(
+            sequences=self._load_automation_sequences(),
+            windows=self._load_automation_windows(),
+        )
+        self.automation_page.sequenceSaveRequested.connect(
+            self.controller.save_automation_sequence
+        )
+        self.automation_page.sequenceDeleteRequested.connect(
+            self.controller.delete_automation_sequence
+        )
+        self.automation_page.runRequested.connect(self.controller.start_automation_run)
+        self.automation_page.dryRunRequested.connect(
+            self.controller.dry_run_automation_step
+        )
+        self.automation_page.stopRequested.connect(self.controller.stop_automation_run)
+        self.automation_page.windowsRefreshRequested.connect(
+            self._refresh_automation_windows
+        )
+        self.tabs.addTab(self.automation_page, "Automation")
+        central_layout.addWidget(self.tabs)
 
         self.setCentralWidget(central_widget)
 
@@ -246,6 +266,14 @@ class MainWindow(QMainWindow):
         self.controller.statsChanged.connect(self._apply_stats_state)
         self.controller.activityAdded.connect(self._append_activity_entry)
         self.controller.errorRaised.connect(self.last_error_label.setText)
+        self.controller.errorRaised.connect(self.automation_page.show_error)
+        self.controller.automationSequencesChanged.connect(
+            self.automation_page.set_sequences
+        )
+        self.controller.automationRunEvent.connect(self.automation_page.handle_run_event)
+        self.controller.automationRunStateChanged.connect(
+            self.automation_page.set_run_state
+        )
 
     def _update_bot_state(self, state: str) -> None:
         self.bot_state = state
@@ -362,3 +390,16 @@ class MainWindow(QMainWindow):
         except Exception:
             return "unknown"
         return getattr(status, "value", str(status))
+
+    def _load_automation_sequences(self) -> list[object]:
+        if hasattr(self.controller, "list_automation_sequences"):
+            return self.controller.list_automation_sequences()
+        return []
+
+    def _load_automation_windows(self) -> list[object]:
+        if hasattr(self.controller, "list_target_windows"):
+            return self.controller.list_target_windows()
+        return []
+
+    def _refresh_automation_windows(self) -> None:
+        self.automation_page.refresh_windows(self._load_automation_windows())
