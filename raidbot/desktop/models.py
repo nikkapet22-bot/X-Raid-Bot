@@ -24,6 +24,24 @@ class TelegramConnectionState(str, Enum):
     auth_required = "auth_required"
 
 
+@dataclass(eq=True)
+class BotActionSlotConfig:
+    key: str
+    label: str
+    enabled: bool = False
+    template_path: Path | None = None
+    updated_at: str | None = None
+
+
+def default_bot_action_slots() -> tuple[BotActionSlotConfig, ...]:
+    return (
+        BotActionSlotConfig(key="slot_1_r", label="R"),
+        BotActionSlotConfig(key="slot_2_l", label="L"),
+        BotActionSlotConfig(key="slot_3_r", label="R"),
+        BotActionSlotConfig(key="slot_4_b", label="B"),
+    )
+
+
 @dataclass(init=False)
 class DesktopAppConfig:
     telegram_api_id: int
@@ -32,6 +50,7 @@ class DesktopAppConfig:
     telegram_phone_number: str | None
     whitelisted_chat_ids: list[int]
     allowed_sender_ids: list[int]
+    allowed_sender_entries: tuple[str, ...]
     chrome_profile_directory: str
     browser_mode: str
     executor_name: str
@@ -43,6 +62,7 @@ class DesktopAppConfig:
     auto_run_enabled: bool
     default_auto_sequence_id: str | None
     auto_run_settle_ms: int
+    bot_action_slots: tuple[BotActionSlotConfig, ...]
 
     def __init__(
         self,
@@ -53,6 +73,7 @@ class DesktopAppConfig:
         whitelisted_chat_ids: Sequence[int],
         chrome_profile_directory: str,
         allowed_sender_ids: Sequence[int] | None = None,
+        allowed_sender_entries: Sequence[str] | None = None,
         *,
         raidar_sender_id: int | None = None,
         browser_mode: str = "launch-only",
@@ -65,6 +86,7 @@ class DesktopAppConfig:
         auto_run_enabled: bool = False,
         default_auto_sequence_id: str | None = None,
         auto_run_settle_ms: int = 1500,
+        bot_action_slots: Sequence[BotActionSlotConfig] | None = None,
     ) -> None:
         self.telegram_api_id = telegram_api_id
         self.telegram_api_hash = telegram_api_hash
@@ -74,6 +96,10 @@ class DesktopAppConfig:
         self.allowed_sender_ids = self._coerce_allowed_sender_ids(
             allowed_sender_ids=allowed_sender_ids,
             raidar_sender_id=raidar_sender_id,
+        )
+        self.allowed_sender_entries = self._coerce_allowed_sender_entries(
+            allowed_sender_entries=allowed_sender_entries,
+            allowed_sender_ids=self.allowed_sender_ids,
         )
         self.chrome_profile_directory = chrome_profile_directory
         self.browser_mode = browser_mode
@@ -86,6 +112,7 @@ class DesktopAppConfig:
         self.auto_run_enabled = auto_run_enabled
         self.default_auto_sequence_id = default_auto_sequence_id
         self.auto_run_settle_ms = auto_run_settle_ms
+        self.bot_action_slots = self._coerce_bot_action_slots(bot_action_slots)
 
     @property
     def raidar_sender_id(self) -> int | None:
@@ -104,6 +131,32 @@ class DesktopAppConfig:
         if raidar_sender_id is None:
             return []
         return [int(raidar_sender_id)]
+
+    def _coerce_allowed_sender_entries(
+        self,
+        *,
+        allowed_sender_entries: Sequence[str] | None,
+        allowed_sender_ids: Sequence[int],
+    ) -> tuple[str, ...]:
+        if allowed_sender_entries is not None:
+            return tuple(str(entry).strip() for entry in allowed_sender_entries if str(entry).strip())
+        return tuple(str(sender_id) for sender_id in allowed_sender_ids)
+
+    def _coerce_bot_action_slots(
+        self, bot_action_slots: Sequence[BotActionSlotConfig] | None
+    ) -> tuple[BotActionSlotConfig, ...]:
+        if bot_action_slots is None:
+            return default_bot_action_slots()
+        return tuple(
+            BotActionSlotConfig(
+                key=str(slot.key),
+                label=str(slot.label),
+                enabled=bool(slot.enabled),
+                template_path=Path(slot.template_path) if slot.template_path is not None else None,
+                updated_at=slot.updated_at,
+            )
+            for slot in bot_action_slots
+        )
 
 
 @dataclass

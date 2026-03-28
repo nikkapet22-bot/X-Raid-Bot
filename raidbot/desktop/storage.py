@@ -8,11 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from .models import (
+    BotActionSlotConfig,
     ActivityEntry,
     BotRuntimeState,
     DesktopAppConfig,
     DesktopAppState,
     TelegramConnectionState,
+    default_bot_action_slots,
 )
 
 _ACTIVITY_LIMIT = 200
@@ -71,6 +73,7 @@ class DesktopStorage:
             "telegram_phone_number": config.telegram_phone_number,
             "whitelisted_chat_ids": list(config.whitelisted_chat_ids),
             "allowed_sender_ids": list(config.allowed_sender_ids),
+            "allowed_sender_entries": list(config.allowed_sender_entries),
             "chrome_profile_directory": config.chrome_profile_directory,
             "browser_mode": config.browser_mode,
             "executor_name": config.executor_name,
@@ -82,6 +85,9 @@ class DesktopStorage:
             "auto_run_enabled": config.auto_run_enabled,
             "default_auto_sequence_id": config.default_auto_sequence_id,
             "auto_run_settle_ms": config.auto_run_settle_ms,
+            "bot_action_slots": [
+                self._bot_action_slot_to_data(slot) for slot in config.bot_action_slots
+            ],
         }
 
     def _config_from_data(self, data: dict[str, Any]) -> DesktopAppConfig:
@@ -89,6 +95,16 @@ class DesktopStorage:
         if allowed_sender_ids is None:
             legacy_sender_id = self._maybe_int(data.get("raidar_sender_id"))
             allowed_sender_ids = [] if legacy_sender_id is None else [legacy_sender_id]
+        allowed_sender_entries = data.get("allowed_sender_entries")
+        if allowed_sender_entries is None:
+            allowed_sender_entries = [str(sender_id) for sender_id in allowed_sender_ids]
+        bot_action_slots_data = data.get("bot_action_slots")
+        if bot_action_slots_data is None:
+            bot_action_slots = default_bot_action_slots()
+        else:
+            bot_action_slots = tuple(
+                self._bot_action_slot_from_data(slot_data) for slot_data in bot_action_slots_data
+            )
         return DesktopAppConfig(
             telegram_api_id=int(data["telegram_api_id"]),
             telegram_api_hash=str(data["telegram_api_hash"]),
@@ -96,6 +112,7 @@ class DesktopStorage:
             telegram_phone_number=data.get("telegram_phone_number"),
             whitelisted_chat_ids=[int(chat_id) for chat_id in data["whitelisted_chat_ids"]],
             allowed_sender_ids=[int(sender_id) for sender_id in allowed_sender_ids],
+            allowed_sender_entries=tuple(str(entry) for entry in allowed_sender_entries),
             chrome_profile_directory=str(data["chrome_profile_directory"]),
             browser_mode=str(data.get("browser_mode", "launch-only")),
             executor_name=str(data.get("executor_name", "noop")),
@@ -117,6 +134,7 @@ class DesktopStorage:
                 if data.get("auto_run_settle_ms") is not None
                 else 1500
             ),
+            bot_action_slots=bot_action_slots,
         )
 
     def _state_to_data(self, state: DesktopAppState) -> dict[str, Any]:
@@ -214,6 +232,25 @@ class DesktopStorage:
         if value is None:
             return default
         return bool(value)
+
+    def _bot_action_slot_to_data(self, slot: BotActionSlotConfig) -> dict[str, Any]:
+        return {
+            "key": slot.key,
+            "label": slot.label,
+            "enabled": slot.enabled,
+            "template_path": str(slot.template_path) if slot.template_path is not None else None,
+            "updated_at": slot.updated_at,
+        }
+
+    def _bot_action_slot_from_data(self, data: dict[str, Any]) -> BotActionSlotConfig:
+        template_path = data.get("template_path")
+        return BotActionSlotConfig(
+            key=str(data["key"]),
+            label=str(data["label"]),
+            enabled=self._maybe_bool(data.get("enabled"), default=False),
+            template_path=Path(template_path) if template_path is not None else None,
+            updated_at=data.get("updated_at"),
+        )
 
     def _normalize_bot_state(self, state: BotRuntimeState) -> BotRuntimeState:
         if state in {

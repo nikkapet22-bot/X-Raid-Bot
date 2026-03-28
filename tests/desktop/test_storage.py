@@ -5,11 +5,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from raidbot.desktop.models import (
+    BotActionSlotConfig,
     ActivityEntry,
     BotRuntimeState,
     DesktopAppConfig,
     DesktopAppState,
     TelegramConnectionState,
+    default_bot_action_slots,
 )
 
 
@@ -40,6 +42,7 @@ def test_config_round_trip(tmp_path) -> None:
         telegram_phone_number="+15555550123",
         whitelisted_chat_ids=[1001, 1002, 1003],
         allowed_sender_ids=[424242, 515151],
+        allowed_sender_entries=("@raidar", "@delugeraidbot"),
         chrome_profile_directory="Profile 1",
         browser_mode="launch-only",
         executor_name="noop",
@@ -50,7 +53,19 @@ def test_config_round_trip(tmp_path) -> None:
         default_action_reply=False,
         auto_run_enabled=True,
         default_auto_sequence_id="seq-1",
-        auto_run_settle_ms=1500,
+        auto_run_settle_ms=2750,
+        bot_action_slots=(
+            BotActionSlotConfig(key="slot_1_r", label="R", enabled=True),
+            BotActionSlotConfig(
+                key="slot_2_l",
+                label="L",
+                enabled=True,
+                template_path=Path("templates/slot-2.png"),
+                updated_at="2026-03-28T12:00:00",
+            ),
+            BotActionSlotConfig(key="slot_3_r", label="R", enabled=False),
+            BotActionSlotConfig(key="slot_4_b", label="B", enabled=True),
+        ),
     )
 
     storage.save_config(config)
@@ -60,6 +75,19 @@ def test_config_round_trip(tmp_path) -> None:
     assert loaded == config
     assert storage.is_first_run() is False
     assert storage.config_path.exists()
+    assert loaded.auto_run_settle_ms == 2750
+    assert loaded.bot_action_slots == (
+        BotActionSlotConfig(key="slot_1_r", label="R", enabled=True),
+        BotActionSlotConfig(
+            key="slot_2_l",
+            label="L",
+            enabled=True,
+            template_path=Path("templates/slot-2.png"),
+            updated_at="2026-03-28T12:00:00",
+        ),
+        BotActionSlotConfig(key="slot_3_r", label="R", enabled=False),
+        BotActionSlotConfig(key="slot_4_b", label="B", enabled=True),
+    )
 
 
 def test_state_round_trip_includes_activity_entries(tmp_path) -> None:
@@ -137,6 +165,63 @@ def test_storage_loads_legacy_single_sender_as_allowlist(tmp_path) -> None:
     assert loaded.auto_run_enabled is False
     assert loaded.default_auto_sequence_id is None
     assert loaded.auto_run_settle_ms == 1500
+    assert loaded.allowed_sender_entries == ("424242",)
+
+
+def test_storage_loads_sender_entries_when_present(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        json.dumps(
+            {
+                "telegram_api_id": 123456,
+                "telegram_api_hash": "api-hash",
+                "telegram_session_path": "sessions/raid.session",
+                "telegram_phone_number": "+15555550123",
+                "whitelisted_chat_ids": [1001, 1002],
+                "allowed_sender_ids": [424242, 515151],
+                "allowed_sender_entries": ["@raidar", "@delugeraidbot"],
+                "chrome_profile_directory": "Profile 1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+
+    assert loaded.allowed_sender_ids == [424242, 515151]
+    assert loaded.allowed_sender_entries == ("@raidar", "@delugeraidbot")
+
+
+def test_storage_loads_legacy_bot_action_slots_as_disabled_defaults(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        json.dumps(
+            {
+                "telegram_api_id": 123456,
+                "telegram_api_hash": "api-hash",
+                "telegram_session_path": "sessions/raid.session",
+                "telegram_phone_number": "+15555550123",
+                "whitelisted_chat_ids": [1001, 1002],
+                "allowed_sender_ids": [424242],
+                "allowed_sender_entries": ["@raidar"],
+                "chrome_profile_directory": "Profile 1",
+                "auto_run_settle_ms": 1800,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+
+    assert loaded.auto_run_settle_ms == 1800
+    assert loaded.bot_action_slots == default_bot_action_slots()
+    assert all(slot.enabled is False for slot in loaded.bot_action_slots)
+    assert all(slot.template_path is None for slot in loaded.bot_action_slots)
+    assert all(slot.updated_at is None for slot in loaded.bot_action_slots)
 
 
 def test_storage_load_state_defaults_new_pipeline_counters_to_zero(tmp_path) -> None:
