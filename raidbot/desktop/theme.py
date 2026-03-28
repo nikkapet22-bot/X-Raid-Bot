@@ -68,6 +68,7 @@ def build_application_stylesheet() -> str:
     }}
     QLineEdit,
     QComboBox,
+    QAbstractSpinBox,
     QTextEdit,
     QPlainTextEdit {{
         background-color: {SURFACE_BG};
