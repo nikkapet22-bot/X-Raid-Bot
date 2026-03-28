@@ -88,7 +88,7 @@ Each saved sequence should contain:
 - optional `target_window_rule`
 - ordered `steps`
 
-`target_window_rule` should be a reusable window-selection hint rather than a hard binding. In the first version it should support a Chrome window title substring match. At run time, the user-selected live window should win if one is explicitly chosen; otherwise the runner should attempt to reacquire a Chrome window using the saved rule. If neither path yields a valid window, the run should fail before step execution starts.
+`target_window_rule` should be a reusable window-selection hint rather than a hard binding. In the first version it should support a Chrome window title substring match. At run time, the user-selected live window should win if one is explicitly chosen; otherwise the runner should attempt to reacquire a Chrome window using the saved rule. If multiple live Chrome windows match the saved substring, the runner should choose the most recently focused matching window. If neither path yields a valid window, the run should fail before step execution starts.
 
 Each step should contain:
 
@@ -107,6 +107,7 @@ For the first version:
 
 - `scroll_amount` should be a signed mouse-wheel step count, with negative values meaning scroll down and positive values meaning scroll up
 - `click_offset_x` and `click_offset_y` should be pixel offsets from the matched template center
+- `max_search_seconds` should be the search budget for a single search phase; the budget resets after each scroll attempt
 
 The runner should process steps strictly in order. It should not skip ahead or dynamically reorder steps based on what else appears in the window.
 
@@ -125,9 +126,9 @@ The first version should use classic template matching. This is more predictable
 
 The scoring contract should be explicit in the spec and persisted data:
 
-- the first version should use OpenCV normalized template matching with a score range of `0.0` to `1.0`
+- the first version should use OpenCV `TM_CCOEFF_NORMED` scoring with a score range of `-1.0` to `1.0`
 - the first version should use only `TM_CCOEFF_NORMED`; alternate template methods are out of scope
-- `match_threshold` should be interpreted only against that normalized score range
+- `match_threshold` should be interpreted only against that score range and should typically be configured as a positive value near `1.0`
 - "best match" should mean the highest score above threshold in the current frame
 - "location shifts materially" should mean the best-match center moves by more than `max(10 px, 0.25 * min(template_width, template_height))`
 
