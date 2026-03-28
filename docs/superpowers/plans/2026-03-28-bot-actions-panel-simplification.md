@@ -47,6 +47,8 @@
   - Preflight validate slots, build the ephemeral internal sequence from enabled slots, and run it after Telegram link open/settle.
 - `raidbot/desktop/automation/runtime.py`
   - Add a narrow helper entrypoint if needed so the worker can execute an ephemeral generated sequence without a visible sequence ID.
+- `raidbot/desktop/automation/runner.py`
+  - Add the post-click confirmation polling that treats a stable-in-place match as `ui_did_not_change`.
 - `tests/desktop/test_models.py`
   - Update config equality/default tests for bot-actions fields.
 - `tests/desktop/test_storage.py`
@@ -166,7 +168,11 @@ git commit -m "feat: add persisted bot action slot config"
 def test_bot_actions_page_renders_four_fixed_slots(qtbot):
     page = BotActionsPage(config=build_config())
     assert [box.label_text() for box in page.slot_boxes] == ["R", "L", "R", "B"]
-    assert page.sequence_list is None
+    assert not hasattr(page, "sequence_list")
+    assert not hasattr(page, "dry_run_button")
+    assert page.settle_delay_input.minimum() == 0
+    assert page.settle_delay_input.maximum() == 10000
+    assert page.settle_delay_input.value() == 1500
 
 
 def test_main_window_uses_bot_actions_page_instead_of_generic_automation_page(qtbot):
@@ -317,8 +323,10 @@ git commit -m "feat: add bot action slot capture flow"
 - Create: `raidbot/desktop/bot_actions/sequence.py`
 - Modify: `raidbot/desktop/worker.py`
 - Modify: `raidbot/desktop/automation/runtime.py`
+- Modify: `raidbot/desktop/automation/runner.py`
 - Create: `tests/desktop/bot_actions/test_sequence.py`
 - Modify: `tests/desktop/test_worker.py`
+- Modify: `tests/desktop/automation/test_runtime.py`
 
 - [ ] **Step 1: Write the failing sequence-builder and worker tests**
 
@@ -337,6 +345,19 @@ def test_worker_refuses_to_open_chrome_when_enabled_slot_has_no_image(...):
     result = worker._handle_message(message)
     assert emitted_errors == ["missing_captured_image"]
     assert chrome_open_calls == []
+
+
+def test_runtime_returns_ui_did_not_change_when_clicked_template_stays_in_place(...):
+    result = runtime.run_sequence(...)
+    assert result.reason == "ui_did_not_change"
+
+
+def test_worker_pauses_remaining_queue_after_first_bot_action_failure(...):
+    worker.enqueue(opened_raid_context("first"))
+    worker.enqueue(opened_raid_context("second"))
+    worker._drain_auto_queue()
+    assert worker.auto_queue_state == "paused"
+    assert worker.pending_auto_count == 1
 ```
 
 - [ ] **Step 2: Run the targeted worker tests to verify they fail**
@@ -344,7 +365,7 @@ def test_worker_refuses_to_open_chrome_when_enabled_slot_has_no_image(...):
 Run:
 
 ```bash
-python -m pytest -q tests/desktop/bot_actions/test_sequence.py tests/desktop/test_worker.py -k "bot_action or captured_image or ui_did_not_change"
+python -m pytest -q tests/desktop/bot_actions/test_sequence.py tests/desktop/automation/test_runtime.py tests/desktop/test_worker.py -k "bot_action or captured_image or ui_did_not_change or queue"
 ```
 
 Expected:
@@ -379,17 +400,23 @@ Update `DesktopBotWorker` so it:
 - validates every enabled slot has an image before opening Chrome
 - builds the ephemeral internal sequence from enabled slots
 - uses the existing `AutomationRuntime` / `SequenceRunner`
+- updates the runtime/runner path so post-click confirmation polls the active capture for up to `2000 ms` after each click
+- keeps sampling the clicked template match score and location during that confirmation window instead of relying only on `post_click_settle_ms`
+- returns success only when the clicked template disappears or moves materially beyond the approved tolerance
+- returns `ui_did_not_change` when the clicked template stays matched in essentially the same location for the full confirmation window
 - closes the tab only on success
 - leaves it open and pauses on failure
 
-If needed, add a small helper to `AutomationRuntime` so the worker can run a generated sequence against the active handle without a user-visible sequence ID lookup.
+If needed:
+- add a small helper to `AutomationRuntime` so the worker can run a generated sequence against the active handle without a user-visible sequence ID lookup
+- move the confirmation polling loop into `raidbot/desktop/automation/runner.py` so the click-confirmation rule lives beside the existing step-execution logic
 
 - [ ] **Step 4: Run the targeted worker tests to verify they pass**
 
 Run:
 
 ```bash
-python -m pytest -q tests/desktop/bot_actions/test_sequence.py tests/desktop/test_worker.py -k "bot_action or captured_image or ui_did_not_change"
+python -m pytest -q tests/desktop/bot_actions/test_sequence.py tests/desktop/automation/test_runtime.py tests/desktop/test_worker.py -k "bot_action or captured_image or ui_did_not_change or queue"
 ```
 
 Expected:
@@ -398,7 +425,7 @@ Expected:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add raidbot/desktop/bot_actions/sequence.py raidbot/desktop/worker.py raidbot/desktop/automation/runtime.py tests/desktop/bot_actions/test_sequence.py tests/desktop/test_worker.py
+git add raidbot/desktop/bot_actions/sequence.py raidbot/desktop/worker.py raidbot/desktop/automation/runtime.py raidbot/desktop/automation/runner.py tests/desktop/bot_actions/test_sequence.py tests/desktop/automation/test_runtime.py tests/desktop/test_worker.py
 git commit -m "feat: run fixed bot action slots after telegram opens"
 ```
 
@@ -425,6 +452,12 @@ def test_removed_generic_automation_controls_are_not_visible(qtbot):
     window = MainWindow(...)
     assert not hasattr(window.bot_actions_page, "sequence_list")
     assert not hasattr(window.bot_actions_page, "dry_run_button")
+    assert not hasattr(window.bot_actions_page, "window_combo")
+
+
+def test_bot_actions_settle_delay_wires_through_controller(qtbot):
+    page.settle_delay_input.setValue(2200)
+    assert controller.apply_calls[-1].bot_actions_settle_ms == 2200
 ```
 
 - [ ] **Step 2: Run the targeted status/visibility tests to verify they fail**
@@ -488,11 +521,22 @@ git commit -m "refactor: simplify visible bot actions status and controls"
 Run:
 
 ```bash
-python -m pytest -q tests/desktop/test_models.py tests/desktop/test_storage.py tests/desktop/test_controller.py tests/desktop/test_main_window.py tests/desktop/test_worker.py tests/desktop/bot_actions
+python -m pytest -q tests/desktop/test_models.py tests/desktop/test_storage.py tests/desktop/test_controller.py tests/desktop/test_main_window.py tests/desktop/test_worker.py tests/desktop/test_app.py tests/desktop/automation/test_runtime.py tests/desktop/bot_actions
 ```
 
 Expected:
 - PASS
+
+- [ ] **Step 1.5: Run the queue-stop regression after failure**
+
+Run:
+
+```bash
+python -m pytest -q tests/desktop/test_worker.py -k "bot_actions and failure"
+```
+
+Expected:
+- PASS with a regression proving later queued links do not continue automatically after the first bot-actions failure
 
 - [ ] **Step 2: Run the full suite**
 
