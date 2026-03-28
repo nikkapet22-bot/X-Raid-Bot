@@ -53,7 +53,7 @@ The implementation should be split into five focused areas:
    - locate Chrome windows on the local machine
    - let the user select the intended target window
    - capture only that window's bounds
-   - stop the run if the window disappears or changes unexpectedly
+   - stop the run if the window disappears or its underlying window handle changes unexpectedly
 
 2. `vision`
    - load template image assets from disk
@@ -175,6 +175,7 @@ The desktop app should gain a new automation area with four parts:
 
 2. `Sequence editor`
    - ordered step list
+   - add, delete, duplicate, and reorder steps
    - sequence-level target-window rule editor with clear/reset control
    - template file picker and replace/remove controls
    - template preview
@@ -252,6 +253,7 @@ The module should fail safely and visibly in these cases:
 - selected window disappears during a run
 - target window cannot be focused
 - template file missing or unreadable
+- template dimensions are invalid for matching against the current capture
 - no match reaches threshold
 - click occurs but no UI change follows
 - scrolling reaches maximum attempts without surfacing the target
