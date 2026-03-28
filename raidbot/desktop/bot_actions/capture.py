@@ -5,7 +5,14 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QEventLoop, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QKeyEvent, QMouseEvent, QPainter
+from PySide6.QtGui import (
+    QColor,
+    QGuiApplication,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPixmap,
+)
 from PySide6.QtWidgets import QApplication, QRubberBand, QWidget
 
 from raidbot.desktop.models import BotActionSlotConfig
@@ -17,6 +24,31 @@ class _CallbackCaptureOverlay:
 
     def capture(self) -> Any | None:
         return self._capture()
+
+
+def capture_virtual_desktop_snapshot(
+    screens: Sequence[Any],
+) -> tuple[QRect, QPixmap]:
+    if not screens:
+        raise ValueError("No screens available for capture.")
+
+    geometry = screens[0].geometry()
+    for screen in screens[1:]:
+        geometry = geometry.united(screen.geometry())
+
+    snapshot = QPixmap(geometry.size())
+    snapshot.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(snapshot)
+    for screen in screens:
+        screen_geometry = screen.geometry()
+        pixmap = screen.grabWindow(0)
+        painter.drawPixmap(
+            screen_geometry.x() - geometry.x(),
+            screen_geometry.y() - geometry.y(),
+            pixmap,
+        )
+    painter.end()
+    return geometry, snapshot
 
 
 def map_capture_rect_to_screen(
@@ -53,9 +85,15 @@ def map_capture_rect_to_screen(
 class _SnippingOverlayWidget(QWidget):
     selectionFinished = Signal(object)
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        virtual_geometry: QRect | None = None,
+        background_pixmap: QPixmap | None = None,
+    ) -> None:
         super().__init__(None)
         self._origin = None
+        self._background_pixmap = background_pixmap
         self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -66,20 +104,23 @@ class _SnippingOverlayWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setMouseTracking(True)
-        self._set_virtual_geometry()
+        self._set_virtual_geometry(virtual_geometry)
 
-    def _set_virtual_geometry(self) -> None:
+    def _set_virtual_geometry(self, virtual_geometry: QRect | None) -> None:
+        if virtual_geometry is not None and not virtual_geometry.isNull():
+            self.setGeometry(virtual_geometry)
+            return
         screens = QGuiApplication.screens()
         if not screens:
             return
-        geometry = screens[0].geometry()
-        for screen in screens[1:]:
-            geometry = geometry.united(screen.geometry())
+        geometry, _ = capture_virtual_desktop_snapshot(screens)
         self.setGeometry(geometry)
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 80))
+        if self._background_pixmap is not None and not self._background_pixmap.isNull():
+            painter.drawPixmap(0, 0, self._background_pixmap)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 50))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
@@ -123,7 +164,18 @@ class QtSnippingOverlay:
         if app is None:
             raise RuntimeError("A QApplication instance is required for slot capture.")
 
-        overlay = _SnippingOverlayWidget()
+        screens = QGuiApplication.screens()
+        virtual_geometry = None
+        background_pixmap = None
+        if screens:
+            virtual_geometry, background_pixmap = capture_virtual_desktop_snapshot(
+                screens
+            )
+
+        overlay = _SnippingOverlayWidget(
+            virtual_geometry=virtual_geometry,
+            background_pixmap=background_pixmap,
+        )
         event_loop = QEventLoop()
         selection: QRect | None = None
 

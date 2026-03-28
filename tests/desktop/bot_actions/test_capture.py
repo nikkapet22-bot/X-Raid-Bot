@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QRect
+from PySide6.QtGui import QColor, QPixmap
 
 from raidbot.desktop.models import BotActionSlotConfig
 
@@ -21,12 +22,21 @@ class FakeImage:
 
 
 class FakeScreen:
-    def __init__(self, geometry: QRect, name: str) -> None:
+    def __init__(self, geometry: QRect, name: str, color: QColor | None = None) -> None:
         self._geometry = geometry
         self.name = name
+        self.color = color or QColor("black")
 
     def geometry(self) -> QRect:
         return QRect(self._geometry)
+
+    def grabWindow(self, _window_id: int, x: int = 0, y: int = 0, width: int = -1, height: int = -1):
+        pixmap = QPixmap(
+            width if width >= 0 else self._geometry.width(),
+            height if height >= 0 else self._geometry.height(),
+        )
+        pixmap.fill(self.color)
+        return pixmap
 
 
 def test_capture_saves_slot_image_to_deterministic_path(tmp_path) -> None:
@@ -107,3 +117,17 @@ def test_capture_raises_when_image_save_fails(tmp_path) -> None:
         assert "slot_1_r.png" in str(exc)
     else:
         raise AssertionError("Expected image save failure to raise OSError.")
+
+
+def test_capture_virtual_desktop_snapshot_composes_screen_pixmaps() -> None:
+    from raidbot.desktop.bot_actions.capture import capture_virtual_desktop_snapshot
+
+    left_screen = FakeScreen(QRect(0, 0, 40, 20), "left", QColor("red"))
+    right_screen = FakeScreen(QRect(40, 0, 30, 20), "right", QColor("blue"))
+
+    geometry, pixmap = capture_virtual_desktop_snapshot([left_screen, right_screen])
+
+    image = pixmap.toImage()
+    assert geometry == QRect(0, 0, 70, 20)
+    assert image.pixelColor(10, 10) == QColor("red")
+    assert image.pixelColor(50, 10) == QColor("blue")

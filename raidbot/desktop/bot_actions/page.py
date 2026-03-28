@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QFormLayout,
@@ -39,6 +41,14 @@ class SlotBox(QFrame):
         self.enabled_checkbox = QCheckBox("Enabled")
         layout.addWidget(self.enabled_checkbox)
 
+        self.template_preview_label = QLabel("No image")
+        self.template_preview_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+        self.template_preview_label.setMinimumSize(120, 72)
+        self.template_preview_label.setProperty("muted", "true")
+        layout.addWidget(self.template_preview_label)
+
         self.capture_button = QPushButton("Capture")
         self.capture_button.setProperty("variant", "secondary")
         layout.addWidget(self.capture_button)
@@ -55,6 +65,7 @@ class SlotBox(QFrame):
         self.slot_label.setText(slot.label)
         with QSignalBlocker(self.enabled_checkbox):
             self.enabled_checkbox.setChecked(bool(slot.enabled))
+        self._set_preview(slot.template_path)
         if slot.template_path is not None:
             self.template_status_label.setText(str(slot.template_path))
         else:
@@ -62,6 +73,27 @@ class SlotBox(QFrame):
 
     def label_text(self) -> str:
         return self.slot_label.text()
+
+    def _set_preview(self, template_path: Path | None) -> None:
+        if template_path is None:
+            self.template_preview_label.clear()
+            self.template_preview_label.setText("No image")
+            return
+
+        pixmap = QPixmap(str(template_path))
+        if pixmap.isNull():
+            self.template_preview_label.clear()
+            self.template_preview_label.setText("Preview unavailable")
+            return
+
+        self.template_preview_label.setText("")
+        self.template_preview_label.setPixmap(
+            pixmap.scaled(
+                self.template_preview_label.minimumSize(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
 
 
 class BotActionsPage(QWidget):

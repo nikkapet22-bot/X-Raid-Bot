@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QImage
 
 from raidbot.desktop.models import DesktopAppConfig
 
@@ -87,3 +88,40 @@ def test_bot_actions_page_capture_button_emits_slot_capture_signal_with_index(
     qtbot.mouseClick(page.slot_boxes[2].capture_button, Qt.MouseButton.LeftButton)
 
     assert captured == [2]
+
+
+def test_bot_actions_page_shows_thumbnail_preview_above_capture_button(
+    qtbot,
+    tmp_path,
+) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    image_path = tmp_path / "slot_1_r.png"
+    image = QImage(12, 10, QImage.Format.Format_ARGB32)
+    image.fill(QColor("red"))
+    assert image.save(str(image_path))
+
+    default_slots = build_config().bot_action_slots
+    page = BotActionsPage(
+        config=build_config(
+            bot_action_slots=(
+                default_slots[0].__class__(
+                    key=default_slots[0].key,
+                    label=default_slots[0].label,
+                    enabled=default_slots[0].enabled,
+                    template_path=image_path,
+                    updated_at=default_slots[0].updated_at,
+                ),
+                *default_slots[1:],
+            )
+        )
+    )
+    qtbot.addWidget(page)
+
+    preview_label = page.slot_boxes[0].template_preview_label
+
+    assert preview_label.pixmap() is not None
+    assert not preview_label.pixmap().isNull()
+    assert page.slot_boxes[0].layout().indexOf(preview_label) < page.slot_boxes[0].layout().indexOf(
+        page.slot_boxes[0].capture_button
+    )
