@@ -17,14 +17,21 @@ def build_config(**overrides) -> DesktopAppConfig:
         "telegram_session_path": Path("raidbot.session"),
         "telegram_phone_number": "+40123456789",
         "whitelisted_chat_ids": [-1001],
-        "raidar_sender_id": 42,
+        "allowed_sender_ids": [42],
         "chrome_profile_directory": "Profile 3",
+        "browser_mode": "launch-only",
+        "executor_name": "noop",
+        "preset_replies": ("gm",),
+        "default_action_like": True,
+        "default_action_repost": True,
+        "default_action_bookmark": False,
+        "default_action_reply": True,
     }
     values.update(overrides)
     return DesktopAppConfig(**values)
 
 
-def test_settings_save_emits_apply_request(qtbot) -> None:
+def test_settings_save_emits_allowlist_and_preset_replies(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
@@ -39,7 +46,12 @@ def test_settings_save_emits_apply_request(qtbot) -> None:
 
     page.api_hash_input.setText("new-hash")
     page.whitelist_input.setText("-1001, -2002")
-    page.raidar_sender_input.setText("99")
+    page.allowed_senders_input.setText("99, 101")
+    page.reply_pool_input.setPlainText("gm\nlfggg")
+    page.like_toggle.setChecked(False)
+    page.repost_toggle.setChecked(False)
+    page.bookmark_toggle.setChecked(True)
+    page.reply_toggle.setChecked(False)
     page.profile_combo.setCurrentText("Profile 9")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
@@ -47,8 +59,13 @@ def test_settings_save_emits_apply_request(qtbot) -> None:
         build_config(
             telegram_api_hash="new-hash",
             whitelisted_chat_ids=[-1001, -2002],
-            raidar_sender_id=99,
+            allowed_sender_ids=[99, 101],
             chrome_profile_directory="Profile 9",
+            preset_replies=("gm", "lfggg"),
+            default_action_like=False,
+            default_action_repost=False,
+            default_action_bookmark=True,
+            default_action_reply=False,
         )
     ]
 
@@ -68,7 +85,7 @@ def test_settings_save_rejects_invalid_numeric_input_without_crashing(qtbot) -> 
 
     page.api_id_input.setText("not-a-number")
     page.whitelist_input.setText("-1001, -2002")
-    page.raidar_sender_input.setText("99")
+    page.allowed_senders_input.setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
@@ -90,7 +107,7 @@ def test_settings_save_rejects_blank_telegram_api_hash(qtbot) -> None:
 
     page.api_hash_input.setText("   ")
     page.whitelist_input.setText("-1001, -2002")
-    page.raidar_sender_input.setText("99")
+    page.allowed_senders_input.setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
@@ -116,14 +133,14 @@ def test_settings_save_clears_previous_error_on_success(qtbot) -> None:
 
     page.api_id_input.setText("123456")
     page.whitelist_input.setText("-1001, -2002")
-    page.raidar_sender_input.setText("99")
+    page.allowed_senders_input.setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert len(applied) == 1
     assert page.status_label.text() == ""
 
 
-def test_settings_save_rejects_blank_raidar_sender_id(qtbot) -> None:
+def test_settings_save_rejects_blank_sender_allowlist(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
@@ -139,18 +156,18 @@ def test_settings_save_rejects_blank_raidar_sender_id(qtbot) -> None:
     page.api_id_input.setText("123456")
     page.api_hash_input.setText("new-hash")
     page.whitelist_input.setText("-1001, -2002")
-    page.raidar_sender_input.setText("   ")
+    page.allowed_senders_input.setText("   ")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
-    assert page.status_label.text() == "Raidar sender ID is required."
+    assert page.status_label.text() == "Allowed sender IDs is required."
 
 
-def test_settings_save_rejects_missing_persisted_raidar_sender_id(qtbot) -> None:
+def test_settings_save_rejects_missing_persisted_sender_allowlist(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
-        config=build_config(raidar_sender_id=None),
+        config=build_config(allowed_sender_ids=[]),
         available_profiles=["Default", "Profile 3", "Profile 9"],
         session_status="authorized",
     )
@@ -162,7 +179,7 @@ def test_settings_save_rejects_missing_persisted_raidar_sender_id(qtbot) -> None
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
-    assert page.status_label.text() == "Raidar sender ID is required."
+    assert page.status_label.text() == "Allowed sender IDs is required."
 
 
 def test_settings_save_rejects_invalid_whitelist_without_crashing(qtbot) -> None:
@@ -180,14 +197,14 @@ def test_settings_save_rejects_invalid_whitelist_without_crashing(qtbot) -> None
 
     page.api_id_input.setText("123456")
     page.whitelist_input.setText("-1001, nope")
-    page.raidar_sender_input.setText("99")
+    page.allowed_senders_input.setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
     assert page.status_label.text() == "Chat whitelist must contain valid integers."
 
 
-def test_settings_save_rejects_invalid_sender_without_crashing(qtbot) -> None:
+def test_settings_save_rejects_invalid_sender_allowlist_without_crashing(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
@@ -202,14 +219,14 @@ def test_settings_save_rejects_invalid_sender_without_crashing(qtbot) -> None:
 
     page.api_id_input.setText("123456")
     page.whitelist_input.setText("-1001, -2002")
-    page.raidar_sender_input.setText("oops")
+    page.allowed_senders_input.setText("42, oops")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
-    assert page.status_label.text() == "Raidar sender ID must be a valid integer."
+    assert page.status_label.text() == "Allowed sender IDs must contain valid integers."
 
 
-def test_settings_page_marks_raidar_sender_as_required(qtbot) -> None:
+def test_settings_page_marks_sender_allowlist_as_required(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
@@ -219,8 +236,8 @@ def test_settings_page_marks_raidar_sender_as_required(qtbot) -> None:
     )
     qtbot.addWidget(page)
 
-    assert page.raidar_sender_input.placeholderText() == "Raidar sender ID"
-    assert page.raidar_sender_hint_label.text() == "Required to start the bot."
+    assert page.allowed_senders_input.placeholderText() == "Comma-separated sender IDs"
+    assert page.allowed_senders_hint_label.text() == "Required to start the bot."
 
 
 def test_settings_page_exposes_session_status_and_reauthorize(qtbot) -> None:
@@ -299,6 +316,25 @@ def test_settings_page_uses_grouped_sections_and_primary_save(qtbot) -> None:
     assert page.routing_surface.objectName() == SECTION_OBJECT_NAME
     assert page.save_button.property("variant") == "primary"
     assert page.reauthorize_button.property("variant") == "secondary"
+
+
+def test_settings_page_exposes_browser_pipeline_controls(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3"],
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+
+    assert page.browser_mode_combo.currentText() == "launch-only"
+    assert page.executor_name_label.text() == "noop"
+    assert page.reply_pool_input.toPlainText() == "gm"
+    assert page.like_toggle.isChecked() is True
+    assert page.repost_toggle.isChecked() is True
+    assert page.bookmark_toggle.isChecked() is False
+    assert page.reply_toggle.isChecked() is True
 
 
 def test_settings_page_preserves_apply_and_reauthorize_signals(qtbot) -> None:

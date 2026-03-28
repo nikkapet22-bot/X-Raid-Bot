@@ -5,7 +5,14 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+from raidbot.browser.models import (
+    RaidActionJob,
+    RaidActionRequirements,
+    RaidDetectionResult,
+    RaidExecutionResult,
+)
 from raidbot.config import Settings
+from raidbot.models import IncomingMessage
 
 
 def load_runtime_module(monkeypatch):
@@ -24,97 +31,363 @@ def load_runtime_module(monkeypatch):
     return importlib.import_module("raidbot.runtime")
 
 
-def test_build_runtime_wires_service_and_listener(monkeypatch):
+def test_build_runtime_wires_browser_pipeline_and_listener(monkeypatch):
     runtime_module = load_runtime_module(monkeypatch)
-    chrome_calls: list[dict[str, object]] = []
-    service_calls: list[dict[str, object]] = []
-    listener_calls: list[dict[str, object]] = []
+    calls: list[tuple[str, object]] = []
 
     class FakeChromeOpener:
         def __init__(self, chrome_path, user_data_dir, profile_directory) -> None:
-            chrome_calls.append(
-                {
-                    "chrome_path": chrome_path,
-                    "user_data_dir": user_data_dir,
-                    "profile_directory": profile_directory,
-                }
+            self.chrome_path = chrome_path
+            self.user_data_dir = user_data_dir
+            self.profile_directory = profile_directory
+            calls.append(
+                (
+                    "chrome",
+                    (
+                        chrome_path,
+                        user_data_dir,
+                        profile_directory,
+                    ),
+                )
             )
+
+    class FakeBackend:
+        def __init__(self, launcher) -> None:
+            self.launcher = launcher
+            calls.append(("backend", launcher))
+
+    class FakeExecutor:
+        name = "noop"
+
+        def __init__(self) -> None:
+            calls.append(("executor", self.name))
 
     class FakeStore:
-        pass
+        def __init__(self) -> None:
+            self.marked: list[str] = []
 
-    class FakeRaidService:
-        def __init__(self, allowed_chat_ids, allowed_sender_id, opener, dedupe_store) -> None:
+        def contains(self, url: str) -> bool:
+            return url in self.marked
+
+        def mark_if_new(self, url: str) -> bool:
+            self.marked.append(url)
+            return True
+
+    class FakeService:
+        def __init__(
+            self,
+            allowed_chat_ids,
+            allowed_sender_ids,
+            dedupe_store,
+            preset_replies,
+            default_requirements,
+        ) -> None:
             self.allowed_chat_ids = allowed_chat_ids
-            self.allowed_sender_id = allowed_sender_id
-            self.opener = opener
+            self.allowed_sender_ids = allowed_sender_ids
             self.dedupe_store = dedupe_store
-            service_calls.append(
-                {
-                    "allowed_chat_ids": allowed_chat_ids,
-                    "allowed_sender_id": allowed_sender_id,
-                    "opener": opener,
-                    "dedupe_store": dedupe_store,
-                }
+            self.preset_replies = preset_replies
+            self.default_requirements = default_requirements
+            calls.append(
+                (
+                    "service",
+                    (
+                        allowed_chat_ids,
+                        allowed_sender_ids,
+                        dedupe_store,
+                        preset_replies,
+                        default_requirements,
+                    ),
+                )
             )
 
-        def handle_message(self, message) -> None:
-            return None
+        def handle_message(self, message):
+            return message
 
-    class FakeTelegramRaidListener:
+    class FakePipeline:
+        def __init__(self, backend, executor) -> None:
+            self.backend = backend
+            self.executor = executor
+            calls.append(("pipeline", (backend, executor)))
+
+        def execute(self, job, *, should_continue=None):
+            _ = should_continue
+            return job
+
+    class FakeListener:
         def __init__(self, api_id, api_hash, session_path, on_message) -> None:
             self.api_id = api_id
             self.api_hash = api_hash
             self.session_path = session_path
             self.on_message = on_message
-            listener_calls.append(
-                {
-                    "api_id": api_id,
-                    "api_hash": api_hash,
-                    "session_path": session_path,
-                    "on_message": on_message,
-                }
-            )
+            calls.append(("listener", (api_id, api_hash, session_path, on_message)))
 
     monkeypatch.setattr(runtime_module, "ChromeOpener", FakeChromeOpener)
+    monkeypatch.setattr(runtime_module, "LaunchOnlyBrowserBackend", FakeBackend)
+    monkeypatch.setattr(runtime_module, "NoOpRaidExecutor", FakeExecutor)
     monkeypatch.setattr(runtime_module, "InMemoryOpenedUrlStore", FakeStore)
-    monkeypatch.setattr(runtime_module, "RaidService", FakeRaidService)
-    monkeypatch.setattr(runtime_module, "TelegramRaidListener", FakeTelegramRaidListener)
+    monkeypatch.setattr(runtime_module, "RaidService", FakeService)
+    monkeypatch.setattr(runtime_module, "BrowserPipeline", FakePipeline)
+    monkeypatch.setattr(runtime_module, "TelegramRaidListener", FakeListener)
 
     settings = Settings(
         telegram_api_id=123456,
         telegram_api_hash="hash-value",
         telegram_session_path=Path("raidbot.session"),
         telegram_chat_whitelist={-1001, -1002},
-        raidar_sender_id=42,
+        allowed_sender_ids={42},
+        chrome_path=Path(r"C:\Chrome\chrome.exe"),
+        chrome_user_data_dir=Path(r"C:\ChromeData"),
+        chrome_profile_directory="Profile 3",
+        browser_mode="launch-only",
+        executor_name="noop",
+        preset_replies=("hello", "world"),
+        default_action_like=False,
+        default_action_repost=True,
+        default_action_bookmark=True,
+        default_action_reply=False,
+    )
+
+    runtime = runtime_module.build_runtime(settings)
+
+    assert ("chrome", (Path(r"C:\Chrome\chrome.exe"), Path(r"C:\ChromeData"), "Profile 3")) in calls
+    assert (
+        "service",
+        (
+            {-1001, -1002},
+            {42},
+            runtime.dedupe_store,
+            ("hello", "world"),
+            RaidActionRequirements(
+                like=False,
+                repost=True,
+                bookmark=True,
+                reply=False,
+            ),
+        ),
+    ) in calls
+    assert ("pipeline", (runtime.pipeline.backend, runtime.pipeline.executor)) in calls
+    assert (
+        "listener",
+        (
+            123456,
+            "hash-value",
+            "raidbot.session",
+            runtime.message_handler,
+        ),
+    ) in calls
+    assert runtime.service.allowed_chat_ids == {-1001, -1002}
+    assert runtime.service.allowed_sender_ids == {42}
+    assert runtime.service.dedupe_store is runtime.dedupe_store
+    assert runtime.service.preset_replies == ("hello", "world")
+    assert runtime.service.default_requirements == RaidActionRequirements(
+        like=False,
+        repost=True,
+        bookmark=True,
+        reply=False,
+    )
+    assert isinstance(runtime.pipeline.backend, FakeBackend)
+    assert isinstance(runtime.pipeline.backend.launcher, FakeChromeOpener)
+    assert runtime.pipeline.backend.launcher.chrome_path == Path(r"C:\Chrome\chrome.exe")
+    assert runtime.pipeline.backend.launcher.user_data_dir == Path(r"C:\ChromeData")
+    assert runtime.pipeline.backend.launcher.profile_directory == "Profile 3"
+    assert isinstance(runtime.pipeline.executor, FakeExecutor)
+    assert runtime.listener.on_message is runtime.message_handler
+
+
+def test_runtime_message_handler_returns_non_job_results_directly(monkeypatch):
+    runtime_module = load_runtime_module(monkeypatch)
+    calls: list[str] = []
+
+    class FakeStore:
+        def contains(self, url: str) -> bool:
+            calls.append(f"contains:{url}")
+            return False
+
+        def mark_if_new(self, url: str) -> bool:
+            calls.append(f"mark:{url}")
+            return True
+
+    class FakeService:
+        def __init__(
+            self,
+            allowed_chat_ids,
+            allowed_sender_ids,
+            dedupe_store,
+            preset_replies,
+            default_requirements,
+        ) -> None:
+            self.dedupe_store = dedupe_store
+            self.default_requirements = default_requirements
+
+        def handle_message(self, message):
+            calls.append("service")
+            return RaidDetectionResult(kind="not_a_raid")
+
+    class FakePipeline:
+        def __init__(self, backend, executor) -> None:
+            _ = (backend, executor)
+
+        def execute(self, job, *, should_continue=None):
+            _ = (job, should_continue)
+            calls.append("pipeline")
+            return RaidExecutionResult(kind="executor_not_configured", handed_off=True)
+
+    class FakeListener:
+        def __init__(self, api_id, api_hash, session_path, on_message) -> None:
+            _ = (api_id, api_hash, session_path)
+            self.on_message = on_message
+
+    class FakeChromeOpener:
+        def __init__(self, chrome_path, user_data_dir, profile_directory) -> None:
+            _ = (chrome_path, user_data_dir, profile_directory)
+
+    class FakeBackend:
+        def __init__(self, launcher) -> None:
+            _ = launcher
+
+    class FakeExecutor:
+        name = "noop"
+
+        def __init__(self) -> None:
+            pass
+
+    monkeypatch.setattr(runtime_module, "InMemoryOpenedUrlStore", FakeStore)
+    monkeypatch.setattr(runtime_module, "RaidService", FakeService)
+    monkeypatch.setattr(runtime_module, "BrowserPipeline", FakePipeline)
+    monkeypatch.setattr(runtime_module, "TelegramRaidListener", FakeListener)
+    monkeypatch.setattr(runtime_module, "ChromeOpener", FakeChromeOpener)
+    monkeypatch.setattr(runtime_module, "LaunchOnlyBrowserBackend", FakeBackend)
+    monkeypatch.setattr(runtime_module, "NoOpRaidExecutor", FakeExecutor)
+
+    settings = Settings(
+        telegram_api_id=123456,
+        telegram_api_hash="hash-value",
+        telegram_session_path=Path("raidbot.session"),
+        telegram_chat_whitelist={-1001},
+        allowed_sender_ids={42},
         chrome_path=Path(r"C:\Chrome\chrome.exe"),
         chrome_user_data_dir=Path(r"C:\ChromeData"),
         chrome_profile_directory="Profile 3",
     )
 
     runtime = runtime_module.build_runtime(settings)
+    message = IncomingMessage(chat_id=-1001, sender_id=42, text="hello")
 
-    assert chrome_calls == [
-        {
-            "chrome_path": Path(r"C:\Chrome\chrome.exe"),
-            "user_data_dir": Path(r"C:\ChromeData"),
-            "profile_directory": "Profile 3",
-        }
+    result = runtime.listener.on_message(message)
+
+    assert result == RaidDetectionResult(kind="not_a_raid")
+    assert calls == ["service"]
+
+
+def test_runtime_message_handler_marks_dedupe_after_handed_off_execution(monkeypatch):
+    runtime_module = load_runtime_module(monkeypatch)
+    calls: list[str] = []
+    job = RaidActionJob(
+        normalized_url="https://raid.example/abc",
+        raw_url="https://raid.example/abc?utm_source=telegram",
+        chat_id=-1001,
+        sender_id=42,
+        requirements=RaidActionRequirements(
+            like=True,
+            repost=False,
+            bookmark=False,
+            reply=True,
+        ),
+        preset_replies=("hello",),
+        trace_id="raid-123",
+    )
+    detection_result = RaidDetectionResult.job_detected(job)
+    execution_result = RaidExecutionResult(kind="executor_not_configured", handed_off=True)
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.marked: list[str] = []
+
+        def contains(self, url: str) -> bool:
+            calls.append(f"contains:{url}")
+            return False
+
+        def mark_if_new(self, url: str) -> bool:
+            calls.append(f"mark:{url}")
+            self.marked.append(url)
+            return True
+
+    class FakeService:
+        def __init__(
+            self,
+            allowed_chat_ids,
+            allowed_sender_ids,
+            dedupe_store,
+            preset_replies,
+            default_requirements,
+        ) -> None:
+            self.dedupe_store = dedupe_store
+            self.default_requirements = default_requirements
+
+        def handle_message(self, message):
+            _ = message
+            calls.append("service")
+            return detection_result
+
+    class FakePipeline:
+        def __init__(self, backend, executor) -> None:
+            _ = (backend, executor)
+
+        def execute(self, job_arg, *, should_continue=None):
+            _ = should_continue
+            calls.append(f"pipeline:{job_arg.normalized_url}")
+            return execution_result
+
+    class FakeListener:
+        def __init__(self, api_id, api_hash, session_path, on_message) -> None:
+            _ = (api_id, api_hash, session_path)
+            self.on_message = on_message
+
+    class FakeChromeOpener:
+        def __init__(self, chrome_path, user_data_dir, profile_directory) -> None:
+            _ = (chrome_path, user_data_dir, profile_directory)
+
+    class FakeBackend:
+        def __init__(self, launcher) -> None:
+            _ = launcher
+
+    class FakeExecutor:
+        name = "noop"
+
+        def __init__(self) -> None:
+            pass
+
+    monkeypatch.setattr(runtime_module, "InMemoryOpenedUrlStore", FakeStore)
+    monkeypatch.setattr(runtime_module, "RaidService", FakeService)
+    monkeypatch.setattr(runtime_module, "BrowserPipeline", FakePipeline)
+    monkeypatch.setattr(runtime_module, "TelegramRaidListener", FakeListener)
+    monkeypatch.setattr(runtime_module, "ChromeOpener", FakeChromeOpener)
+    monkeypatch.setattr(runtime_module, "LaunchOnlyBrowserBackend", FakeBackend)
+    monkeypatch.setattr(runtime_module, "NoOpRaidExecutor", FakeExecutor)
+
+    settings = Settings(
+        telegram_api_id=123456,
+        telegram_api_hash="hash-value",
+        telegram_session_path=Path("raidbot.session"),
+        telegram_chat_whitelist={-1001},
+        allowed_sender_ids={42},
+        chrome_path=Path(r"C:\Chrome\chrome.exe"),
+        chrome_user_data_dir=Path(r"C:\ChromeData"),
+        chrome_profile_directory="Profile 3",
+    )
+
+    runtime = runtime_module.build_runtime(settings)
+    message = IncomingMessage(chat_id=-1001, sender_id=42, text="raid")
+
+    result = runtime.listener.on_message(message)
+
+    assert result is execution_result
+    assert calls == [
+        "service",
+        "pipeline:https://raid.example/abc",
+        "mark:https://raid.example/abc",
     ]
-    assert len(service_calls) == 1
-    assert service_calls[0]["allowed_chat_ids"] == {-1001, -1002}
-    assert service_calls[0]["allowed_sender_id"] == 42
-    assert isinstance(service_calls[0]["opener"], FakeChromeOpener)
-    assert isinstance(service_calls[0]["dedupe_store"], FakeStore)
-    assert len(listener_calls) == 1
-    assert listener_calls[0]["api_id"] == 123456
-    assert listener_calls[0]["api_hash"] == "hash-value"
-    assert listener_calls[0]["session_path"] == "raidbot.session"
-    assert listener_calls[0]["on_message"].__self__ is runtime.service
-    assert listener_calls[0]["on_message"].__func__ is FakeRaidService.handle_message
-    assert runtime.service.allowed_chat_ids == {-1001, -1002}
-    assert runtime.service.allowed_sender_id == 42
-    assert runtime.listener.session_path == "raidbot.session"
+    assert runtime.dedupe_store.marked == ["https://raid.example/abc"]
 
 
 def test_main_loads_env_builds_runtime_and_runs_listener(monkeypatch):

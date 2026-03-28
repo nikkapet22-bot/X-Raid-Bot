@@ -39,8 +39,15 @@ def test_config_round_trip(tmp_path) -> None:
         telegram_session_path=Path("sessions/raid.session"),
         telegram_phone_number="+15555550123",
         whitelisted_chat_ids=[1001, 1002, 1003],
-        raidar_sender_id=424242,
+        allowed_sender_ids=[424242, 515151],
         chrome_profile_directory="Profile 1",
+        browser_mode="launch-only",
+        executor_name="noop",
+        preset_replies=("gm", "lfggg"),
+        default_action_like=True,
+        default_action_repost=False,
+        default_action_bookmark=True,
+        default_action_reply=False,
     )
 
     storage.save_config(config)
@@ -64,6 +71,13 @@ def test_state_round_trip_includes_activity_entries(tmp_path) -> None:
         duplicates_skipped=2,
         non_matching_skipped=5,
         open_failures=1,
+        sender_rejected=4,
+        browser_session_failed=3,
+        page_ready=6,
+        executor_not_configured=2,
+        executor_succeeded=1,
+        executor_failed=5,
+        session_closed=6,
         last_successful_raid_open_at="2026-03-26T12:45:00",
         activity=[
             ActivityEntry(
@@ -86,6 +100,70 @@ def test_state_round_trip_includes_activity_entries(tmp_path) -> None:
     assert loaded.activity[0].url == "https://x.com/i/status/123"
     assert loaded.activity[0].reason == "matched active raid"
     assert storage.state_path.exists()
+
+
+def test_storage_loads_legacy_single_sender_as_allowlist(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        json.dumps(
+            {
+                "telegram_api_id": 123456,
+                "telegram_api_hash": "api-hash",
+                "telegram_session_path": "sessions/raid.session",
+                "telegram_phone_number": "+15555550123",
+                "whitelisted_chat_ids": [1001, 1002],
+                "raidar_sender_id": 424242,
+                "chrome_profile_directory": "Profile 1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+
+    assert loaded.allowed_sender_ids == [424242]
+    assert loaded.browser_mode == "launch-only"
+    assert loaded.executor_name == "noop"
+    assert loaded.preset_replies == ()
+    assert loaded.default_action_like is True
+    assert loaded.default_action_repost is True
+    assert loaded.default_action_bookmark is False
+    assert loaded.default_action_reply is True
+
+
+def test_storage_load_state_defaults_new_pipeline_counters_to_zero(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.state_path.write_text(
+        json.dumps(
+            {
+                "bot_state": "stopped",
+                "connection_state": "disconnected",
+                "raids_opened": 7,
+                "duplicates_skipped": 2,
+                "non_matching_skipped": 5,
+                "open_failures": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_state()
+
+    assert loaded.raids_opened == 7
+    assert loaded.duplicates_skipped == 2
+    assert loaded.non_matching_skipped == 5
+    assert loaded.open_failures == 1
+    assert loaded.sender_rejected == 0
+    assert loaded.browser_session_failed == 0
+    assert loaded.page_ready == 0
+    assert loaded.executor_not_configured == 0
+    assert loaded.executor_succeeded == 0
+    assert loaded.executor_failed == 0
+    assert loaded.session_closed == 0
 
 
 def test_load_state_normalizes_stale_live_runtime_states(tmp_path) -> None:

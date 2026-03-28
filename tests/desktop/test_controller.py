@@ -149,7 +149,7 @@ def build_config(**overrides) -> DesktopAppConfig:
         "telegram_session_path": Path("raidbot.session"),
         "telegram_phone_number": "+40123456789",
         "whitelisted_chat_ids": [-1001],
-        "raidar_sender_id": 42,
+        "allowed_sender_ids": [42],
         "chrome_profile_directory": "Profile 3",
     }
     values.update(overrides)
@@ -246,7 +246,7 @@ def test_controller_apply_config_saves_and_live_applies_when_running(qtbot) -> N
 
     new_config = build_config(
         whitelisted_chat_ids=[-1001, -2002],
-        raidar_sender_id=99,
+        allowed_sender_ids=[99, 101],
         chrome_profile_directory="Profile 9",
     )
 

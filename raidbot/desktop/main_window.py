@@ -61,6 +61,13 @@ class MainWindow(QMainWindow):
         self.duplicates_label = QLabel("0")
         self.non_matching_label = QLabel("0")
         self.open_failures_label = QLabel("0")
+        self.sender_rejected_label = QLabel("0")
+        self.browser_session_failed_label = QLabel("0")
+        self.page_ready_label = QLabel("0")
+        self.executor_not_configured_label = QLabel("0")
+        self.executor_succeeded_label = QLabel("0")
+        self.executor_failed_label = QLabel("0")
+        self.session_closed_label = QLabel("0")
         self.last_successful_label = QLabel("")
         self.last_error_label = QLabel("")
         self.activity_list = QListWidget()
@@ -133,17 +140,31 @@ class MainWindow(QMainWindow):
         self.status_panel = self._build_status_panel()
         layout.addWidget(self.status_panel)
 
-        metrics_row = QHBoxLayout()
-        metrics_row.setSpacing(12)
         self.metric_cards = [
             self._build_metric_card("Raids Opened", self.raids_opened_label),
             self._build_metric_card("Duplicates", self.duplicates_label),
             self._build_metric_card("Non-matching", self.non_matching_label),
             self._build_metric_card("Open Failures", self.open_failures_label),
+            self._build_metric_card("Sender Rejected", self.sender_rejected_label),
+            self._build_metric_card(
+                "Browser Session Failed",
+                self.browser_session_failed_label,
+            ),
+            self._build_metric_card("Page Ready", self.page_ready_label),
+            self._build_metric_card(
+                "Executor Not Configured",
+                self.executor_not_configured_label,
+            ),
+            self._build_metric_card("Executor Succeeded", self.executor_succeeded_label),
+            self._build_metric_card("Executor Failed", self.executor_failed_label),
+            self._build_metric_card("Session Closed", self.session_closed_label),
         ]
-        for card in self.metric_cards:
-            metrics_row.addWidget(card)
-        layout.addLayout(metrics_row)
+        for card_group in (self.metric_cards[:6], self.metric_cards[6:]):
+            metrics_row = QHBoxLayout()
+            metrics_row.setSpacing(12)
+            for card in card_group:
+                metrics_row.addWidget(card)
+            layout.addLayout(metrics_row)
 
         self.activity_panel = self._build_activity_panel()
         self.error_panel = self._build_error_panel()
@@ -294,6 +315,13 @@ class MainWindow(QMainWindow):
         self.duplicates_label.setText(str(state.duplicates_skipped))
         self.non_matching_label.setText(str(state.non_matching_skipped))
         self.open_failures_label.setText(str(state.open_failures))
+        self.sender_rejected_label.setText(str(state.sender_rejected))
+        self.browser_session_failed_label.setText(str(state.browser_session_failed))
+        self.page_ready_label.setText(str(state.page_ready))
+        self.executor_not_configured_label.setText(str(state.executor_not_configured))
+        self.executor_succeeded_label.setText(str(state.executor_succeeded))
+        self.executor_failed_label.setText(str(state.executor_failed))
+        self.session_closed_label.setText(str(state.session_closed))
         self.last_successful_label.setText(state.last_successful_raid_open_at or "")
         self.last_error_label.setText(state.last_error or "")
         if include_activity:
@@ -313,12 +341,26 @@ class MainWindow(QMainWindow):
             timestamp_text = timestamp.isoformat()
         else:
             timestamp_text = str(timestamp)
-        parts = [timestamp_text, entry.action]
+        parts = [timestamp_text, self._format_activity_action(entry.action)]
         if entry.url:
             parts.append(entry.url)
         if entry.reason:
             parts.append(entry.reason)
         return " | ".join(parts)
+
+    def _format_activity_action(self, action: str) -> str:
+        action_labels = {
+            "sender_rejected": "Sender Rejected",
+            "browser_session_failed": "Browser Session Failed",
+            "page_ready": "Page Ready",
+            "executor_not_configured": "Executor Not Configured",
+            "executor_succeeded": "Executor Succeeded",
+            "executor_failed": "Executor Failed",
+            "session_closed": "Session Closed",
+        }
+        if action in action_labels:
+            return action_labels[action]
+        return action.replace("_", " ").title()
 
     def _ensure_window_icon(self) -> None:
         if not self.windowIcon().isNull():
