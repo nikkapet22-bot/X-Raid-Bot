@@ -299,8 +299,10 @@ class SequenceRunner:
         template: Any,
         clicked_match: MatchResult,
     ) -> RunResult | MatchResult | None:
-        self.sleep(step.post_click_settle_ms / 1000)
         deadline = self.now() + self.click_confirmation_seconds
+        settle_seconds = min(step.post_click_settle_ms / 1000, max(0.0, deadline - self.now()))
+        if settle_seconds > 0:
+            self.sleep(settle_seconds)
         while True:
             if self._stop_requested:
                 return RunResult(
@@ -326,7 +328,10 @@ class SequenceRunner:
                 )
             if self.now() >= deadline:
                 return next_match
-            self.sleep(self.scan_interval_seconds)
+            sleep_seconds = min(self.scan_interval_seconds, max(0.0, deadline - self.now()))
+            if sleep_seconds <= 0:
+                return next_match
+            self.sleep(sleep_seconds)
 
     def _has_material_shift(self, previous_match: MatchResult, next_match: MatchResult) -> bool:
         min_dimension = min(previous_match.width, previous_match.height)

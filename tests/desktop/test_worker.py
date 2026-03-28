@@ -409,7 +409,7 @@ def build_bot_action_slots(
         enabled = key in enabled_keys
         template_path = None
         if enabled and key not in missing_template_keys:
-            template_path = Path(f"captures/{key}.png")
+            template_path = Path(__file__)
         slots.append(
             BotActionSlotConfig(
                 key=key,
@@ -1382,6 +1382,65 @@ def test_worker_refuses_to_open_chrome_when_bot_action_captured_image_is_missing
     worker._service = worker._build_service(worker.config)
 
     outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/222"))
+
+    assert outcome.kind == "job_detected"
+    assert opener.open_calls == []
+    assert runtime is None or runtime.run_calls == []
+    assert worker.state.browser_session_failed == 0
+    assert worker.state.open_failures == 0
+    assert worker.state.automation_queue_state == "paused"
+    assert worker.state.automation_queue_length == 0
+    assert worker.state.automation_last_error == "captured_image_missing"
+
+
+def test_worker_refuses_to_open_chrome_when_enabled_bot_action_template_file_is_missing_on_disk(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 15, 50)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    slots = list(build_bot_action_slots(enabled_keys=("slot_1_r",)))
+    slots[0] = BotActionSlotConfig(
+        key=slots[0].key,
+        label=slots[0].label,
+        enabled=True,
+        template_path=tmp_path / "missing-slot-template.png",
+    )
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=20,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ]
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            bot_action_slots=tuple(slots),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/333"))
 
     assert outcome.kind == "job_detected"
     assert opener.open_calls == []

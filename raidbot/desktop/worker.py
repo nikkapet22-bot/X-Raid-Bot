@@ -287,7 +287,7 @@ class DesktopBotWorker:
         if not enabled_slots:
             self._bot_action_sequence_error = "bot_action_not_configured"
             return None
-        if any(slot.template_path is None for slot in enabled_slots):
+        if any(slot.template_path is None or not slot.template_path.exists() for slot in enabled_slots):
             self._bot_action_sequence_error = "captured_image_missing"
             return None
         self._bot_action_sequence_error = None
