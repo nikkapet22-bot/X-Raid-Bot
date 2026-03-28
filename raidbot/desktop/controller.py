@@ -11,6 +11,8 @@ from PySide6.QtCore import QObject, Signal, Slot
 from raidbot.desktop.storage import DesktopStorage
 from raidbot.desktop.worker import DesktopBotWorker
 
+_MISSING_SELECTED_WINDOW = object()
+
 
 class AsyncWorkerRunner:
     def __init__(self) -> None:
@@ -95,6 +97,8 @@ class _AutomationRuntime:
 
     def run_sequence(self, sequence, selected_window_handle: int | None):
         selected_window = self._selected_window(selected_window_handle)
+        if selected_window is _MISSING_SELECTED_WINDOW:
+            return self._run_result(status="failed", failure_reason="target_window_not_found")
         runner = self.sequence_runner_factory(
             window_manager=self.window_manager,
             capture=self.capture_factory(),
@@ -107,6 +111,8 @@ class _AutomationRuntime:
 
     def dry_run_step(self, sequence, step_index: int, selected_window_handle: int | None):
         selected_window = self._selected_window(selected_window_handle)
+        if selected_window is _MISSING_SELECTED_WINDOW:
+            return self._run_result(status="failed", failure_reason="target_window_not_found")
         runner = self.sequence_runner_factory(
             window_manager=self.window_manager,
             capture=self.capture_factory(),
@@ -131,7 +137,12 @@ class _AutomationRuntime:
         for window in self.list_target_windows():
             if getattr(window, "handle", None) == selected_window_handle:
                 return window
-        return None
+        return _MISSING_SELECTED_WINDOW
+
+    def _run_result(self, *, status: str, failure_reason: str | None = None):
+        from raidbot.desktop.automation.runner import RunResult
+
+        return RunResult(status=status, failure_reason=failure_reason)
 
 
 class DesktopController(QObject):
@@ -393,7 +404,13 @@ class DesktopController(QObject):
         self._automationEventReceived.emit(event)
 
     def _run_automation_sequence(self, runtime, sequence, selected_window_handle: int | None) -> None:
-        result = runtime.run_sequence(sequence, selected_window_handle)
+        try:
+            result = runtime.run_sequence(sequence, selected_window_handle)
+        except Exception as exc:
+            self._submissionFailed.emit(str(exc))
+            from raidbot.desktop.automation.runner import RunResult
+
+            result = RunResult(status="failed", failure_reason="runtime_error")
         self._automationResultReceived.emit(result)
 
     def _run_automation_dry_run(
@@ -403,7 +420,13 @@ class DesktopController(QObject):
         step_index: int,
         selected_window_handle: int | None,
     ) -> None:
-        result = runtime.dry_run_step(sequence, step_index, selected_window_handle)
+        try:
+            result = runtime.dry_run_step(sequence, step_index, selected_window_handle)
+        except Exception as exc:
+            self._submissionFailed.emit(str(exc))
+            from raidbot.desktop.automation.runner import RunResult
+
+            result = RunResult(status="failed", failure_reason="runtime_error")
         self._automationResultReceived.emit(result)
 
     def _set_automation_run_state(self, state: str) -> None:

@@ -90,6 +90,9 @@ class SequenceRunner:
         window = self._resolve_window(sequence, selected_window)
         if isinstance(window, RunResult):
             return window
+        window = self._refresh_active_window(window, step_index)
+        if isinstance(window, RunResult):
+            return window
         step = sequence.steps[step_index]
         template = self.template_loader(step.template_path)
         frame = self.capture.capture(window.bounds)
@@ -136,6 +139,35 @@ class SequenceRunner:
             return RunResult(status="failed", failure_reason=outcome.reason or "window_not_focusable")
         return outcome.window
 
+    def _refresh_active_window(
+        self,
+        window: WindowInfo,
+        step_index: int,
+    ) -> WindowInfo | RunResult:
+        current_window = self._find_window_by_handle(window.handle)
+        if current_window is None:
+            return RunResult(
+                status="failed",
+                failure_reason="target_window_not_found",
+                window_handle=window.handle,
+                step_index=step_index,
+            )
+        outcome = self.window_manager.ensure_interactable_window(current_window)
+        if not outcome.success or outcome.window is None:
+            return RunResult(
+                status="failed",
+                failure_reason=outcome.reason or "window_not_focusable",
+                window_handle=current_window.handle,
+                step_index=step_index,
+            )
+        return outcome.window
+
+    def _find_window_by_handle(self, handle: int) -> WindowInfo | None:
+        for candidate in self.window_manager.list_chrome_windows():
+            if candidate.handle == handle:
+                return candidate
+        return None
+
     def _run_step(
         self,
         window: WindowInfo,
@@ -156,6 +188,9 @@ class SequenceRunner:
                         window_handle=window.handle,
                         step_index=step_index,
                     )
+                window = self._refresh_active_window(window, step_index)
+                if isinstance(window, RunResult):
+                    return window
                 frame = self.capture.capture(window.bounds)
                 match = self.matcher.find_best_match(frame, template, threshold=step.match_threshold)
                 if match is not None:
@@ -168,6 +203,9 @@ class SequenceRunner:
                         }
                     )
                     while click_attempts < step.max_click_attempts:
+                        window = self._refresh_active_window(window, step_index)
+                        if isinstance(window, RunResult):
+                            return window
                         left, top, _right, _bottom = window.bounds
                         point = (
                             left + match.center_x + step.click_offset_x,
@@ -190,6 +228,9 @@ class SequenceRunner:
                             }
                         )
                         self.sleep(step.post_click_settle_ms / 1000)
+                        window = self._refresh_active_window(window, step_index)
+                        if isinstance(window, RunResult):
+                            return window
                         next_frame = self.capture.capture(window.bounds)
                         next_match = self.matcher.find_best_match(
                             next_frame,

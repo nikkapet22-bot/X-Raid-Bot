@@ -27,16 +27,29 @@ class FakeWindowManager:
         *,
         windows: list[WindowInfo] | None = None,
         focus_success: bool = True,
+        listed_windows: list[list[WindowInfo]] | None = None,
+        ensure_outcomes: list[WindowInteractionOutcome] | None = None,
     ) -> None:
         self.windows = windows or []
         self.focus_success = focus_success
+        self.listed_windows = [list(batch) for batch in listed_windows] if listed_windows else []
+        self.ensure_outcomes = list(ensure_outcomes or [])
         self.ensured_handles: list[int] = []
 
     def list_chrome_windows(self) -> list[WindowInfo]:
+        if self.listed_windows:
+            if len(self.listed_windows) > 1:
+                return self.listed_windows.pop(0)
+            return list(self.listed_windows[0])
         return list(self.windows)
 
     def ensure_interactable_window(self, window: WindowInfo) -> WindowInteractionOutcome:
         self.ensured_handles.append(window.handle)
+        if self.ensure_outcomes:
+            outcome = self.ensure_outcomes.pop(0)
+            if outcome.success and outcome.window is None:
+                return WindowInteractionOutcome(success=True, window=window)
+            return outcome
         if not self.focus_success:
             return WindowInteractionOutcome(success=False, reason="window_not_focusable")
         return WindowInteractionOutcome(success=True, window=window)
@@ -249,7 +262,7 @@ def test_runner_dry_run_reports_match_without_clicking() -> None:
 def test_runner_prefers_selected_window_over_saved_rule() -> None:
     selected_window = _window(handle=9, title="Selected - Chrome")
     reacquired_window = _window(handle=3, title="Rule Match - Chrome")
-    manager = FakeWindowManager(windows=[reacquired_window])
+    manager = FakeWindowManager(windows=[selected_window, reacquired_window])
     runner = SequenceRunner(
         window_manager=manager,
         capture=FakeCapture(),
@@ -267,7 +280,8 @@ def test_runner_prefers_selected_window_over_saved_rule() -> None:
 
     assert result.status == "completed"
     assert result.window_handle == 9
-    assert manager.ensured_handles == [9]
+    assert manager.ensured_handles
+    assert set(manager.ensured_handles) == {9}
 
 
 def test_runner_reacquires_window_from_saved_rule_when_no_selection_is_provided() -> None:
@@ -289,3 +303,57 @@ def test_runner_reacquires_window_from_saved_rule_when_no_selection_is_provided(
 
     assert result.status == "completed"
     assert result.window_handle == 3
+
+
+def test_runner_fails_when_window_disappears_mid_run() -> None:
+    window = _window()
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(
+            windows=[window],
+            listed_windows=[[window], []],
+        ),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match()]),
+        input_driver=FakeInputDriver(),
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=FakeClock().now,
+        sleep=FakeClock().sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(_step(max_click_attempts=1)),
+        selected_window=window,
+    )
+
+    assert result.status == "failed"
+    assert result.failure_reason == "target_window_not_found"
+    assert runner.input_driver.clicks == []
+
+
+def test_runner_fails_when_window_becomes_not_focusable_mid_run() -> None:
+    window = _window()
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(
+            windows=[window],
+            listed_windows=[[window], [window]],
+            ensure_outcomes=[
+                WindowInteractionOutcome(success=True, window=window),
+                WindowInteractionOutcome(success=False, reason="window_not_focusable"),
+            ],
+        ),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match()]),
+        input_driver=FakeInputDriver(),
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=FakeClock().now,
+        sleep=FakeClock().sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(_step(max_click_attempts=1)),
+        selected_window=window,
+    )
+
+    assert result.status == "failed"
+    assert result.failure_reason == "window_not_focusable"
+    assert runner.input_driver.clicks == []

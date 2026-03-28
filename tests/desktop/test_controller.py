@@ -7,6 +7,7 @@ from concurrent.futures import Future
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
 from raidbot.desktop.models import DesktopAppConfig
 
 
@@ -75,6 +76,72 @@ class FakeRunner:
         return stopped
 
 
+class ImmediateRunner:
+    def __init__(self) -> None:
+        self.started_jobs = []
+        self.submitted_jobs = []
+        self.running = False
+
+    def start(self, job) -> None:
+        self.started_jobs.append(job)
+        self.running = True
+        try:
+            job()
+        finally:
+            self.running = False
+
+    def submit(self, job):
+        self.submitted_jobs.append(job)
+        future = Future()
+        try:
+            future.set_result(job())
+        except Exception as exc:
+            future.set_exception(exc)
+        return future
+
+    def is_running(self) -> bool:
+        return self.running
+
+    def wait_until_stopped(self, timeout: float | None = None) -> bool:
+        self.running = False
+        return True
+
+
+class RaisingAutomationRuntime:
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    def list_target_windows(self):
+        return []
+
+    def run_sequence(self, sequence, selected_window_handle):
+        raise self.exc
+
+    def dry_run_step(self, sequence, step_index, selected_window_handle):
+        raise self.exc
+
+    def request_stop(self) -> None:
+        return None
+
+
+class FakeAutomationWindowManager:
+    def __init__(self, windows=None) -> None:
+        self.windows = list(windows or [])
+
+    def list_chrome_windows(self):
+        return list(self.windows)
+
+    def ensure_interactable_window(self, window):
+        from raidbot.desktop.automation.windowing import WindowInteractionOutcome
+
+        return WindowInteractionOutcome(success=True, window=window)
+
+
+class FailIfCalledSequenceRunner:
+    def __init__(self, **_kwargs) -> None:
+        raise AssertionError("sequence runner should not be created")
+
+
 def build_config(**overrides) -> DesktopAppConfig:
     values = {
         "telegram_api_id": 123456,
@@ -87,6 +154,26 @@ def build_config(**overrides) -> DesktopAppConfig:
     }
     values.update(overrides)
     return DesktopAppConfig(**values)
+
+
+def build_sequence(sequence_id: str = "seq-1") -> AutomationSequence:
+    return AutomationSequence(
+        id=sequence_id,
+        name="Chrome Flow",
+        target_window_rule="Rule Match",
+        steps=[
+            AutomationStep(
+                name="Open menu",
+                template_path=Path("templates/menu.png"),
+                match_threshold=0.9,
+                max_search_seconds=1.0,
+                max_scroll_attempts=1,
+                scroll_amount=-120,
+                max_click_attempts=1,
+                post_click_settle_ms=100,
+            )
+        ],
+    )
 
 
 def test_controller_start_bot_and_forward_events(qtbot) -> None:
@@ -275,3 +362,47 @@ def test_async_worker_runner_submit_returns_future(monkeypatch) -> None:
 
     assert future == "future"
     assert submitted["loop"] is loop
+
+
+def test_controller_resets_automation_state_when_runtime_run_raises(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    runtime = RaisingAutomationRuntime(RuntimeError("runtime boom"))
+    controller = DesktopController(
+        storage=FakeStorage(),
+        config=build_config(),
+        runner_factory=ImmediateRunner,
+        automation_runtime_probe=lambda: (True, None),
+        automation_runtime_factory=lambda _emit_event: runtime,
+    )
+    controller._automation_sequences = [build_sequence()]
+    states = []
+    events = []
+    errors = []
+    controller.automationRunStateChanged.connect(states.append)
+    controller.automationRunEvent.connect(events.append)
+    controller.errorRaised.connect(errors.append)
+
+    controller.start_automation_run("seq-1", selected_window_handle=None)
+
+    assert states == ["running", "idle"]
+    assert errors == ["runtime boom"]
+    assert events[-1] == {"type": "step_failed", "reason": "runtime_error"}
+
+
+def test_automation_runtime_fails_closed_when_selected_window_handle_is_missing() -> None:
+    from raidbot.desktop.controller import _AutomationRuntime
+
+    runtime = _AutomationRuntime(
+        emit_event=lambda _event: None,
+        window_manager_factory=lambda: FakeAutomationWindowManager(windows=[]),
+        capture_factory=lambda: object(),
+        matcher_factory=lambda: object(),
+        input_driver_factory=lambda: object(),
+        sequence_runner_factory=FailIfCalledSequenceRunner,
+    )
+
+    result = runtime.run_sequence(build_sequence(), selected_window_handle=999)
+
+    assert result.status == "failed"
+    assert result.failure_reason == "target_window_not_found"
