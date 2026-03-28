@@ -4,6 +4,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from raidbot.chrome import OpenedRaidContext
 from raidbot.desktop.automation.windowing import WindowInfo
 
 
@@ -11,14 +12,6 @@ from raidbot.desktop.automation.windowing import WindowInfo
 class PendingRaidWorkItem:
     normalized_url: str
     trace_id: str
-
-
-@dataclass(frozen=True)
-class OpenedRaidContext:
-    normalized_url: str
-    opened_at: float
-    window_handle: int | None
-    profile_directory: str
 
 
 class AutoRunProcessor:
@@ -145,7 +138,14 @@ class AutoRunProcessor:
                 opened_context,
             )
 
-        self._close_raid(opened_context)
+        try:
+            self._close_raid(opened_context)
+        except Exception as exc:
+            return self._pause_failed_item(
+                item,
+                self._reason_from_exception(exc, "tab_close_failed"),
+                opened_context,
+            )
         self._on_success(item, opened_context)
         self._current_url = None
         self._last_error = None

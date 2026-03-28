@@ -1,8 +1,7 @@
 from pathlib import Path
 import subprocess
 
-from raidbot.chrome import ChromeOpener
-from raidbot.desktop.automation.autorun import OpenedRaidContext
+from raidbot.chrome import ChromeOpener, OpenedRaidContext
 
 
 def test_chrome_opener_builds_expected_command(monkeypatch):

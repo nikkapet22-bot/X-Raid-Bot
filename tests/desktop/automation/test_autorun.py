@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from raidbot.chrome import OpenedRaidContext
 from raidbot.desktop.automation.autorun import (
     AutoRunProcessor,
-    OpenedRaidContext,
     PendingRaidWorkItem,
 )
 from raidbot.desktop.automation.windowing import WindowInfo, find_existing_chrome_window
@@ -250,3 +250,43 @@ def test_autorun_processor_keeps_running_state_when_new_admission_fails_mid_run(
     assert processed is True
     assert failures == [("raid-2", "default_sequence_missing", "running")]
     assert processor.state == "idle"
+
+
+def test_autorun_processor_close_failure_pauses_after_successful_execute() -> None:
+    statuses: list[tuple[str, int, str | None, str | None]] = []
+    failures: list[tuple[str, str, int | None]] = []
+    processor = AutoRunProcessor(
+        auto_run_enabled=lambda: True,
+        default_sequence_id=lambda: "seq-1",
+        pre_open_check=lambda _item: build_window(handle=21),
+        open_raid=lambda item, window: OpenedRaidContext(
+            normalized_url=item.normalized_url,
+            opened_at=4.0,
+            window_handle=window.handle,
+            profile_directory="Profile 3",
+        ),
+        execute_raid=lambda _item, _context, _sequence_id: (True, None),
+        close_raid=lambda _context: (_ for _ in ()).throw(RuntimeError("tab_close_failed")),
+        on_failure=lambda item, reason, context: failures.append(
+            (item.trace_id, reason, getattr(context, "window_handle", None))
+        ),
+        on_status=lambda state, queue_length, current_url, last_error: statuses.append(
+            (state, queue_length, current_url, last_error)
+        ),
+    )
+
+    assert processor.admit(build_item()) is True
+
+    processed = processor.process_next()
+
+    assert processed is False
+    assert processor.state == "paused"
+    assert processor.queue_length == 0
+    assert processor.current_url is None
+    assert processor.last_error == "tab_close_failed"
+    assert failures == [("raid-1", "tab_close_failed", 21)]
+    assert statuses == [
+        ("queued", 1, None, None),
+        ("running", 0, "https://x.com/i/status/123", None),
+        ("paused", 0, None, "tab_close_failed"),
+    ]

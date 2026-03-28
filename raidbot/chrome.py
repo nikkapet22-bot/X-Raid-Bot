@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Any
 
-from raidbot.desktop.automation.autorun import OpenedRaidContext
+
+@dataclass(frozen=True)
+class OpenedRaidContext:
+    normalized_url: str
+    opened_at: float
+    window_handle: int | None
+    profile_directory: str
 
 
 class ChromeOpener:
