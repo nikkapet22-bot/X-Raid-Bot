@@ -108,6 +108,7 @@ For the first version:
 - `scroll_amount` should be a signed mouse-wheel step count, with negative values meaning scroll down and positive values meaning scroll up
 - `click_offset_x` and `click_offset_y` should be pixel offsets from the matched template center
 - `max_search_seconds` should be the search budget for a single search phase; the budget resets after each scroll attempt
+- `max_click_attempts` should count the total number of click attempts for the step, including the initial click
 
 The runner should process steps strictly in order. It should not skip ahead or dynamically reorder steps based on what else appears in the window.
 
@@ -251,6 +252,7 @@ The module should fail safely and visibly in these cases:
 - target window rule does not resolve to a live Chrome window
 - target window is minimized and cannot be restored
 - selected window disappears during a run
+- target window handle changes during a run
 - target window cannot be focused
 - template file missing or unreadable
 - template dimensions are invalid for matching against the current capture
