@@ -471,6 +471,30 @@ def test_controller_forwards_queue_and_auto_run_worker_events(qtbot) -> None:
     assert len(runner.submitted_coroutines) == 2
 
 
+def test_controller_clears_default_auto_sequence_when_deleted(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(default_auto_sequence_id="seq-1"),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+    )
+    controller._automation_sequences = [build_sequence("seq-1"), build_sequence("seq-2")]
+    configs = []
+    controller.configChanged.connect(configs.append)
+    sequence_changes = []
+    controller.automationSequencesChanged.connect(sequence_changes.append)
+
+    controller.delete_automation_sequence("seq-1")
+
+    assert controller.config.default_auto_sequence_id is None
+    assert storage.saved_configs[-1].default_auto_sequence_id is None
+    assert configs[-1].default_auto_sequence_id is None
+    assert [sequence.id for sequence in sequence_changes[-1]] == ["seq-2"]
+
+
 def test_async_worker_runner_submit_returns_future(monkeypatch) -> None:
     from raidbot.desktop.controller import AsyncWorkerRunner
 

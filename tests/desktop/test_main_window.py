@@ -166,6 +166,15 @@ class FakeController(QObject):
         self.saved_sequences = [
             item for item in self.saved_sequences if item.id != sequence_id
         ]
+        if self.config.default_auto_sequence_id == sequence_id:
+            self.apply_config(
+                build_config(
+                    **{
+                        **self.config.__dict__,
+                        "default_auto_sequence_id": None,
+                    }
+                )
+            )
         self.automationSequencesChanged.emit(self.list_automation_sequences())
 
     def list_target_windows(self):
@@ -483,6 +492,43 @@ def test_automation_page_shows_auto_run_controls_and_updates_from_queue_signals(
     )
     assert controller.apply_calls[-1].default_auto_sequence_id == "seq-2"
     assert controller.apply_calls[-1].auto_run_settle_ms == 2750
+
+
+def test_automation_page_rehydrates_stale_queue_state_as_idle_when_controller_is_inactive(qtbot) -> None:
+    stale_state = DesktopAppState(
+        bot_state=BotRuntimeState.stopped,
+        connection_state=TelegramConnectionState.disconnected,
+        automation_queue_state="paused",
+        automation_queue_length=3,
+        automation_current_url="https://example.com/stale",
+        automation_last_error="queue boom",
+    )
+    window = build_window(FakeController(), FakeStorage(state=stale_state))
+    qtbot.addWidget(window)
+
+    page = window.automation_page
+
+    assert page.queue_state_label.text() == "idle"
+    assert page.queue_length_label.text() == "0"
+    assert page.current_url_label.text() == "None"
+    assert page.start_button.isEnabled() is True
+    assert page.dry_run_button.isEnabled() is True
+    assert page.resume_queue_button.isEnabled() is False
+    assert page.clear_queue_button.isEnabled() is False
+
+
+def test_main_window_clears_deleted_default_sequence_from_automation_tab(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(default_auto_sequence_id="seq-1")
+    )
+    controller.saved_sequences = [build_sequence("seq-1"), build_sequence("seq-2")]
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+
+    controller.delete_automation_sequence("seq-1")
+
+    assert controller.config.default_auto_sequence_id is None
+    assert window.automation_page.default_auto_sequence_combo.currentData() is None
 
 
 def test_automation_page_emits_start_and_save_requests(qtbot) -> None:

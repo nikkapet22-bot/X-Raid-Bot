@@ -331,6 +331,8 @@ class MainWindow(QMainWindow):
         self.bot_state = state
         self.bot_state_label.setText(state)
         self.command_bot_state_label.setText(state)
+        if not self._bot_state_is_active(state):
+            self._clear_automation_queue_snapshot()
 
     def _update_connection_state(self, state: str) -> None:
         self.connection_state = state
@@ -485,6 +487,22 @@ class MainWindow(QMainWindow):
         )
 
     def _sync_automation_queue_state(self, state: DesktopAppState) -> None:
+        if not self._controller_has_live_queue():
+            self._clear_automation_queue_snapshot()
+            return
         self.automation_page.set_queue_state(state.automation_queue_state)
         self.automation_page.set_queue_length(state.automation_queue_length)
         self.automation_page.set_current_url(state.automation_current_url)
+
+    def _clear_automation_queue_snapshot(self) -> None:
+        self.automation_page.set_queue_state("idle")
+        self.automation_page.set_queue_length(0)
+        self.automation_page.set_current_url(None)
+
+    def _controller_has_live_queue(self) -> bool:
+        if hasattr(self.controller, "is_bot_active"):
+            return bool(self.controller.is_bot_active())
+        return self._bot_state_is_active(self.bot_state)
+
+    def _bot_state_is_active(self, state: str) -> bool:
+        return state in {"starting", "running", "stopping"}

@@ -190,6 +190,8 @@ class DesktopController(QObject):
         updated = [item for item in self._automation_sequences if getattr(item, "id", None) != sequence_id]
         self._automation_sequences = updated
         self._save_automation_sequences()
+        if self.config is not None and self.config.default_auto_sequence_id == sequence_id:
+            self.apply_config(replace(self.config, default_auto_sequence_id=None))
         self.automationSequencesChanged.emit(self.list_automation_sequences())
 
     def list_target_windows(self) -> list[Any]:
