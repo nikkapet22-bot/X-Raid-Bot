@@ -4,7 +4,7 @@ Date: 2026-03-28
 
 ## Goal
 
-Extend the desktop app so that when the Telegram worker opens a raid link in Chrome, the app can automatically queue and run one saved image-based automation sequence against that newly opened Chrome tab.
+Extend the desktop app so that when the Telegram worker detects a raid link, the app can queue that work item, open it in Chrome only when it reaches the head of the queue, and then automatically run one saved image-based automation sequence against the newly opened Chrome tab.
 
 The desired first version is:
 
@@ -32,7 +32,7 @@ The project already has two relevant but separate flows:
    - the user can manually run a sequence or dry-run a step
    - the sequence runner scans a Chrome window and clicks matching templates
 
-These flows are not currently connected. A Telegram-opened link does not automatically trigger a saved sequence.
+These flows are not currently connected. A detected Telegram link does not automatically feed the saved sequence runner.
 
 ## Scope
 
@@ -57,32 +57,53 @@ The first version should keep the existing worker/controller split and add a nar
 
 The system should be split into four responsibilities:
 
-1. `opened raid context`
-   - created when the Telegram/browsing path successfully opens a raid link
-   - carries enough metadata to identify the opened work item and reacquire the Chrome window used for it
+1. `pending raid work item`
+   - created when the Telegram path detects a supported raid link
+   - queued before any Chrome open happens
+   - contains the URL and metadata needed to process the item later
 
-2. `auto-run queue`
+2. `opened raid context`
+   - created only when a pending work item reaches the head of the queue and Chrome is opened for that item
+   - carries enough metadata to identify the active run and reacquire the Chrome window used for it
+
+3. `auto-run queue`
    - lives in the desktop bot worker path
-   - accepts opened raid contexts
+   - accepts pending raid work items
    - processes one item at a time
    - pauses on failure
 
-3. `automation execution bridge`
+4. `automation execution bridge`
+   - opens the URL only when the item reaches the head of the queue
    - waits the configured settle delay
    - forces Chrome to foreground
    - runs the configured default sequence
    - closes only the active tab on success
 
-4. `desktop UI/state`
+5. `desktop UI/state`
    - configures the default auto-run sequence and settle delay
    - shows queue state, queue length, current URL, and failure state
    - lets the user resume or clear a paused queue
 
 This keeps the Telegram worker in charge of ordering and pacing while reusing the existing image-based runner.
 
+## Pending Work Item
+
+Queue admission should happen before Chrome opening.
+
+A pending raid work item should contain:
+
+- normalized URL
+- raw URL
+- chat ID
+- sender ID
+- trace ID
+- detect timestamp
+
+Pending items should not carry any claim about Chrome tab identity yet, because no browser open has happened at admission time.
+
 ## Opened Raid Context
 
-The browser-open path should stop being a pure fire-and-forget side effect for Telegram-triggered runs. It should return a structured `opened raid context`.
+When a pending work item reaches the head of the queue, the browser-open path should stop being a pure fire-and-forget side effect. It should return a structured `opened raid context` for that active item.
 
 The context should contain:
 
@@ -97,7 +118,7 @@ The context should contain:
 
 The first version does not need browser-internal tab IDs. It only needs enough context to:
 
-- associate a queued automation run with the opened raid
+- associate the active automation run with the opened raid
 - reacquire the foreground Chrome window that was just used
 - close the active tab after successful completion
 
@@ -107,12 +128,12 @@ The queue should be FIFO and single-consumer.
 
 Behavior rules:
 
-- every successfully opened Telegram link may enqueue one opened raid context
+- every successfully detected Telegram raid link may enqueue one pending raid work item
 - only one auto-run may be active at a time
-- if a new Telegram link arrives while another auto-run is active, it waits in the queue
+- if a new Telegram link arrives while another auto-run is active, it waits in the queue unopened
 - if two supported bots post links at nearly the same time, both links are queued and processed one by one
-- if `auto_run_enabled` is `false`, successfully opened Telegram links are not admitted to the auto-run queue
-- if the queue is `paused`, newly opened Telegram links are not admitted to the auto-run queue
+- if `auto_run_enabled` is `false`, successfully detected Telegram raid links are not admitted to the auto-run queue
+- if the queue is `paused`, newly detected Telegram raid links are not admitted to the auto-run queue
 - when admission is rejected because auto-run is disabled or paused, the app should emit a visible activity entry with the reason
 
 Queue states:
@@ -145,19 +166,21 @@ This avoids per-bot or per-chat routing logic in the first version.
 
 ## Execution Flow
 
-When a supported Telegram message produces a successfully opened link:
+When a supported Telegram message produces a detected raid link:
 
-1. create opened raid context
-2. enqueue context
-3. if the queue is idle, start processing immediately
-4. wait the configured settle delay
-5. force the relevant Chrome window to foreground
-6. run the default automation sequence against the foreground Chrome window
-7. if the sequence succeeds:
+1. create pending raid work item
+2. enqueue the item
+3. if the queue is idle and the shared automation slot is free, start processing immediately
+4. open the URL in Chrome for the head-of-queue item
+5. create opened raid context for that active item
+6. wait the configured settle delay
+7. force the relevant Chrome window to foreground
+8. run the default automation sequence against the foreground Chrome window
+9. if the sequence succeeds:
    - close only the active tab in the owned foreground Chrome window
    - mark the queue item completed
    - continue to the next queued item
-8. if the sequence fails:
+10. if the sequence fails:
    - leave the tab open
    - emit a visible failure message
    - pause the queue
@@ -172,12 +195,15 @@ Failed-item lifecycle rules:
 - pending items remain pending
 - `Resume queue` continues with the next pending item; it does not automatically retry the failed item
 - `Clear queue` removes only pending items; it does not close or alter the failed tab that was left open
+- if `Clear queue` is pressed while the queue is `paused`, the queue transitions to `idle`, reopens admission for new Telegram items, and re-enables manual automation controls
+- if `Resume queue` is pressed while the queue is `paused` and there are pending items, the queue transitions to `running` and continues with the next pending item
+- if `Resume queue` is pressed while the queue is `paused` and there are no pending items, the queue transitions to `idle`
 
 ## Window And Tab Targeting
 
 The first version should stay simple and explicit:
 
-- Telegram opens the raid link as a new Chrome tab
+- the queue opens the head-of-queue URL as a new Chrome tab only when that item becomes active
 - the automation run assumes the newly opened tab is the active tab in the Chrome window that was just used
 - the system forces that Chrome window to the foreground before the sequence starts
 - on success, the app closes only the active tab of that owned foreground Chrome window using tab-close input behavior
@@ -187,14 +213,14 @@ The first version should not depend on browser-debugging protocols or browser-in
 This implies one important safety rule:
 
 - if the system can no longer reacquire the intended Chrome window, it must fail visibly and pause the queue rather than guessing another target
-- if the user changes tabs or otherwise breaks the assumption that the newly opened raid tab is still the active tab in that owned Chrome window, the implementation cannot prove tab identity; in that case the system should prefer failing visibly over guessing
+- if the foreground Chrome window loses focus or its handle changes during the run, the system must fail visibly rather than guessing
 
 The first version therefore guarantees only:
 
 - exclusive ownership of the foreground Chrome window used for the auto-run
 - closure of the active tab in that owned Chrome window after success
 
-It does not guarantee browser-internal tab identity beyond that owned-window/active-tab invariant.
+It does not guarantee browser-internal tab identity beyond that owned-window/active-tab invariant. Intra-window tab changes caused by the user are unsupported in the first version and are treated as outside the guaranteed behavior.
 
 ## Settle Delay
 
@@ -294,9 +320,11 @@ There should be exactly one shared automation execution slot.
 Interlock rules:
 
 - Telegram-driven auto-runs and manual Automation-tab runs must be mutually exclusive
+- auto-queue processing has priority over manual runs once a Telegram work item has been admitted
 - while a Telegram-driven auto-run is active, manual `Start run` and `Dry run step` actions should be rejected or disabled
-- while the queue is `paused`, manual automation actions should remain disabled until the user either resumes the queue or clears the pending queue state
-- if a manual run is already active, Telegram-triggered auto-run processing should not start until the shared automation slot is idle again
+- while the queue has any admitted pending items, new manual automation actions should be rejected or disabled so manual runs cannot starve the FIFO auto queue
+- while the queue is `paused`, manual automation actions should remain disabled until the user either resumes the queue or clears the queue state
+- if a manual run is already active when a Telegram item is admitted, the Telegram item remains pending; once the shared slot becomes idle, the auto queue starts before any new manual run may begin
 
 ## Testing
 
