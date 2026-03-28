@@ -81,3 +81,35 @@ def test_automation_storage_marks_missing_templates_for_legacy_payload(tmp_path)
 
     assert loaded[0].steps[0].template_missing is True
     assert loaded[0].steps[0].template_path == Path("templates/missing.png")
+
+
+def test_automation_storage_treats_schema_versioned_payload_as_current_schema(tmp_path) -> None:
+    storage = AutomationStorage(tmp_path)
+    current_payload = {
+        "schema_version": 1,
+        "sequences": [
+            {
+                "id": "current-sequence",
+                "name": "Current sequence",
+                "steps": [
+                    {
+                        "name": "find button",
+                        "template_path": "templates/missing.png",
+                        "match_threshold": 0.75,
+                        "max_search_seconds": 20,
+                        "max_scroll_attempts": 1,
+                        "scroll_amount": 400,
+                        "max_click_attempts": 2,
+                        "post_click_settle_ms": 100,
+                        "template_missing": False,
+                    }
+                ],
+            }
+        ],
+    }
+    storage.sequences_path.write_text(json.dumps(current_payload), encoding="utf-8")
+
+    loaded = storage.load_sequences()
+
+    assert loaded[0].steps[0].template_missing is False
+    assert loaded[0].steps[0].template_path == Path("templates/missing.png")
