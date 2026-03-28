@@ -90,6 +90,34 @@ def test_bot_actions_page_capture_button_emits_slot_capture_signal_with_index(
     assert captured == [2]
 
 
+def test_bot_actions_page_test_button_emits_slot_test_signal_with_index(
+    qtbot,
+) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+    page.show()
+    captured = []
+    page.slotTestRequested.connect(captured.append)
+
+    qtbot.mouseClick(page.slot_boxes[1].test_button, Qt.MouseButton.LeftButton)
+
+    assert captured == [1]
+
+
+def test_bot_actions_page_places_capture_and_test_buttons_in_compact_row(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+
+    box = page.slot_boxes[0]
+
+    assert box.button_row_layout.indexOf(box.capture_button) == 0
+    assert box.button_row_layout.indexOf(box.test_button) == 1
+
+
 def test_bot_actions_page_shows_thumbnail_preview_above_capture_button(
     qtbot,
     tmp_path,
@@ -123,5 +151,5 @@ def test_bot_actions_page_shows_thumbnail_preview_above_capture_button(
     assert preview_label.pixmap() is not None
     assert not preview_label.pixmap().isNull()
     assert page.slot_boxes[0].layout().indexOf(preview_label) < page.slot_boxes[0].layout().indexOf(
-        page.slot_boxes[0].capture_button
+        page.slot_boxes[0].button_row_widget
     )

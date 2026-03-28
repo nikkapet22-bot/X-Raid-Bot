@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QSpinBox,
@@ -49,9 +50,20 @@ class SlotBox(QFrame):
         self.template_preview_label.setProperty("muted", "true")
         layout.addWidget(self.template_preview_label)
 
+        self.button_row_widget = QWidget()
+        self.button_row_layout = QHBoxLayout(self.button_row_widget)
+        self.button_row_layout.setSpacing(8)
+        self.button_row_layout.setContentsMargins(0, 0, 0, 0)
+
         self.capture_button = QPushButton("Capture")
         self.capture_button.setProperty("variant", "secondary")
-        layout.addWidget(self.capture_button)
+        self.button_row_layout.addWidget(self.capture_button)
+
+        self.test_button = QPushButton("Test")
+        self.test_button.setProperty("variant", "secondary")
+        self.button_row_layout.addWidget(self.test_button)
+
+        layout.addWidget(self.button_row_widget)
 
         self.template_status_label = QLabel("")
         self.template_status_label.setWordWrap(True)
@@ -98,6 +110,7 @@ class SlotBox(QFrame):
 
 class BotActionsPage(QWidget):
     slotCaptureRequested = Signal(int)
+    slotTestRequested = Signal(int)
     slotEnabledChanged = Signal(int, bool)
     settleDelayChanged = Signal(int)
 
@@ -162,6 +175,11 @@ class BotActionsPage(QWidget):
             )
             box.capture_button.clicked.connect(
                 lambda _checked=False, slot_index=index: self.slotCaptureRequested.emit(
+                    slot_index
+                )
+            )
+            box.test_button.clicked.connect(
+                lambda _checked=False, slot_index=index: self.slotTestRequested.emit(
                     slot_index
                 )
             )
