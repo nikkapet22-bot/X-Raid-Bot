@@ -859,6 +859,7 @@ def test_worker_clear_automation_queue_preserves_failed_tab(tmp_path) -> None:
     runtime: FakeAutomationRuntime | None = None
     worker_ref: dict[str, object] = {}
     second_message = build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/666")
+    third_message = build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/777")
 
     def runtime_factory(_emit_event):
         nonlocal runtime
@@ -921,16 +922,21 @@ def test_worker_clear_automation_queue_preserves_failed_tab(tmp_path) -> None:
     assert outcome.kind == "job_detected"
 
     worker.clear_automation_queue()
+    recovery_outcome = worker._handle_message(third_message)
 
     assert runtime_factory_called["value"] is True
-    assert opener.open_calls == [("https://x.com/i/status/555", 23)]
+    assert recovery_outcome.kind == "job_detected"
+    assert opener.open_calls == [
+        ("https://x.com/i/status/555", 23),
+        ("https://x.com/i/status/777", 23),
+    ]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 23)]
-    assert runtime.input_driver.close_active_tab_calls == 0
-    assert worker.state.automation_queue_state == "paused"
+    assert runtime.run_calls == [("seq-1", 23), ("seq-1", 23)]
+    assert runtime.input_driver.close_active_tab_calls == 1
+    assert worker.state.automation_queue_state == "idle"
     assert worker.state.automation_queue_length == 0
     assert worker.state.automation_current_url is None
-    assert worker.state.automation_last_error == "executor_failed"
+    assert worker.state.automation_last_error is None
     assert [entry.action for entry in worker.state.activity] == [
         "raid_detected",
         "auto_queued",
@@ -938,6 +944,79 @@ def test_worker_clear_automation_queue_preserves_failed_tab(tmp_path) -> None:
         "raid_detected",
         "auto_queued",
         "automation_failed",
+        "raid_detected",
+        "auto_queued",
+        "automation_started",
+        "automation_succeeded",
+        "session_closed",
+    ]
+
+
+def test_worker_resume_automation_queue_recovers_after_missing_default_sequence(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 22, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    first_message = build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/888")
+    second_message = build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/999")
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=29,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    first_outcome = worker._handle_message(first_message)
+    AutomationStorage(tmp_path).save_sequences([build_sequence()])
+    worker.resume_automation_queue()
+    second_outcome = worker._handle_message(second_message)
+
+    assert first_outcome.kind == "job_detected"
+    assert second_outcome.kind == "job_detected"
+    assert opener.open_calls == [("https://x.com/i/status/999", 29)]
+    assert runtime is not None
+    assert runtime.run_calls == [("seq-1", 29)]
+    assert runtime.input_driver.close_active_tab_calls == 1
+    assert worker.state.automation_queue_state == "idle"
+    assert worker.state.automation_queue_length == 0
+    assert worker.state.automation_current_url is None
+    assert worker.state.automation_last_error is None
+    assert [entry.action for entry in worker.state.activity] == [
+        "raid_detected",
+        "automation_failed",
+        "raid_detected",
+        "auto_queued",
+        "automation_started",
+        "automation_succeeded",
+        "session_closed",
     ]
 
 

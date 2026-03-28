@@ -164,24 +164,25 @@ class DesktopBotWorker:
 
     def resume_automation_queue(self) -> None:
         processor = self._automation_processor
-        if processor is None or not processor.queue_length:
+        if processor is None:
             return
         if not self.config.auto_run_enabled:
             return
         if processor.state == "paused":
-            processor._state = "queued"
+            processor._state = "queued" if processor.queue_length else "idle"
             self._sync_automation_status()
-        self._drain_automation_queue()
+        if processor.queue_length:
+            self._drain_automation_queue()
 
     def clear_automation_queue(self) -> None:
         processor = self._automation_processor
         if processor is None:
             return
-        if not processor.queue_length:
+        if processor.state != "paused" and not processor.queue_length:
             return
-        processor._pending.clear()
-        if processor.state == "queued":
-            processor._state = "idle"
+        if processor.queue_length:
+            processor._pending.clear()
+        processor._state = "idle"
         self._sync_automation_status()
 
     def _handle_connection_state_change(self, state: str) -> None:
