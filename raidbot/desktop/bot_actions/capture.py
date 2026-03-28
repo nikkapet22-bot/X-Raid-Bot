@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,37 @@ class _CallbackCaptureOverlay:
 
     def capture(self) -> Any | None:
         return self._capture()
+
+
+def map_capture_rect_to_screen(
+    selection: QRect,
+    screens: Sequence[Any],
+) -> tuple[Any, QRect]:
+    normalized = selection.normalized()
+    candidates: list[tuple[int, int, Any, QRect]] = []
+    for index, screen in enumerate(screens):
+        intersection = normalized.intersected(screen.geometry())
+        if intersection.isEmpty():
+            continue
+        candidates.append(
+            (
+                intersection.width() * intersection.height(),
+                index,
+                screen,
+                intersection,
+            )
+        )
+    if not candidates:
+        raise ValueError("Capture selection does not intersect any screen.")
+    _, _, screen, intersection = max(candidates, key=lambda item: (item[0], -item[1]))
+    geometry = screen.geometry()
+    local_rect = QRect(
+        intersection.x() - geometry.x(),
+        intersection.y() - geometry.y(),
+        intersection.width(),
+        intersection.height(),
+    )
+    return screen, local_rect
 
 
 class _SnippingOverlayWidget(QWidget):
@@ -110,17 +141,19 @@ class QtSnippingOverlay:
         if selection is None:
             return None
 
-        screen = QGuiApplication.screenAt(selection.center())
-        if screen is None:
-            screen = QGuiApplication.primaryScreen()
-        if screen is None:
+        try:
+            screen, capture_rect = map_capture_rect_to_screen(
+                selection,
+                QGuiApplication.screens(),
+            )
+        except ValueError:
             return None
         return screen.grabWindow(
             0,
-            selection.x(),
-            selection.y(),
-            selection.width(),
-            selection.height(),
+            capture_rect.x(),
+            capture_rect.y(),
+            capture_rect.width(),
+            capture_rect.height(),
         )
 
 
@@ -150,5 +183,7 @@ class SlotCaptureService:
             return existing_path
         target_path = self.base_dir / "bot_actions" / f"{slot.key}.png"
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        image.save(str(target_path))
+        save_result = image.save(str(target_path))
+        if save_result is False or not target_path.exists():
+            raise OSError(f"Could not save {target_path}")
         return target_path

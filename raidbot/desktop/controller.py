@@ -169,13 +169,7 @@ class DesktopController(QObject):
         return self._runner is not None and self._runner.is_running()
 
     def apply_config(self, config) -> None:
-        resolved_config = self._resolve_sender_entries(config)
-        self.storage.save_config(resolved_config)
-        self.config = resolved_config
-        self.configChanged.emit(resolved_config)
-        if self._worker is None or self._runner is None or not self._runner.is_running():
-            return
-        self._submit_to_runner(lambda: self._worker.apply_config(resolved_config))
+        self._persist_config(config, resolve_sender_entries=True)
 
     def set_auto_run_enabled(self, enabled: bool) -> None:
         self.apply_config(replace(self.config, auto_run_enabled=enabled))
@@ -193,14 +187,21 @@ class DesktopController(QObject):
     ) -> None:
         if self.config is None:
             raise ValueError("No desktop configuration is available")
+        normalized_template_path = (
+            Path(template_path) if template_path is not None else None
+        )
+        current_slot = self.config.bot_action_slots[slot_index]
+        if current_slot.template_path == normalized_template_path:
+            return
         updated_slots = list(self.config.bot_action_slots)
         updated_slots[slot_index] = replace(
-            updated_slots[slot_index],
-            template_path=(
-                Path(template_path) if template_path is not None else None
-            ),
+            current_slot,
+            template_path=normalized_template_path,
         )
-        self.apply_config(replace(self.config, bot_action_slots=tuple(updated_slots)))
+        self._persist_config(
+            replace(self.config, bot_action_slots=tuple(updated_slots)),
+            resolve_sender_entries=False,
+        )
 
     def list_automation_sequences(self) -> list[Any]:
         return list(self._automation_sequences)
@@ -299,6 +300,17 @@ class DesktopController(QObject):
         if hasattr(self.storage, "load_config"):
             return self.storage.load_config()
         return None
+
+    def _persist_config(self, config, *, resolve_sender_entries: bool) -> None:
+        persisted_config = (
+            self._resolve_sender_entries(config) if resolve_sender_entries else config
+        )
+        self.storage.save_config(persisted_config)
+        self.config = persisted_config
+        self.configChanged.emit(persisted_config)
+        if self._worker is None or self._runner is None or not self._runner.is_running():
+            return
+        self._submit_to_runner(lambda: self._worker.apply_config(persisted_config))
 
     def _receive_worker_event(self, event: dict[str, Any]) -> None:
         self._workerEventReceived.emit(event)

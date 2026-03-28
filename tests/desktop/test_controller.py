@@ -168,6 +168,11 @@ class FakeSenderResolverService:
         return int(self.resolved_ids_by_entry[entry])
 
 
+class FailIfResolveCalled:
+    async def resolve_sender_entry(self, entry: str) -> int:
+        raise AssertionError(f"resolve_sender_entry should not be called for {entry}")
+
+
 def build_config(**overrides) -> DesktopAppConfig:
     values = {
         "telegram_api_id": 123456,
@@ -380,11 +385,16 @@ def test_controller_capture_updates_bot_action_slot_template_and_saves(qtbot) ->
     from raidbot.desktop.controller import DesktopController
 
     storage = FakeStorage()
+    config = build_config(
+        allowed_sender_ids=[42],
+        allowed_sender_entries=("raidar",),
+    )
     controller = DesktopController(
         storage=storage,
-        config=build_config(),
+        config=config,
         worker_factory=lambda **kwargs: FakeWorker(**kwargs),
         runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: FailIfResolveCalled(),
     )
     updated_configs = []
     controller.configChanged.connect(updated_configs.append)
@@ -396,8 +406,45 @@ def test_controller_capture_updates_bot_action_slot_template_and_saves(qtbot) ->
     assert controller.config.bot_action_slots[0].template_path == captured_path
     assert updated_configs[-1].bot_action_slots[0].template_path == captured_path
     assert storage.saved_configs[-1].bot_action_slots[1:] == replace(
-        build_config(), bot_action_slots=storage.saved_configs[-1].bot_action_slots
+        config, bot_action_slots=storage.saved_configs[-1].bot_action_slots
     ).bot_action_slots[1:]
+
+
+def test_controller_ignores_noop_slot_template_updates(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    initial_config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], template_path=Path("existing.png")),
+            *build_config().bot_action_slots[1:],
+        )
+    )
+    storage = FakeStorage()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    runner = FakeRunner()
+    controller = DesktopController(
+        storage=storage,
+        config=initial_config,
+        worker_factory=worker_factory,
+        runner_factory=lambda: runner,
+        telegram_setup_service_factory=lambda _config: FailIfResolveCalled(),
+    )
+    controller.start_bot()
+    changed_configs = []
+    controller.configChanged.connect(changed_configs.append)
+
+    controller.set_bot_action_slot_template_path(0, Path("existing.png"))
+
+    assert storage.saved_configs == []
+    assert changed_configs == []
+    assert created["worker"].apply_calls == []
+    assert runner.submitted_coroutines == []
 
 
 def test_controller_stop_bot_submits_stop_when_running(qtbot) -> None:

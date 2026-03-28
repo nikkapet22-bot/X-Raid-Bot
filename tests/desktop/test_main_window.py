@@ -241,6 +241,8 @@ class FakeController(QObject):
         self, slot_index: int, template_path: Path | None
     ) -> None:
         self.bot_action_slot_template_updates.append((slot_index, template_path))
+        if self.config.bot_action_slots[slot_index].template_path == template_path:
+            return
         updated_slots = list(self.config.bot_action_slots)
         updated_slots[slot_index] = replace(
             updated_slots[slot_index],
@@ -258,12 +260,15 @@ class FailingApplyController(FakeController):
 
 
 class FakeSlotCaptureService:
-    def __init__(self, returned_path: Path | None) -> None:
+    def __init__(self, returned_path: Path | None = None, error: Exception | None = None) -> None:
         self.returned_path = returned_path
+        self.error = error
         self.calls = []
 
     def capture_slot(self, slot, existing_path: Path | None = None):
         self.calls.append((slot, existing_path))
+        if self.error is not None:
+            raise self.error
         return self.returned_path
 
 
@@ -497,6 +502,46 @@ def test_main_window_capture_updates_bot_action_slot_via_controller(qtbot) -> No
         window.bot_actions_page.slot_boxes[0].template_status_label.text()
         == str(captured_path)
     )
+
+
+def test_main_window_capture_cancel_with_existing_path_does_not_persist_noop(qtbot) -> None:
+    existing_path = Path("bot_actions/slot_1_r.png")
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], template_path=existing_path),
+            *build_config().bot_action_slots[1:],
+        )
+    )
+    capture_service = FakeSlotCaptureService(existing_path)
+    controller = FakeController(config=config)
+    window = build_window(
+        controller,
+        FakeStorage(config=config),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.bot_actions_page.slot_boxes[0].capture_button, Qt.MouseButton.LeftButton)
+
+    assert capture_service.calls[-1][1] == existing_path
+    assert controller.bot_action_slot_template_updates == [(0, existing_path)]
+    assert controller.apply_calls == []
+
+
+def test_main_window_capture_save_failure_surfaces_error_without_persisting(qtbot) -> None:
+    capture_service = FakeSlotCaptureService(error=OSError("Could not save bot_actions/slot_1_r.png"))
+    controller = FakeController()
+    window = build_window(
+        controller,
+        FakeStorage(),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.bot_actions_page.slot_boxes[0].capture_button, Qt.MouseButton.LeftButton)
+
+    assert controller.bot_action_slot_template_updates == []
+    assert window.bot_actions_page.status_label.text() == "Could not save bot_actions/slot_1_r.png"
 
 
 def test_main_window_wraps_long_tabs_in_scroll_areas(qtbot) -> None:
