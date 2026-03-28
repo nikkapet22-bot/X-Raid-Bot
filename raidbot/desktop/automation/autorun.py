@@ -146,11 +146,14 @@ class AutoRunProcessor:
                 self._reason_from_exception(exc, "tab_close_failed"),
                 opened_context,
             )
-        self._on_success(item, opened_context)
         self._current_url = None
         self._last_error = None
         self._state = "queued" if self._pending else "idle"
         self._emit_status()
+        try:
+            self._on_success(item, opened_context)
+        except Exception:
+            pass
         return True
 
     def _reject(self, item: PendingRaidWorkItem, reason: str) -> None:

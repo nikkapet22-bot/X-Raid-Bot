@@ -290,3 +290,41 @@ def test_autorun_processor_close_failure_pauses_after_successful_execute() -> No
         ("running", 0, "https://x.com/i/status/123", None),
         ("paused", 0, None, "tab_close_failed"),
     ]
+
+
+def test_autorun_processor_success_callback_failure_keeps_stable_success_state() -> None:
+    statuses: list[tuple[str, int, str | None, str | None]] = []
+    closes: list[int] = []
+    processor = AutoRunProcessor(
+        auto_run_enabled=lambda: True,
+        default_sequence_id=lambda: "seq-1",
+        pre_open_check=lambda _item: build_window(handle=31),
+        open_raid=lambda item, window: OpenedRaidContext(
+            normalized_url=item.normalized_url,
+            opened_at=5.0,
+            window_handle=window.handle,
+            profile_directory="Profile 3",
+        ),
+        execute_raid=lambda _item, _context, _sequence_id: (True, None),
+        close_raid=lambda context: closes.append(context.window_handle),
+        on_success=lambda _item, _context: (_ for _ in ()).throw(RuntimeError("success_callback_failed")),
+        on_status=lambda state, queue_length, current_url, last_error: statuses.append(
+            (state, queue_length, current_url, last_error)
+        ),
+    )
+
+    assert processor.admit(build_item()) is True
+
+    processed = processor.process_next()
+
+    assert processed is True
+    assert processor.state == "idle"
+    assert processor.queue_length == 0
+    assert processor.current_url is None
+    assert processor.last_error is None
+    assert closes == [31]
+    assert statuses == [
+        ("queued", 1, None, None),
+        ("running", 0, "https://x.com/i/status/123", None),
+        ("idle", 0, None, None),
+    ]
