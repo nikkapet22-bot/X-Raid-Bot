@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt
+
 from raidbot.desktop.models import DesktopAppConfig
 
 
@@ -50,3 +52,38 @@ def test_bot_actions_page_show_error_updates_status_label(qtbot) -> None:
     page.show_error("capture failed")
 
     assert page.status_label.text() == "capture failed"
+
+
+def test_bot_actions_page_checkbox_emits_slot_enabled_signal_with_index_and_state(
+    qtbot,
+) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+    page.show()
+    captured = []
+    page.slotEnabledChanged.connect(
+        lambda slot_index, enabled: captured.append((slot_index, enabled))
+    )
+
+    qtbot.mouseClick(page.slot_boxes[1].enabled_checkbox, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(page.slot_boxes[1].enabled_checkbox, Qt.MouseButton.LeftButton)
+
+    assert captured == [(1, True), (1, False)]
+
+
+def test_bot_actions_page_capture_button_emits_slot_capture_signal_with_index(
+    qtbot,
+) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+    page.show()
+    captured = []
+    page.slotCaptureRequested.connect(captured.append)
+
+    qtbot.mouseClick(page.slot_boxes[2].capture_button, Qt.MouseButton.LeftButton)
+
+    assert captured == [2]
