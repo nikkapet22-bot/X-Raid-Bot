@@ -39,3 +39,11 @@ def test_capture_cancel_keeps_existing_slot_image(tmp_path) -> None:
     assert service.capture_slot(slot, existing_path=Path("existing.png")) == Path(
         "existing.png"
     )
+
+
+def test_capture_defaults_to_real_qt_snipping_overlay(tmp_path) -> None:
+    from raidbot.desktop.bot_actions.capture import QtSnippingOverlay, SlotCaptureService
+
+    service = SlotCaptureService(base_dir=tmp_path)
+
+    assert isinstance(service.capture_overlay, QtSnippingOverlay)
