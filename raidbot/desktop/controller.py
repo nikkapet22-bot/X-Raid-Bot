@@ -118,6 +118,7 @@ class DesktopController(QObject):
         self._runner: AsyncWorkerRunner | Any | None = None
         self._automation_runtime: Any | None = None
         self._automation_runner: AsyncWorkerRunner | Any | None = None
+        self._bot_action_slot_test_context: dict[str, Any] | None = None
         self._automation_sequences = self._load_automation_sequences()
         self._automation_run_state = "idle"
         self._automation_queue_state = "idle"
@@ -222,6 +223,73 @@ class DesktopController(QObject):
         self._persist_config(
             replace(self.config, bot_action_slots=tuple(updated_slots)),
             resolve_sender_entries=False,
+        )
+
+    def test_bot_action_slot(self, slot_index: int) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        if self._automation_queue_blocks_manual_actions():
+            self.errorRaised.emit(self._QUEUE_OWNS_SLOT_ERROR)
+            return
+        if self._automation_runner is not None and self._automation_runner.is_running():
+            self.errorRaised.emit("Automation already running")
+            return
+
+        slot = self.config.bot_action_slots[slot_index]
+        template_path = slot.template_path
+        if template_path is None or not Path(template_path).exists():
+            self.botActionRunEvent.emit(
+                self._build_slot_test_event(
+                    "slot_test_failed",
+                    slot_index=slot_index,
+                    reason="template_missing",
+                    message=f"{self._format_bot_action_slot(slot_index, slot.label)}: template missing",
+                )
+            )
+            return
+
+        runtime = self._load_automation_runtime()
+        if runtime is None:
+            return
+
+        windows = runtime.list_target_windows()
+        selected_window = max(
+            windows,
+            key=lambda window: getattr(window, "last_focused_at", 0.0),
+            default=None,
+        )
+        if selected_window is None:
+            self.botActionRunEvent.emit(
+                self._build_slot_test_event(
+                    "slot_test_failed",
+                    slot_index=slot_index,
+                    reason="target_window_not_found",
+                    message=f"{self._format_bot_action_slot(slot_index, slot.label)}: no Chrome window found",
+                )
+            )
+            return
+
+        from raidbot.desktop.bot_actions.sequence import build_slot_test_sequence
+
+        self._bot_action_slot_test_context = {
+            "slot_index": slot_index,
+            "slot_label": slot.label,
+        }
+        self.botActionRunEvent.emit(
+            self._build_slot_test_event(
+                "slot_test_started",
+                slot_index=slot_index,
+                message=f"{self._format_bot_action_slot(slot_index, slot.label)}: testing",
+            )
+        )
+        self._automation_runner = self.runner_factory()
+        self._set_automation_run_state("running")
+        self._automation_runner.start(
+            lambda: self._run_automation_sequence(
+                runtime,
+                build_slot_test_sequence(slot),
+                getattr(selected_window, "handle", None),
+            )
         )
 
     def list_automation_sequences(self) -> list[Any]:
@@ -537,6 +605,14 @@ class DesktopController(QObject):
 
     @Slot(object)
     def _handle_automation_result(self, result) -> None:
+        if self._bot_action_slot_test_context is not None:
+            context = self._bot_action_slot_test_context
+            self._bot_action_slot_test_context = None
+            self.botActionRunEvent.emit(self._map_slot_test_result_event(context, result))
+            self._set_automation_run_state("idle")
+            self._notify_worker_manual_run_finished()
+            return
+
         if result is not None:
             status = getattr(result, "status", None)
             failure_reason = getattr(result, "failure_reason", None)
@@ -563,3 +639,66 @@ class DesktopController(QObject):
                 )
         self._set_automation_run_state("idle")
         self._notify_worker_manual_run_finished()
+
+    def _format_bot_action_slot(self, slot_index: int, slot_label: str) -> str:
+        return f"Slot {slot_index + 1} ({slot_label})"
+
+    def _build_slot_test_event(
+        self,
+        event_type: str,
+        *,
+        slot_index: int,
+        message: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        event = {
+            "type": event_type,
+            "slot_index": slot_index,
+            "message": message,
+        }
+        if reason is not None:
+            event["reason"] = reason
+        return event
+
+    def _map_slot_test_result_event(
+        self,
+        context: dict[str, Any],
+        result: Any,
+    ) -> dict[str, Any]:
+        slot_index = int(context["slot_index"])
+        slot_label = str(context["slot_label"])
+        slot_name = self._format_bot_action_slot(slot_index, slot_label)
+
+        if result is None:
+            return self._build_slot_test_event(
+                "slot_test_failed",
+                slot_index=slot_index,
+                reason="runtime_error",
+                message=f"{slot_name}: runtime error",
+            )
+
+        status = getattr(result, "status", None)
+        failure_reason = str(getattr(result, "failure_reason", None) or "")
+        if status == "completed":
+            return self._build_slot_test_event(
+                "slot_test_succeeded",
+                slot_index=slot_index,
+                message=f"{slot_name}: success",
+            )
+
+        reason_messages = {
+            "match_not_found": "image not found",
+            "ui_did_not_change": "UI did not change",
+            "target_window_not_found": "no Chrome window found",
+            "window_not_focusable": "Chrome window not focusable",
+            "invalid_click_target": "invalid click target",
+            "runtime_error": "runtime error",
+            "stopped": "stopped",
+        }
+        normalized_reason = failure_reason or "runtime_error"
+        return self._build_slot_test_event(
+            "slot_test_failed",
+            slot_index=slot_index,
+            reason=normalized_reason,
+            message=f"{slot_name}: {reason_messages.get(normalized_reason, normalized_reason)}",
+        )

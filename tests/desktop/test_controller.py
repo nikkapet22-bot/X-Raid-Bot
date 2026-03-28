@@ -5,6 +5,7 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 from concurrent.futures import Future
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -132,6 +133,28 @@ class RaisingAutomationRuntime:
 
     def dry_run_step(self, sequence, step_index, selected_window_handle):
         raise self.exc
+
+    def request_stop(self) -> None:
+        return None
+
+
+class FakeSlotTestRuntime:
+    def __init__(self, *, windows=None, result=None) -> None:
+        from raidbot.desktop.automation.runner import RunResult
+
+        self.windows = list(windows or [])
+        self.result = result or RunResult(status="completed", window_handle=7, step_index=0)
+        self.run_calls = []
+
+    def list_target_windows(self):
+        return list(self.windows)
+
+    def run_sequence(self, sequence, selected_window_handle):
+        self.run_calls.append((sequence, selected_window_handle))
+        return self.result
+
+    def dry_run_step(self, sequence, step_index, selected_window_handle):
+        raise AssertionError("slot test should not use dry_run_step")
 
     def request_stop(self) -> None:
         return None
@@ -538,6 +561,135 @@ def test_controller_ignores_noop_slot_enabled_updates(qtbot) -> None:
     assert changed_configs == []
     assert created["worker"].apply_calls == []
     assert runner.submitted_coroutines == []
+
+
+def test_controller_rejects_slot_test_when_template_missing(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    controller = DesktopController(
+        storage=FakeStorage(),
+        config=build_config(),
+        runner_factory=ImmediateRunner,
+        automation_runtime_probe=lambda: (True, None),
+        automation_runtime_factory=lambda _emit_event: FakeSlotTestRuntime(),
+    )
+    events = []
+    controller.botActionRunEvent.connect(events.append)
+
+    controller.test_bot_action_slot(0)
+
+    assert events == [
+        {
+            "type": "slot_test_failed",
+            "slot_index": 0,
+            "reason": "template_missing",
+            "message": "Slot 1 (R): template missing",
+        }
+    ]
+
+
+def test_controller_rejects_slot_test_when_template_file_is_missing(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    controller = DesktopController(
+        storage=FakeStorage(),
+        config=build_config(
+            bot_action_slots=(
+                replace(
+                    build_config().bot_action_slots[0],
+                    template_path=Path("missing-template.png"),
+                ),
+                *build_config().bot_action_slots[1:],
+            )
+        ),
+        runner_factory=ImmediateRunner,
+        automation_runtime_probe=lambda: (True, None),
+        automation_runtime_factory=lambda _emit_event: FakeSlotTestRuntime(),
+    )
+    events = []
+    controller.botActionRunEvent.connect(events.append)
+
+    controller.test_bot_action_slot(0)
+
+    assert events == [
+        {
+            "type": "slot_test_failed",
+            "slot_index": 0,
+            "reason": "template_missing",
+            "message": "Slot 1 (R): template missing",
+        }
+    ]
+
+
+def test_controller_rejects_slot_test_when_no_chrome_window_exists(qtbot, tmp_path: Path) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    template_path = tmp_path / "slot_1_r.png"
+    template_path.write_bytes(b"capture")
+    runtime = FakeSlotTestRuntime(windows=[])
+    controller = DesktopController(
+        storage=FakeStorage(),
+        config=build_config(
+            bot_action_slots=(
+                replace(build_config().bot_action_slots[0], template_path=template_path),
+                *build_config().bot_action_slots[1:],
+            )
+        ),
+        runner_factory=ImmediateRunner,
+        automation_runtime_probe=lambda: (True, None),
+        automation_runtime_factory=lambda _emit_event: runtime,
+    )
+    events = []
+    controller.botActionRunEvent.connect(events.append)
+
+    controller.test_bot_action_slot(0)
+
+    assert events == [
+        {
+            "type": "slot_test_failed",
+            "slot_index": 0,
+            "reason": "target_window_not_found",
+            "message": "Slot 1 (R): no Chrome window found",
+        }
+    ]
+    assert runtime.run_calls == []
+
+
+def test_controller_runs_slot_test_against_most_recent_chrome_window(qtbot, tmp_path: Path) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    template_path = tmp_path / "slot_1_r.png"
+    template_path.write_bytes(b"capture")
+    runtime = FakeSlotTestRuntime(
+        windows=[
+            SimpleNamespace(handle=7, last_focused_at=1.0, title="Chrome 1"),
+            SimpleNamespace(handle=9, last_focused_at=5.0, title="Chrome 2"),
+        ]
+    )
+    controller = DesktopController(
+        storage=FakeStorage(),
+        config=build_config(
+            bot_action_slots=(
+                replace(build_config().bot_action_slots[0], template_path=template_path),
+                *build_config().bot_action_slots[1:],
+            )
+        ),
+        runner_factory=ImmediateRunner,
+        automation_runtime_probe=lambda: (True, None),
+        automation_runtime_factory=lambda _emit_event: runtime,
+    )
+    events = []
+    controller.botActionRunEvent.connect(events.append)
+
+    controller.test_bot_action_slot(0)
+
+    assert [event["type"] for event in events] == [
+        "slot_test_started",
+        "slot_test_succeeded",
+    ]
+    assert events[-1]["message"] == "Slot 1 (R): success"
+    assert runtime.run_calls[0][1] == 9
+    assert runtime.run_calls[0][0].steps[0].template_path == template_path
 
 
 def test_controller_stop_bot_submits_stop_when_running(qtbot) -> None:
