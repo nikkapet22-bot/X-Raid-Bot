@@ -1436,6 +1436,84 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener(tmp_path) ->
     assert runtime.run_calls == [("seq-1", 41), ("seq-1", 41)]
 
 
+@pytest.mark.asyncio
+async def test_worker_apply_config_refreshes_auto_run_chrome_opener_on_telegram_restart(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 46, 30)
+    storage = FakeStorage(base_dir=tmp_path)
+    AutomationStorage(tmp_path).save_sequences([build_sequence()])
+    created_openers: list[FakeChromeOpener] = []
+    runtime: FakeAutomationRuntime | None = None
+
+    def chrome_opener_factory(**kwargs):
+        opener = FakeChromeOpener(**kwargs)
+        created_openers.append(opener)
+        return opener
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=43,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=chrome_opener_factory,
+    )
+    worker._service = worker._build_service(worker.config)
+    worker._listener = FakeListener()
+
+    first_outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/321"))
+    await worker.apply_config(
+        build_config(
+            telegram_api_hash="new-hash",
+            chrome_profile_directory="Profile 9",
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        )
+    )
+    restart_requested = worker._restart_requested
+    worker._restart_requested = False
+    worker._service = worker._build_service(worker.config)
+    second_outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/654"))
+
+    assert first_outcome.kind == "job_detected"
+    assert second_outcome.kind == "job_detected"
+    assert restart_requested is True
+    assert worker._listener.stop_calls == 1
+    assert [opener.profile_directory for opener in created_openers] == [
+        "Profile 3",
+        "Profile 9",
+    ]
+    assert [opener.open_calls for opener in created_openers] == [
+        [("https://x.com/i/status/321", 43)],
+        [("https://x.com/i/status/654", 43)],
+    ]
+    assert runtime is not None
+    assert runtime.run_calls == [("seq-1", 43), ("seq-1", 43)]
+
+
 def test_worker_build_service_uses_config_default_actions() -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 47, 0)

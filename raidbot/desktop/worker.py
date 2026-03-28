@@ -119,6 +119,9 @@ class DesktopBotWorker:
         profile_changed = self.config.chrome_profile_directory != config.chrome_profile_directory
         self.config = config
 
+        if profile_changed:
+            self._chrome_opener = None
+
         if telegram_changed:
             self._restart_requested = True
             if self._listener is not None:
@@ -133,8 +136,6 @@ class DesktopBotWorker:
             if hasattr(self._service, "default_requirements"):
                 self._service.default_requirements = self._default_requirements(config)
 
-        if profile_changed:
-            self._chrome_opener = None
         self._update_pipeline_profile_directory(config.chrome_profile_directory)
 
     def _handle_message(self, message) -> Any:
