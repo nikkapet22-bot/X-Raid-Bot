@@ -13,14 +13,15 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTabWidget,
     QVBoxLayout,
     QWidget,
     QStyle,
 )
 
+from raidbot.desktop.bot_actions import BotActionsPage
 from raidbot.desktop.chrome_profiles import detect_chrome_environment
-from raidbot.desktop.automation.page import AutomationPage
 from raidbot.desktop.models import DesktopAppState
 from raidbot.desktop.settings_page import SettingsPage
 from raidbot.desktop.telegram_setup import TelegramSetupService
@@ -83,56 +84,26 @@ class MainWindow(QMainWindow):
         central_layout = QVBoxLayout(central_widget)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_dashboard_tab(), "Dashboard")
+        self.tabs.addTab(self._wrap_tab_content(self._build_dashboard_tab()), "Dashboard")
         self.settings_page = SettingsPage(
             config=self.controller.config,
             available_profiles=self.available_profiles_loader(),
             session_status=self.session_status_loader(),
             reauthorize_available=hasattr(self.controller, "reauthorize_session"),
         )
-        self.settings_page.applyRequested.connect(self.controller.apply_config)
+        self.settings_page.applyRequested.connect(self._apply_settings_config)
         if hasattr(self.controller, "reauthorize_session"):
             self.settings_page.reauthorizeRequested.connect(
                 self.controller.reauthorize_session
             )
-        self.tabs.addTab(self.settings_page, "Settings")
-        self.automation_page = AutomationPage(
-            sequences=self._load_automation_sequences(),
-            windows=self._load_automation_windows(),
-            auto_run_enabled=self.controller.config.auto_run_enabled,
-            default_auto_sequence_id=self.controller.config.default_auto_sequence_id,
-            auto_run_settle_ms=self.controller.config.auto_run_settle_ms,
+        self.tabs.addTab(self._wrap_tab_content(self.settings_page), "Settings")
+        self.bot_actions_page = BotActionsPage(
+            config=self.controller.config,
         )
-        self.automation_page.sequenceSaveRequested.connect(
-            self.controller.save_automation_sequence
-        )
-        self.automation_page.sequenceDeleteRequested.connect(
-            self.controller.delete_automation_sequence
-        )
-        self.automation_page.autoRunEnabledRequested.connect(
-            self.controller.set_auto_run_enabled
-        )
-        self.automation_page.defaultAutoSequenceRequested.connect(
-            self.controller.set_default_auto_sequence_id
-        )
-        self.automation_page.autoRunSettleMsRequested.connect(
+        self.bot_actions_page.settleDelayChanged.connect(
             self.controller.set_auto_run_settle_ms
         )
-        self.automation_page.resumeQueueRequested.connect(
-            self.controller.resume_automation_queue
-        )
-        self.automation_page.clearQueueRequested.connect(
-            self.controller.clear_automation_queue
-        )
-        self.automation_page.runRequested.connect(self.controller.start_automation_run)
-        self.automation_page.dryRunRequested.connect(
-            self.controller.dry_run_automation_step
-        )
-        self.automation_page.stopRequested.connect(self.controller.stop_automation_run)
-        self.automation_page.windowsRefreshRequested.connect(
-            self._refresh_automation_windows
-        )
-        self.tabs.addTab(self.automation_page, "Automation")
+        self.tabs.addTab(self._wrap_tab_content(self.bot_actions_page), "Bot Actions")
         central_layout.addWidget(self.tabs)
 
         self.setCentralWidget(central_widget)
@@ -140,8 +111,7 @@ class MainWindow(QMainWindow):
         self._connect_controller_signals()
         state = self.storage.load_state()
         self._apply_state(state, include_activity=True)
-        self._sync_automation_config(self.controller.config)
-        self._sync_automation_queue_state(state)
+        self._sync_bot_actions_config(self.controller.config)
         self._ensure_window_icon()
         self.tray_controller = tray_controller_factory(
             window=self,
@@ -292,6 +262,13 @@ class MainWindow(QMainWindow):
         panel_layout.addWidget(surface)
         return panel, surface
 
+    def _wrap_tab_content(self, widget: QWidget) -> QScrollArea:
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setWidget(widget)
+        return scroll_area
+
     def _build_section_title(self, text: str) -> QLabel:
         label = QLabel(text)
         return label
@@ -308,31 +285,13 @@ class MainWindow(QMainWindow):
         self.controller.statsChanged.connect(self._apply_stats_state)
         self.controller.activityAdded.connect(self._append_activity_entry)
         self.controller.errorRaised.connect(self.last_error_label.setText)
-        self.controller.errorRaised.connect(self.automation_page.show_error)
-        self.controller.configChanged.connect(self._sync_automation_config)
-        self.controller.automationSequencesChanged.connect(
-            self.automation_page.set_sequences
-        )
-        self.controller.automationRunEvent.connect(self.automation_page.handle_run_event)
-        self.controller.automationRunStateChanged.connect(
-            self.automation_page.set_run_state
-        )
-        self.controller.automationQueueStateChanged.connect(
-            self.automation_page.set_queue_state
-        )
-        self.controller.automationQueueLengthChanged.connect(
-            self.automation_page.set_queue_length
-        )
-        self.controller.automationCurrentUrlChanged.connect(
-            self.automation_page.set_current_url
-        )
+        self.controller.errorRaised.connect(self.bot_actions_page.show_error)
+        self.controller.configChanged.connect(self._sync_bot_actions_config)
 
     def _update_bot_state(self, state: str) -> None:
         self.bot_state = state
         self.bot_state_label.setText(state)
         self.command_bot_state_label.setText(state)
-        if not self._bot_state_is_active(state):
-            self._clear_automation_queue_snapshot()
 
     def _update_connection_state(self, state: str) -> None:
         self.connection_state = state
@@ -359,14 +318,14 @@ class MainWindow(QMainWindow):
         self.last_error_label.setText(state.last_error or "")
         if include_activity:
             self.activity_list.clear()
-            for entry in state.activity:
+            for entry in reversed(state.activity):
                 self.activity_list.addItem(self._format_activity(entry))
 
     def _apply_stats_state(self, state: DesktopAppState) -> None:
         self._apply_state(state, include_activity=False)
 
     def _append_activity_entry(self, entry) -> None:
-        self.activity_list.addItem(self._format_activity(entry))
+        self.activity_list.insertItem(0, self._format_activity(entry))
 
     def _format_activity(self, entry) -> str:
         timestamp = entry.timestamp
@@ -466,43 +425,17 @@ class MainWindow(QMainWindow):
             return "unknown"
         return getattr(status, "value", str(status))
 
-    def _load_automation_sequences(self) -> list[object]:
-        if hasattr(self.controller, "list_automation_sequences"):
-            return self.controller.list_automation_sequences()
-        return []
-
-    def _load_automation_windows(self) -> list[object]:
-        if hasattr(self.controller, "list_target_windows"):
-            return self.controller.list_target_windows()
-        return []
-
-    def _refresh_automation_windows(self) -> None:
-        self.automation_page.refresh_windows(self._load_automation_windows())
-
-    def _sync_automation_config(self, config) -> None:
-        self.automation_page.set_auto_run_config(
-            config.auto_run_enabled,
-            config.default_auto_sequence_id,
-            config.auto_run_settle_ms,
-        )
-
-    def _sync_automation_queue_state(self, state: DesktopAppState) -> None:
-        if not self._controller_has_live_queue():
-            self._clear_automation_queue_snapshot()
+    def _apply_settings_config(self, config) -> None:
+        try:
+            self.controller.apply_config(config)
+        except Exception as exc:
+            self.settings_page.show_error(str(exc))
             return
-        self.automation_page.set_queue_state(state.automation_queue_state)
-        self.automation_page.set_queue_length(state.automation_queue_length)
-        self.automation_page.set_current_url(state.automation_current_url)
+        self.settings_page.show_success("Settings saved.")
 
-    def _clear_automation_queue_snapshot(self) -> None:
-        self.automation_page.set_queue_state("idle")
-        self.automation_page.set_queue_length(0)
-        self.automation_page.set_current_url(None)
-
-    def _controller_has_live_queue(self) -> bool:
-        if hasattr(self.controller, "is_bot_active"):
-            return bool(self.controller.is_bot_active())
-        return self._bot_state_is_active(self.bot_state)
+    def _sync_bot_actions_config(self, config) -> None:
+        self.bot_actions_page.set_slots(config.bot_action_slots)
+        self.bot_actions_page.set_settle_delay(config.auto_run_settle_ms)
 
     def _bot_state_is_active(self, state: str) -> bool:
         return state in {"starting", "running", "stopping"}

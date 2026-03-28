@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QIcon
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QScrollArea, QSystemTrayIcon
 
 from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
 from raidbot.desktop.automation.windowing import WindowInfo
@@ -30,6 +30,7 @@ def build_config(**overrides) -> DesktopAppConfig:
         "telegram_phone_number": "+40123456789",
         "whitelisted_chat_ids": [-1001],
         "allowed_sender_ids": [42],
+        "allowed_sender_entries": ("42",),
         "chrome_profile_directory": "Profile 3",
         "browser_mode": "launch-only",
         "executor_name": "noop",
@@ -238,6 +239,11 @@ class FakeController(QObject):
         self.active = state in {"starting", "running", "stopping"}
 
 
+class FailingApplyController(FakeController):
+    def apply_config(self, config: DesktopAppConfig) -> None:
+        raise ValueError("Could not resolve sender '@missing'.")
+
+
 def build_window(controller: FakeController, storage: FakeStorage, **overrides):
     from raidbot.desktop.main_window import MainWindow
 
@@ -336,6 +342,12 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
                     action="sender_rejected",
                     url="https://x.com/i/status/100",
                     reason="sender 42 not allowed",
+                ),
+                ActivityEntry(
+                    timestamp=datetime(2026, 3, 26, 9, 57, 0),
+                    action="page_ready",
+                    url="https://x.com/i/status/101",
+                    reason="page ready",
                 )
             ],
             last_error="boom",
@@ -356,8 +368,9 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
     assert window.executor_failed_label.text() == "10"
     assert window.session_closed_label.text() == "11"
     assert window.last_error_label.text() == "boom"
-    assert window.activity_list.count() == 1
-    assert "Sender Rejected" in window.activity_list.item(0).text()
+    assert window.activity_list.count() == 2
+    assert "Page Ready" in window.activity_list.item(0).text()
+    assert "Sender Rejected" in window.activity_list.item(1).text()
 
     updated_state = DesktopAppState(
         bot_state=BotRuntimeState.running,
@@ -403,8 +416,9 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
         assert window.session_closed_label.text() == "18"
         assert window.last_successful_label.text() == "2026-03-26T10:10:00"
         assert window.last_error_label.text() == "new-error"
-        assert window.activity_list.count() == 2
-        assert "Executor Failed" in window.activity_list.item(1).text()
+        assert window.activity_list.count() == 3
+        assert "Executor Failed" in window.activity_list.item(0).text()
+        assert "Page Ready" in window.activity_list.item(1).text()
     finally:
         controller.botStateChanged.emit("stopped")
 
@@ -429,128 +443,27 @@ def test_main_window_dashboard_exposes_metric_cards_and_panels(qtbot) -> None:
     assert window.error_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
 
 
-def test_main_window_adds_automation_tab(qtbot) -> None:
+def test_main_window_uses_bot_actions_page_instead_of_generic_automation_page(qtbot) -> None:
     window = build_window(FakeController(), FakeStorage())
     qtbot.addWidget(window)
 
-    assert window.tabs.tabText(2) == "Automation"
-    assert window.automation_page.sequence_list.count() == 1
+    assert window.tabs.tabText(2) == "Bot Actions"
+    assert hasattr(window, "bot_actions_page")
+    assert not hasattr(window, "automation_page")
 
 
-def test_automation_page_shows_auto_run_controls_and_updates_from_queue_signals(qtbot) -> None:
-    controller = FakeController(
-        config=build_config(
-            auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
-            auto_run_settle_ms=2200,
-        )
-    )
-    controller.saved_sequences = [build_sequence("seq-1"), build_sequence("seq-2")]
-    window = build_window(controller, FakeStorage())
+def test_main_window_wraps_long_tabs_in_scroll_areas(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
     qtbot.addWidget(window)
 
-    page = window.automation_page
+    dashboard_tab = window.tabs.widget(0)
+    settings_tab = window.tabs.widget(1)
+    bot_actions_tab = window.tabs.widget(2)
 
-    assert page.auto_run_enabled_toggle.isChecked() is True
-    assert page.default_auto_sequence_combo.currentData() == "seq-1"
-    assert page.settle_delay_input.value() == 2200
-    assert page.queue_state_label.text() == "idle"
-    assert page.queue_length_label.text() == "0"
-    assert page.current_url_label.text() == "None"
-    assert page.start_button.isEnabled() is True
-    assert page.dry_run_button.isEnabled() is True
-    assert page.stop_button.isEnabled() is False
-
-    controller.automationQueueStateChanged.emit("queued")
-    controller.automationQueueLengthChanged.emit(2)
-    controller.automationCurrentUrlChanged.emit("https://example.com")
-
-    assert page.queue_state_label.text() == "queued"
-    assert page.queue_length_label.text() == "2"
-    assert page.current_url_label.text() == "https://example.com"
-    assert page.start_button.isEnabled() is False
-    assert page.dry_run_button.isEnabled() is False
-    assert page.resume_queue_button.isEnabled() is True
-    assert page.clear_queue_button.isEnabled() is True
-
-    controller.automationRunStateChanged.emit("running")
-
-    assert page.stop_button.isEnabled() is True
-    assert page.start_button.isEnabled() is False
-    assert page.dry_run_button.isEnabled() is False
-
-    page.auto_run_enabled_toggle.setChecked(False)
-    qtbot.waitUntil(lambda: controller.config.auto_run_enabled is False)
-    assert page.auto_run_enabled_toggle.isChecked() is False
-    assert page.resume_queue_button.isEnabled() is False
-
-    page.default_auto_sequence_combo.setCurrentIndex(2)
-    page.settle_delay_input.setValue(2750)
-    qtbot.waitUntil(
-        lambda: controller.config.default_auto_sequence_id == "seq-2"
-        and controller.config.auto_run_settle_ms == 2750
-    )
-    assert controller.apply_calls[-1].default_auto_sequence_id == "seq-2"
-    assert controller.apply_calls[-1].auto_run_settle_ms == 2750
-
-
-def test_automation_page_rehydrates_stale_queue_state_as_idle_when_controller_is_inactive(qtbot) -> None:
-    stale_state = DesktopAppState(
-        bot_state=BotRuntimeState.stopped,
-        connection_state=TelegramConnectionState.disconnected,
-        automation_queue_state="paused",
-        automation_queue_length=3,
-        automation_current_url="https://example.com/stale",
-        automation_last_error="queue boom",
-    )
-    window = build_window(FakeController(), FakeStorage(state=stale_state))
-    qtbot.addWidget(window)
-
-    page = window.automation_page
-
-    assert page.queue_state_label.text() == "idle"
-    assert page.queue_length_label.text() == "0"
-    assert page.current_url_label.text() == "None"
-    assert page.start_button.isEnabled() is True
-    assert page.dry_run_button.isEnabled() is True
-    assert page.resume_queue_button.isEnabled() is False
-    assert page.clear_queue_button.isEnabled() is False
-
-
-def test_automation_page_allows_resume_for_paused_empty_queue(qtbot) -> None:
-    controller = FakeController(
-        config=build_config(
-            auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
-        )
-    )
-    window = build_window(controller, FakeStorage())
-    qtbot.addWidget(window)
-
-    page = window.automation_page
-    controller.automationQueueStateChanged.emit("paused")
-    controller.automationQueueLengthChanged.emit(0)
-
-    assert page.queue_state_label.text() == "paused"
-    assert page.queue_length_label.text() == "0"
-    assert page.resume_queue_button.isEnabled() is True
-    assert page.clear_queue_button.isEnabled() is True
-    assert page.start_button.isEnabled() is False
-    assert page.dry_run_button.isEnabled() is False
-
-
-def test_main_window_clears_deleted_default_sequence_from_automation_tab(qtbot) -> None:
-    controller = FakeController(
-        config=build_config(default_auto_sequence_id="seq-1")
-    )
-    controller.saved_sequences = [build_sequence("seq-1"), build_sequence("seq-2")]
-    window = build_window(controller, FakeStorage())
-    qtbot.addWidget(window)
-
-    controller.delete_automation_sequence("seq-1")
-
-    assert controller.config.default_auto_sequence_id is None
-    assert window.automation_page.default_auto_sequence_combo.currentData() is None
+    assert isinstance(dashboard_tab, QScrollArea)
+    assert dashboard_tab.widgetResizable() is True
+    assert settings_tab.widget() is window.settings_page
+    assert bot_actions_tab.widget() is window.bot_actions_page
 
 
 def test_automation_page_emits_start_and_save_requests(qtbot) -> None:
@@ -616,6 +529,75 @@ def test_automation_page_displays_dry_run_match_without_clicking(qtbot) -> None:
     assert "0.97" in page.status_label.text()
 
 
+def test_automation_page_shows_immediate_feedback_for_common_buttons(qtbot) -> None:
+    from raidbot.desktop.automation.page import AutomationPage
+
+    page = AutomationPage(
+        sequences=[build_sequence()],
+        windows=[build_window_info()],
+        auto_run_enabled=True,
+    )
+    qtbot.addWidget(page)
+
+    saved = []
+    deleted = []
+    refreshed = []
+    started = []
+    dry_runs = []
+    resumed = []
+    cleared = []
+    stopped = []
+    page.sequenceSaveRequested.connect(saved.append)
+    page.sequenceDeleteRequested.connect(deleted.append)
+    page.windowsRefreshRequested.connect(lambda: refreshed.append(True))
+    page.runRequested.connect(lambda sequence_id, handle: started.append((sequence_id, handle)))
+    page.dryRunRequested.connect(lambda sequence_id, step_index, handle: dry_runs.append((sequence_id, step_index, handle)))
+    page.resumeQueueRequested.connect(lambda: resumed.append(True))
+    page.clearQueueRequested.connect(lambda: cleared.append(True))
+    page.stopRequested.connect(lambda: stopped.append(True))
+
+    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Sequence saved."
+    assert len(saved) == 1
+
+    qtbot.mouseClick(page.add_step_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Step added."
+
+    qtbot.mouseClick(page.remove_step_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Step removed."
+
+    qtbot.mouseClick(page.refresh_windows_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Refreshing target windows..."
+    assert refreshed == [True]
+
+    qtbot.mouseClick(page.start_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Starting manual run..."
+    assert started == [("seq-1", None)]
+
+    qtbot.mouseClick(page.dry_run_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Running dry run..."
+    assert dry_runs == [("seq-1", 0, None)]
+
+    page.set_queue_state("paused")
+    page.set_queue_length(0)
+    qtbot.mouseClick(page.resume_queue_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Resuming queue..."
+    assert resumed == [True]
+
+    qtbot.mouseClick(page.clear_queue_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Clearing queue..."
+    assert cleared == [True]
+
+    page.set_run_state("running")
+    qtbot.mouseClick(page.stop_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Stopping run..."
+    assert stopped == [True]
+
+    qtbot.mouseClick(page.delete_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Sequence deleted."
+    assert deleted == ["seq-1"]
+
+
 def test_main_window_settings_page_shows_browser_mode_and_executor(qtbot) -> None:
     from raidbot.desktop.main_window import MainWindow
 
@@ -624,6 +606,15 @@ def test_main_window_settings_page_shows_browser_mode_and_executor(qtbot) -> Non
 
     assert window.settings_page.browser_mode_combo.currentText() == "launch-only"
     assert window.settings_page.executor_name_label.text() == "noop"
+
+
+def test_main_window_routes_settings_apply_errors_back_to_settings_status(qtbot) -> None:
+    window = build_window(FailingApplyController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.settings_page.save_button, Qt.MouseButton.LeftButton)
+
+    assert window.settings_page.status_label.text() == "Could not resolve sender '@missing'."
 
 
 def test_main_window_uses_visible_fallback_icon_for_tray(qtbot) -> None:
