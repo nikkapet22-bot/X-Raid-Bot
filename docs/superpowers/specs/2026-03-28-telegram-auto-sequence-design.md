@@ -38,7 +38,7 @@ These flows are not currently connected. A detected Telegram link does not autom
 
 This design covers:
 
-- automatic queueing of successfully opened Telegram raid links
+- automatic queueing of detected Telegram raid links before browser open
 - one configured default automation sequence
 - foreground Chrome execution after a short settle delay
 - success/failure handling for queue progression
@@ -139,6 +139,7 @@ Behavior rules:
 Queue states:
 
 - `idle`
+- `queued`
 - `running`
 - `paused`
 
@@ -159,7 +160,7 @@ Rules:
 
 - the default auto-run sequence is configured in the Automation tab
 - the setting is optional
-- if auto-run is enabled but no default sequence is configured, Telegram-triggered processing should fail visibly and pause the queue
+- if auto-run is enabled but no default sequence is configured, detected Telegram items should fail at pre-open admission time, Chrome should not be opened for them, and the queue should enter `paused`
 - the manual sequence editor remains available and unchanged in purpose
 
 This avoids per-bot or per-chat routing logic in the first version.
@@ -170,17 +171,30 @@ When a supported Telegram message produces a detected raid link:
 
 1. create pending raid work item
 2. enqueue the item
-3. if the queue is idle and the shared automation slot is free, start processing immediately
-4. open the URL in Chrome for the head-of-queue item
-5. create opened raid context for that active item
-6. wait the configured settle delay
-7. force the relevant Chrome window to foreground
-8. run the default automation sequence against the foreground Chrome window
-9. if the sequence succeeds:
+3. if the queue was idle before admission, transition it to `queued`
+4. if the shared automation slot is free, start processing the head-of-queue item immediately
+5. before opening Chrome, validate that auto-run is still enabled, the queue is not paused, and a default auto sequence is configured
+6. if any of those pre-open checks fail:
+   - do not open Chrome
+   - emit a visible failure reason
+   - pause the queue
+   - leave the item terminal and continue only after user recovery
+7. open the URL in Chrome for the head-of-queue item
+8. if Chrome open itself fails:
+   - emit a visible failure reason
+   - pause the queue
+   - no tab exists, so there is nothing to keep open for inspection
+9. create opened raid context for that active item
+10. transition queue state to `running`
+11. wait the configured settle delay
+12. force the relevant Chrome window to foreground
+13. run the default automation sequence against the foreground Chrome window
+14. if the sequence succeeds:
    - close only the active tab in the owned foreground Chrome window
    - mark the queue item completed
-   - continue to the next queued item
-10. if the sequence fails:
+   - if pending items remain, transition to `queued` and continue to the next queued item
+   - otherwise transition to `idle`
+15. if the sequence fails:
    - leave the tab open
    - emit a visible failure message
    - pause the queue
@@ -214,6 +228,12 @@ This implies one important safety rule:
 
 - if the system can no longer reacquire the intended Chrome window, it must fail visibly and pause the queue rather than guessing another target
 - if the foreground Chrome window loses focus or its handle changes during the run, the system must fail visibly rather than guessing
+
+User-interaction contract for the first version:
+
+- once a Telegram-triggered auto-run has opened its Chrome tab and entered settle/run processing, the user must not manually switch tabs, switch Chrome windows, or otherwise interact with that owned Chrome window until the run succeeds or fails
+- this no-user-interaction rule is part of the supported operating contract for the first version
+- if the user violates that contract inside the same Chrome window without a detectable focus or handle change, correct tab identity cannot be proven and behavior is outside the supported guarantee
 
 The first version therefore guarantees only:
 
@@ -254,6 +274,8 @@ If the sequence fails for any reason:
 
 Failure reasons that should be surfaced include:
 
+- pre-open validation failed
+- Chrome open failed
 - no default auto-run sequence configured
 - target Chrome window not found
 - target Chrome window could not be focused
@@ -286,6 +308,15 @@ The existing manual controls remain:
 
 The new section configures how Telegram-opened links feed into automation. It should not replace the manual sequence workflow.
 
+UI/button rules:
+
+- when queue state is `idle`, manual controls are enabled and `Resume queue` is disabled
+- when queue state is `queued` or `running`, manual `Start run` and `Dry run step` are disabled
+- when queue state is `paused`, manual run controls remain disabled until the user presses `Resume queue` or `Clear queue`
+- `Clear queue` is enabled only when there are pending items or the queue is `paused`
+- toggling `auto_run_enabled` to `false` prevents new admissions immediately but does not cancel the currently active run
+- toggling `auto_run_enabled` to `false` while items are pending prevents further admissions; existing pending items remain until they are processed, resumed, or cleared
+
 ## Desktop State And Persistence
 
 Desktop config should gain:
@@ -311,7 +342,7 @@ Reasoning:
 
 - Telegram-driven order and pacing already live in the worker path
 - queue semantics are operational behavior, not just display behavior
-- the worker already sees the exact moment when the link was successfully opened
+- the worker already sees the exact moment when a detected link is admitted and when a queued item is opened
 
 The UI should observe and control the queue through controller signals, not own the queue directly.
 
@@ -326,12 +357,22 @@ Interlock rules:
 - while the queue is `paused`, manual automation actions should remain disabled until the user either resumes the queue or clears the queue state
 - if a manual run is already active when a Telegram item is admitted, the Telegram item remains pending; once the shared slot becomes idle, the auto queue starts before any new manual run may begin
 
+State progression rules:
+
+- `idle` means no active auto-run and no admitted pending auto items
+- `queued` means at least one admitted pending auto item exists and the shared automation slot is not currently executing an auto step loop
+- `running` means a head-of-queue item has been opened and is currently in settle/run processing
+- `paused` means the active auto item has failed terminally and pending items, if any, are blocked until user recovery
+
 ## Testing
 
 Implementation should cover:
 
-- successful Telegram-open event enqueues one auto-run item
-- two opened links are processed one by one
+- successful Telegram detection enqueues one auto-run item
+- two detected links are processed one by one
+- head-of-queue item opens only when it becomes active
+- pre-open validation failure does not open Chrome and pauses the queue visibly
+- Chrome open failure pauses the queue visibly
 - success closes only the active tab and continues
 - failure leaves the tab open and pauses the queue
 - missing default sequence fails visibly
