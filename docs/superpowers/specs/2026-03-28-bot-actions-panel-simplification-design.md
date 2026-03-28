@@ -164,17 +164,27 @@ Validation rules:
 - if a checked slot has no captured image, the bot must refuse to start bot-actions execution for Telegram-opened links
 - this failure must be visible to the user
 - unchecked slots without images are valid and ignored
+- at least one slot must be enabled for bot-actions execution to be considered runnable
+- if zero slots are enabled, the bot must refuse bot-actions execution for Telegram-opened links
+- slot-runnability validation must happen before Chrome is opened for a detected link
 
 ## Runtime Flow
 
 When the Telegram worker detects a supported raid link:
 
 1. perform the normal detection/admission checks
-2. open the link in Chrome
-3. wait the configured settle delay
-4. force the relevant Chrome window to the foreground
-5. process the four slots from left to right
-6. for each enabled slot:
+2. perform bot-actions preflight validation before opening Chrome:
+   - at least one slot is enabled
+   - every enabled slot has a captured image
+3. if preflight validation fails:
+   - do not open Chrome for that detected link
+   - surface the failure reason
+   - stop further bot-actions processing
+4. open the link in Chrome
+5. wait the configured settle delay
+6. force the relevant Chrome window to the foreground
+7. process the four slots from left to right
+8. for each enabled slot:
    - load that slot's saved image
    - search for the best match in the active opened Chrome context
    - move the mouse to the match
@@ -182,11 +192,11 @@ When the Telegram worker detects a supported raid link:
    - left click
    - verify the UI changed
    - continue to the next enabled slot
-7. if all enabled slots succeed:
+9. if all enabled slots succeed:
    - close the opened tab
    - mark success
    - continue waiting for the next link
-8. if any enabled slot fails:
+10. if any enabled slot fails:
    - leave the tab open
    - surface the failure reason
    - pause further bot-actions processing
@@ -235,7 +245,19 @@ Each enabled slot succeeds only if:
 - the click is executed
 - the UI visibly changes afterward
 
-The bot should treat UI change as confirmation for moving to the next slot.
+The first version should use a narrow, deterministic confirmation heuristic instead of a semantic UI understanding layer.
+
+For the first version:
+
+- after the click, the bot should poll the active Chrome capture for up to `2000 ms`
+- the bot should try to find the same slot template again using the slot's stored template image
+- the slot should count as successful if either:
+  - the same template is no longer found above threshold, or
+  - the best-match center for that same template moves materially away from the pre-click match location
+- `moves materially` should mean more than `max(10 px, 0.25 * min(template_width, template_height))`
+- if the same template remains matched in essentially the same location for the full timeout window, the slot fails with `ui_did_not_change`
+
+This first version intentionally uses template disappearance / movement as the UI-change check. It should not introduce OCR, semantic understanding, or a generalized screenshot-diff scoring system.
 
 If the UI does not change after the click, that slot should fail with a visible reason such as:
 
@@ -270,6 +292,12 @@ The desktop config should gain bot-actions settings for:
 - captured image path per slot
 - settle delay
 
+Settle-delay rules for the first version:
+
+- the value should be stored in milliseconds
+- default value should be `1500`
+- UI range should be `0` to `10000`
+
 The old generic automation sequence data may remain on disk temporarily for compatibility, but it should no longer drive the visible user flow.
 
 The app should treat older configs without the new slot data as:
@@ -277,6 +305,11 @@ The app should treat older configs without the new slot data as:
 - all slots disabled by default
 - no captured images present
 - a valid migration state that simply requires the user to configure the new boxes
+
+If the user cancels a capture operation for a slot:
+
+- the existing slot image, if any, should remain unchanged
+- the slot should not be cleared automatically
 
 ## Implementation Direction
 
