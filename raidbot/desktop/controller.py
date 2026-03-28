@@ -306,7 +306,10 @@ class DesktopController(QObject):
     def _handle_worker_event(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
         if event_type == "bot_state_changed":
-            self.botStateChanged.emit(str(event.get("state", "")))
+            state = str(event.get("state", ""))
+            if state in {"stopped", "error", "setup_required"}:
+                self._clear_automation_queue_snapshot()
+            self.botStateChanged.emit(state)
         elif event_type == "connection_state_changed":
             self.connectionStateChanged.emit(str(event.get("state", "")))
         elif event_type == "stats_changed":
@@ -420,6 +423,17 @@ class DesktopController(QObject):
         if self._worker is None or self._runner is None or not self._runner.is_running():
             return
         self._submit_to_runner(lambda: self._worker.notify_manual_automation_finished())
+
+    def _clear_automation_queue_snapshot(self) -> None:
+        previous_state = self._automation_queue_state
+        previous_length = self._automation_queue_length
+        self._automation_queue_state = "idle"
+        self._automation_queue_length = 0
+        if previous_state != "idle":
+            self.automationQueueStateChanged.emit("idle")
+        if previous_length != 0:
+            self.automationQueueLengthChanged.emit(0)
+        self.automationCurrentUrlChanged.emit(None)
 
     @Slot(object)
     def _handle_automation_event(self, event: dict[str, Any]) -> None:

@@ -586,6 +586,64 @@ def test_controller_notifies_worker_to_resume_queued_auto_run_after_manual_compl
     assert created_worker["worker"].manual_finished_calls == 1
 
 
+def test_controller_clears_queue_cache_when_bot_stops_and_unblocks_manual_runs(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    worker_runner = FakeRunner()
+    manual_runner = ImmediateRunner()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    class RecordingRuntime:
+        def __init__(self) -> None:
+            self.run_calls = []
+
+        def run_sequence(self, sequence, selected_window_handle):
+            self.run_calls.append((sequence.id, selected_window_handle))
+            from raidbot.desktop.automation.runner import RunResult
+
+            return RunResult(status="completed", window_handle=selected_window_handle)
+
+        def dry_run_step(self, sequence, step_index, selected_window_handle):
+            raise AssertionError("dry run should not be called")
+
+        def request_stop(self) -> None:
+            return None
+
+    runtime = RecordingRuntime()
+    runners = iter([worker_runner, manual_runner])
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(auto_run_enabled=True, default_auto_sequence_id="seq-1"),
+        worker_factory=worker_factory,
+        runner_factory=lambda: next(runners),
+        automation_runtime_probe=lambda: (True, None),
+        automation_runtime_factory=lambda _emit_event: runtime,
+    )
+    controller._automation_sequences = [build_sequence()]
+    errors = []
+    controller.errorRaised.connect(errors.append)
+
+    controller.start_bot()
+    created["worker"].emit_event({"type": "automation_queue_state_changed", "state": "queued"})
+    created["worker"].emit_event({"type": "automation_queue_length_changed", "length": 2})
+
+    controller.start_automation_run("seq-1", selected_window_handle=7)
+    assert errors == ["Automation queue owns the execution slot"]
+
+    created["worker"].emit_event({"type": "bot_state_changed", "state": "stopped"})
+    qtbot.waitUntil(lambda: controller._automation_queue_state == "idle")
+
+    controller.start_automation_run("seq-1", selected_window_handle=7)
+
+    assert runtime.run_calls == [("seq-1", 7)]
+
+
 def test_controller_clears_default_auto_sequence_when_deleted(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 

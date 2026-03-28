@@ -853,29 +853,17 @@ def test_worker_clear_automation_queue_preserves_running_state(tmp_path) -> None
     assert worker.state.automation_last_error is None
 
 
-def test_worker_does_not_open_chrome_when_auto_run_is_disabled_and_does_not_mark_dedupe(
-    tmp_path,
-) -> None:
+def test_worker_uses_legacy_pipeline_path_when_auto_run_is_disabled(tmp_path) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 5, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
-    opener = FakeChromeOpener(profile_directory="Profile 3")
-    runtime: FakeAutomationRuntime | None = None
-
-    def runtime_factory(_emit_event):
-        nonlocal runtime
-        runtime = FakeAutomationRuntime(
-            windows=[
-                WindowInfo(
-                    handle=7,
-                    title="RaidBot - Chrome",
-                    bounds=(0, 0, 100, 100),
-                    last_focused_at=1.0,
-                )
-            ],
-        )
-        return runtime
+    pipeline = FakePipeline(
+        build_config(),
+        execution_result=RaidExecutionResult(
+            kind="executor_not_configured",
+            handed_off=True,
+        ),
+    )
 
     worker, _services, _pipelines, _listeners = build_worker(
         storage,
@@ -889,26 +877,28 @@ def test_worker_does_not_open_chrome_when_auto_run_is_disabled_and_does_not_mark
             config,
             detection_result_factory=detect_job_from_message,
         ),
-        automation_runtime_factory=runtime_factory,
-        chrome_opener_factory=lambda **kwargs: opener,
+        pipeline_factory=lambda _config: pipeline,
     )
     worker._service = worker._build_service(worker.config)
+    worker._pipeline = pipeline
     dedupe_store = TrackingDedupeStore()
     worker._dedupe_store = dedupe_store
 
     outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/555"))
 
     assert outcome.kind == "job_detected"
-    assert opener.open_calls == []
-    assert runtime is not None
-    assert runtime.run_calls == []
-    assert dedupe_store.mark_calls == []
+    assert [call[0].normalized_url for call in pipeline.execute_calls] == [
+        "https://x.com/i/status/555"
+    ]
+    assert pipeline.should_continue_results == [True]
+    assert dedupe_store.mark_calls == ["https://x.com/i/status/555"]
     assert worker.state.automation_queue_state == "idle"
     assert worker.state.automation_queue_length == 0
-    assert worker.state.automation_last_error == "auto_run_disabled"
+    assert worker.state.automation_last_error is None
     assert [entry.action for entry in worker.state.activity] == [
         "raid_detected",
-        "automation_failed",
+        "browser_session_opened",
+        "executor_not_configured",
     ]
 
 
@@ -1697,6 +1687,152 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener_on_telegram_
     ]
     assert runtime is not None
     assert runtime.run_calls == [("seq-1", 43), ("seq-1", 43)]
+
+
+def test_worker_keeps_success_event_sequence_id_stable_when_config_changes_mid_run(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 46, 45)
+    storage = FakeStorage(base_dir=tmp_path)
+    AutomationStorage(tmp_path).save_sequences(
+        [build_sequence("seq-1"), build_sequence("seq-2")]
+    )
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    worker_ref: dict[str, object] = {}
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=45,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+            on_run_sequence=lambda _sequence, _handle: setattr(
+                worker_ref["worker"].config,
+                "default_auto_sequence_id",
+                "seq-2",
+            ),
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker_ref["worker"] = worker
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/321")
+    )
+
+    assert outcome.kind == "job_detected"
+    run_events = [event for event in events if event["type"].startswith("automation_run_")]
+    assert run_events == [
+        {
+            "type": "automation_run_started",
+            "sequence_id": "seq-1",
+            "url": "https://x.com/i/status/321",
+            "window_handle": 45,
+        },
+        {
+            "type": "automation_run_succeeded",
+            "sequence_id": "seq-1",
+            "url": "https://x.com/i/status/321",
+        },
+    ]
+
+
+def test_worker_keeps_failure_event_sequence_id_stable_when_config_changes_mid_run(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 46, 50)
+    storage = FakeStorage(base_dir=tmp_path)
+    AutomationStorage(tmp_path).save_sequences(
+        [build_sequence("seq-1"), build_sequence("seq-2")]
+    )
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    worker_ref: dict[str, object] = {}
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=47,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+            on_run_sequence=lambda _sequence, _handle: (
+                setattr(
+                    worker_ref["worker"].config,
+                    "default_auto_sequence_id",
+                    "seq-2",
+                ),
+                RunResult(status="failed", failure_reason="image_match_not_found"),
+            )[1],
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker_ref["worker"] = worker
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/654")
+    )
+
+    assert outcome.kind == "job_detected"
+    run_events = [event for event in events if event["type"].startswith("automation_run_")]
+    assert run_events == [
+        {
+            "type": "automation_run_started",
+            "sequence_id": "seq-1",
+            "url": "https://x.com/i/status/654",
+            "window_handle": 47,
+        },
+        {
+            "type": "automation_run_failed",
+            "sequence_id": "seq-1",
+            "url": "https://x.com/i/status/654",
+            "reason": "image_match_not_found",
+        },
+    ]
 
 
 def test_worker_build_service_uses_config_default_actions() -> None:

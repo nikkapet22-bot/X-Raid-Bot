@@ -76,6 +76,7 @@ class DesktopBotWorker:
         self._automation_processor: AutoRunProcessor | None = None
         self._chrome_opener: Any | None = None
         self._automation_reserved_urls: set[str] = set()
+        self._active_auto_sequence_id: str | None = None
         self._automation_storage = AutomationStorage(Path(self.storage.base_dir))
         self._restart_requested = False
         self._stop_requested = False
@@ -156,6 +157,8 @@ class DesktopBotWorker:
             return detection
 
         self._record_detection_result(detection)
+        if not self.config.auto_run_enabled:
+            return self._handle_detected_raid_via_pipeline(detection)
         if detection.job.normalized_url in self._automation_reserved_urls:
             duplicate = RaidDetectionResult(
                 kind="duplicate",
@@ -318,6 +321,7 @@ class DesktopBotWorker:
             reason="automation_started",
             url=context.normalized_url,
         )
+        self._active_auto_sequence_id = sequence_id
         self._emit(
             "automation_run_started",
             sequence_id=sequence_id,
@@ -360,9 +364,10 @@ class DesktopBotWorker:
         )
         self._emit(
             "automation_run_succeeded",
-            sequence_id=self.config.default_auto_sequence_id,
+            sequence_id=self._active_auto_sequence_id,
             url=item.normalized_url,
         )
+        self._active_auto_sequence_id = None
 
     def _record_automation_failure(
         self,
@@ -379,10 +384,11 @@ class DesktopBotWorker:
         )
         self._emit(
             "automation_run_failed",
-            sequence_id=self.config.default_auto_sequence_id,
+            sequence_id=self._active_auto_sequence_id,
             url=item.normalized_url,
             reason=reason,
         )
+        self._active_auto_sequence_id = None
 
     def _update_automation_status(
         self,
@@ -432,6 +438,21 @@ class DesktopBotWorker:
             processor.current_url,
             processor.last_error,
         )
+
+    def _handle_detected_raid_via_pipeline(
+        self,
+        detection: RaidDetectionResult,
+    ) -> RaidDetectionResult:
+        if self._pipeline is None or detection.job is None:
+            raise RuntimeError("DesktopBotWorker pipeline is not initialized")
+        execution = self._pipeline.execute(
+            detection.job,
+            should_continue=self._can_start_executor,
+        )
+        if getattr(execution, "handed_off", False):
+            self._dedupe_store.mark_if_new(detection.job.normalized_url)
+        self._record_execution_result(detection, execution)
+        return detection
 
     def _record_execution_result(
         self,
