@@ -109,6 +109,7 @@ For the first version:
 - `click_offset_x` and `click_offset_y` should be pixel offsets from the matched template center
 - `max_search_seconds` should be the search budget for a single search phase; the budget resets after each scroll attempt
 - `max_click_attempts` should count the total number of click attempts for the step, including the initial click
+- if applying click offsets would move the final click point outside the target Chrome window bounds, the step should fail with an `invalid_click_target` reason rather than clamping silently
 
 The runner should process steps strictly in order. It should not skip ahead or dynamically reorder steps based on what else appears in the window.
 
