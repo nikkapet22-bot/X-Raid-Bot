@@ -145,11 +145,11 @@ class AutomationPage(QWidget):
 
         self.resume_queue_button = QPushButton("Resume queue")
         self.resume_queue_button.setProperty("variant", "primary")
-        self.resume_queue_button.clicked.connect(self.resumeQueueRequested.emit)
+        self.resume_queue_button.clicked.connect(self._emit_resume_queue_request)
 
         self.clear_queue_button = QPushButton("Clear queue")
         self.clear_queue_button.setProperty("variant", "danger")
-        self.clear_queue_button.clicked.connect(self.clearQueueRequested.emit)
+        self.clear_queue_button.clicked.connect(self._emit_clear_queue_request)
 
         self.save_button = QPushButton("Save sequence")
         self.save_button.setProperty("variant", "primary")
@@ -169,7 +169,7 @@ class AutomationPage(QWidget):
 
         self.refresh_windows_button = QPushButton("Refresh windows")
         self.refresh_windows_button.setProperty("variant", "secondary")
-        self.refresh_windows_button.clicked.connect(self.windowsRefreshRequested.emit)
+        self.refresh_windows_button.clicked.connect(self._emit_refresh_windows_request)
 
         self.start_button = QPushButton("Start run")
         self.start_button.setProperty("variant", "primary")
@@ -181,7 +181,7 @@ class AutomationPage(QWidget):
 
         self.stop_button = QPushButton("Stop")
         self.stop_button.setProperty("variant", "danger")
-        self.stop_button.clicked.connect(self.stopRequested.emit)
+        self.stop_button.clicked.connect(self._emit_stop_request)
 
         self._build_layout()
         self.set_sequences(sequences or [])
@@ -528,41 +528,69 @@ class AutomationPage(QWidget):
             target_window_rule=self.window_rule_input.text().strip() or None,
             steps=[replace(step) for step in self._steps],
         )
+        self.status_label.setText("Sequence saved.")
         self.sequenceSaveRequested.emit(sequence)
 
     def _emit_delete_request(self) -> None:
         sequence_id = self._selected_sequence_id()
-        if sequence_id is not None:
-            self.sequenceDeleteRequested.emit(sequence_id)
+        if sequence_id is None:
+            self.status_label.setText("No sequence selected.")
+            return
+        self.status_label.setText("Sequence deleted.")
+        self.sequenceDeleteRequested.emit(sequence_id)
 
     def _emit_run_request(self) -> None:
         sequence_id = self._selected_sequence_id()
         if sequence_id is None:
+            self.status_label.setText("Select a sequence first.")
             return
+        self.status_label.setText("Starting manual run...")
         self.runRequested.emit(sequence_id, self.window_combo.currentData())
 
     def _emit_dry_run_request(self) -> None:
         sequence_id = self._selected_sequence_id()
         if sequence_id is None:
+            self.status_label.setText("Select a sequence first.")
             return
         step_index = self.step_list.currentRow()
         if step_index < 0:
+            self.status_label.setText("Select a step first.")
             return
+        self.status_label.setText("Running dry run...")
         self.dryRunRequested.emit(sequence_id, step_index, self.window_combo.currentData())
 
     def _add_step(self) -> None:
         self._store_current_step()
         self._steps.append(_default_step())
         self._refresh_step_list(select_row=len(self._steps) - 1)
+        self.status_label.setText("Step added.")
 
     def _remove_step(self) -> None:
         row = self.step_list.currentRow()
         if row < 0 or row >= len(self._steps):
+            self.status_label.setText("No step selected.")
             return
         del self._steps[row]
         if not self._steps:
             self._steps = [_default_step()]
         self._refresh_step_list(select_row=min(row, len(self._steps) - 1))
+        self.status_label.setText("Step removed.")
+
+    def _emit_resume_queue_request(self) -> None:
+        self.status_label.setText("Resuming queue...")
+        self.resumeQueueRequested.emit()
+
+    def _emit_clear_queue_request(self) -> None:
+        self.status_label.setText("Clearing queue...")
+        self.clearQueueRequested.emit()
+
+    def _emit_refresh_windows_request(self) -> None:
+        self.status_label.setText("Refreshing target windows...")
+        self.windowsRefreshRequested.emit()
+
+    def _emit_stop_request(self) -> None:
+        self.status_label.setText("Stopping run...")
+        self.stopRequested.emit()
 
     def _selected_sequence_id(self) -> str | None:
         row = self.sequence_list.currentRow()
