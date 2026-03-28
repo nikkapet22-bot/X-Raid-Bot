@@ -902,6 +902,51 @@ def test_worker_uses_legacy_pipeline_path_when_auto_run_is_disabled(tmp_path) ->
     ]
 
 
+def test_worker_preserves_reserved_url_duplicate_guard_when_auto_run_is_disabled(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 5, 30)
+    storage = FakeStorage(base_dir=tmp_path)
+    pipeline = FakePipeline(
+        build_config(),
+        execution_result=RaidExecutionResult(
+            kind="executor_not_configured",
+            handed_off=True,
+        ),
+    )
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=False,
+            default_auto_sequence_id="seq-1",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        pipeline_factory=lambda _config: pipeline,
+    )
+    worker._service = worker._build_service(worker.config)
+    worker._pipeline = pipeline
+    worker._automation_reserved_urls.add("https://x.com/i/status/555")
+    dedupe_store = TrackingDedupeStore()
+    worker._dedupe_store = dedupe_store
+
+    outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/555"))
+
+    assert outcome.kind == "duplicate"
+    assert pipeline.execute_calls == []
+    assert dedupe_store.mark_calls == []
+    assert [entry.action for entry in worker.state.activity] == [
+        "raid_detected",
+        "duplicate",
+    ]
+
+
 def test_worker_records_browser_session_failed_result(tmp_path) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 10, 0)

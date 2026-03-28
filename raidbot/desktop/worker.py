@@ -157,8 +157,6 @@ class DesktopBotWorker:
             return detection
 
         self._record_detection_result(detection)
-        if not self.config.auto_run_enabled:
-            return self._handle_detected_raid_via_pipeline(detection)
         if detection.job.normalized_url in self._automation_reserved_urls:
             duplicate = RaidDetectionResult(
                 kind="duplicate",
@@ -166,6 +164,8 @@ class DesktopBotWorker:
             )
             self._record_detection_result(duplicate)
             return duplicate
+        if not self.config.auto_run_enabled:
+            return self._handle_detected_raid_via_pipeline(detection)
         processor = self._ensure_automation_processor()
         item = PendingRaidWorkItem(
             normalized_url=detection.job.normalized_url,
