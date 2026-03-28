@@ -111,6 +111,9 @@ Behavior rules:
 - only one auto-run may be active at a time
 - if a new Telegram link arrives while another auto-run is active, it waits in the queue
 - if two supported bots post links at nearly the same time, both links are queued and processed one by one
+- if `auto_run_enabled` is `false`, successfully opened Telegram links are not admitted to the auto-run queue
+- if the queue is `paused`, newly opened Telegram links are not admitted to the auto-run queue
+- when admission is rejected because auto-run is disabled or paused, the app should emit a visible activity entry with the reason
 
 Queue states:
 
@@ -124,6 +127,8 @@ Runtime queue fields should include:
 - current URL
 - current trace ID
 - last failure reason
+
+Queue length should mean pending items that have been admitted but not yet started. The currently active item is not counted in queue length.
 
 ## Sequence Selection
 
@@ -149,7 +154,7 @@ When a supported Telegram message produces a successfully opened link:
 5. force the relevant Chrome window to foreground
 6. run the default automation sequence against the foreground Chrome window
 7. if the sequence succeeds:
-   - close only the active tab
+   - close only the active tab in the owned foreground Chrome window
    - mark the queue item completed
    - continue to the next queued item
 8. if the sequence fails:
@@ -159,6 +164,15 @@ When a supported Telegram message produces a successfully opened link:
 
 The worker should not continue auto-processing queued items after a failure until the user explicitly resumes.
 
+Failed-item lifecycle rules:
+
+- when a run fails, the active item becomes terminal and is removed from active processing
+- the failed tab remains open for inspection
+- the queue enters `paused`
+- pending items remain pending
+- `Resume queue` continues with the next pending item; it does not automatically retry the failed item
+- `Clear queue` removes only pending items; it does not close or alter the failed tab that was left open
+
 ## Window And Tab Targeting
 
 The first version should stay simple and explicit:
@@ -166,13 +180,21 @@ The first version should stay simple and explicit:
 - Telegram opens the raid link as a new Chrome tab
 - the automation run assumes the newly opened tab is the active tab in the Chrome window that was just used
 - the system forces that Chrome window to the foreground before the sequence starts
-- on success, the app closes only the active tab using tab-close input behavior
+- on success, the app closes only the active tab of that owned foreground Chrome window using tab-close input behavior
 
 The first version should not depend on browser-debugging protocols or browser-internal tab enumeration.
 
 This implies one important safety rule:
 
 - if the system can no longer reacquire the intended Chrome window, it must fail visibly and pause the queue rather than guessing another target
+- if the user changes tabs or otherwise breaks the assumption that the newly opened raid tab is still the active tab in that owned Chrome window, the implementation cannot prove tab identity; in that case the system should prefer failing visibly over guessing
+
+The first version therefore guarantees only:
+
+- exclusive ownership of the foreground Chrome window used for the auto-run
+- closure of the active tab in that owned Chrome window after success
+
+It does not guarantee browser-internal tab identity beyond that owned-window/active-tab invariant.
 
 ## Settle Delay
 
@@ -188,7 +210,7 @@ Rules:
 
 If the sequence succeeds:
 
-- close only the active tab
+- close only the active tab in the owned foreground Chrome window
 - do not close the whole Chrome window
 - emit a success activity entry for the queue item
 - immediately continue to the next queued link, if any
@@ -266,6 +288,15 @@ Reasoning:
 - the worker already sees the exact moment when the link was successfully opened
 
 The UI should observe and control the queue through controller signals, not own the queue directly.
+
+There should be exactly one shared automation execution slot.
+
+Interlock rules:
+
+- Telegram-driven auto-runs and manual Automation-tab runs must be mutually exclusive
+- while a Telegram-driven auto-run is active, manual `Start run` and `Dry run step` actions should be rejected or disabled
+- while the queue is `paused`, manual automation actions should remain disabled until the user either resumes the queue or clears the pending queue state
+- if a manual run is already active, Telegram-triggered auto-run processing should not start until the shared automation slot is idle again
 
 ## Testing
 
