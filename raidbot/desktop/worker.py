@@ -385,14 +385,14 @@ class DesktopBotWorker:
                 context is not None or reason in {"browser_startup_failure", "chrome_open_failed"}
             ),
         )
-        if self._active_auto_sequence_id is not None:
+        if context is not None and self._active_auto_sequence_id is not None:
             self._emit(
                 "automation_run_failed",
                 sequence_id=self._active_auto_sequence_id,
                 url=item.normalized_url,
                 reason=reason,
             )
-        self._active_auto_sequence_id = None
+            self._active_auto_sequence_id = None
 
     def _update_automation_status(
         self,

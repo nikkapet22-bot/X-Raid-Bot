@@ -1919,6 +1919,80 @@ def test_worker_keeps_failure_event_sequence_id_stable_when_config_changes_mid_r
     ]
 
 
+def test_worker_does_not_corrupt_active_run_event_when_later_admission_fails_mid_run(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 46, 55)
+    storage = FakeStorage(base_dir=tmp_path)
+    AutomationStorage(tmp_path).save_sequences([build_sequence("seq-1")])
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    worker_ref: dict[str, object] = {}
+    default_sequence = {"value": "seq-1"}
+    second_message = build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/999")
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=49,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+            on_run_sequence=lambda _sequence, _handle: (
+                default_sequence.__setitem__("value", None),
+                worker_ref["worker"]._handle_message(second_message),
+                None,
+            )[2],
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker_ref["worker"] = worker
+    worker._service = worker._build_service(worker.config)
+    worker._find_default_automation_sequence = lambda: (
+        build_sequence(default_sequence["value"]) if default_sequence["value"] else None
+    )
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123")
+    )
+
+    assert outcome.kind == "job_detected"
+    run_events = [event for event in events if event["type"].startswith("automation_run_")]
+    assert run_events == [
+        {
+            "type": "automation_run_started",
+            "sequence_id": "seq-1",
+            "url": "https://x.com/i/status/123",
+            "window_handle": 49,
+        },
+        {
+            "type": "automation_run_succeeded",
+            "sequence_id": "seq-1",
+            "url": "https://x.com/i/status/123",
+        },
+    ]
+
+
 def test_worker_build_service_uses_config_default_actions() -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 47, 0)
