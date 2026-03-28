@@ -44,6 +44,24 @@ def test_automation_runtime_available_returns_windows_only_on_non_windows(monkey
     assert called is False
 
 
+def test_automation_runtime_available_returns_false_for_native_importerror(monkeypatch) -> None:
+    from raidbot.desktop.automation.platform import automation_runtime_available
+
+    def fake_import_module(_name: str):
+        raise ImportError("DLL load failed while importing cv2")
+
+    monkeypatch.setattr(
+        "raidbot.desktop.automation.platform.importlib.import_module",
+        fake_import_module,
+    )
+    monkeypatch.setattr("raidbot.desktop.automation.platform.sys.platform", "win32")
+
+    available, reason = automation_runtime_available()
+
+    assert available is False
+    assert reason == "DLL load failed while importing cv2"
+
+
 def test_automation_runtime_available_returns_true_on_windows_when_dependencies_exist(
     monkeypatch,
 ) -> None:
