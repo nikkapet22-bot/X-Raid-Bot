@@ -189,6 +189,25 @@ class FailingChromeOpener:
         raise RuntimeError("browser_startup_failure")
 
 
+class FlakyChromeOpener:
+    def __init__(self, *_, **kwargs) -> None:
+        self.profile_directory = kwargs.get("profile_directory")
+        self.open_calls: list[tuple[str, int | None]] = []
+        self.failures_remaining = 1
+
+    def open(self, url: str, *, window_handle: int | None = None) -> OpenedRaidContext:
+        self.open_calls.append((url, window_handle))
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            raise RuntimeError("browser_startup_failure")
+        return OpenedRaidContext(
+            normalized_url=url,
+            opened_at=1.0,
+            window_handle=window_handle,
+            profile_directory=self.profile_directory or "",
+        )
+
+
 class FakeListener:
     def __init__(self, on_connection_state_change=None) -> None:
         self.on_connection_state_change = on_connection_state_change
@@ -578,6 +597,77 @@ def test_worker_leaves_pending_queue_unopened_when_auto_run_is_disabled_mid_run(
         "session_closed",
     ]
 
+
+def test_worker_clear_automation_queue_preserves_running_state(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 5, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    AutomationStorage(tmp_path).save_sequences([build_sequence()])
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    worker_ref: dict[str, object] = {}
+    second_message = build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/555")
+    clear_checked = {"value": False}
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+
+        def on_run_sequence(_sequence, _handle):
+            if not clear_checked["value"]:
+                clear_checked["value"] = True
+                worker_ref["worker"].clear_automation_queue()
+                worker_ref["worker"]._handle_message(second_message)
+                assert runtime is not None
+                assert runtime.run_calls == [("seq-1", 7)]
+            return None
+
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=7,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+            on_run_sequence=on_run_sequence,
+        )
+        return runtime
+
+    worker, _created_services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker_ref["worker"] = worker
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/444"))
+
+    assert outcome.kind == "job_detected"
+    assert opener.open_calls == [
+        ("https://x.com/i/status/444", 7),
+        ("https://x.com/i/status/555", 7),
+    ]
+    assert runtime is not None
+    assert runtime.run_calls == [("seq-1", 7), ("seq-1", 7)]
+    assert runtime.input_driver.close_active_tab_calls == 2
+    assert worker.state.automation_queue_state == "idle"
+    assert worker.state.automation_queue_length == 0
+    assert worker.state.automation_current_url is None
+    assert worker.state.automation_last_error is None
+
+
 def test_worker_does_not_open_chrome_when_auto_run_is_disabled_and_does_not_mark_dedupe(
     tmp_path,
 ) -> None:
@@ -771,6 +861,75 @@ def test_worker_leaves_failed_tab_open_and_pauses_queue(
         "automation_failed",
     ]
     assert any(event == {"type": "error", "message": failure_reason} for event in events)
+
+
+def test_worker_retries_same_url_after_empty_paused_queue_resume(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 11, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    AutomationStorage(tmp_path).save_sequences([build_sequence()])
+    opener = FlakyChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    dedupe_store = TrackingDedupeStore()
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=10,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+    worker._dedupe_store = dedupe_store
+
+    first_outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123"))
+    assert first_outcome.kind == "job_detected"
+    assert opener.open_calls == [("https://x.com/i/status/123", 10)]
+    assert runtime is not None
+    assert runtime.run_calls == []
+    assert dedupe_store.mark_calls == []
+    assert worker.state.automation_queue_state == "paused"
+    assert worker.state.automation_queue_length == 0
+
+    worker.resume_automation_queue()
+    second_outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123"))
+
+    assert second_outcome.kind == "job_detected"
+    assert opener.open_calls == [
+        ("https://x.com/i/status/123", 10),
+        ("https://x.com/i/status/123", 10),
+    ]
+    assert runtime is not None
+    assert runtime.run_calls == [("seq-1", 10)]
+    assert runtime.input_driver.close_active_tab_calls == 1
+    assert dedupe_store.mark_calls == ["https://x.com/i/status/123"]
+    assert worker.state.browser_session_failed == 1
+    assert worker.state.automation_queue_state == "idle"
+    assert worker.state.automation_queue_length == 0
+    assert worker.state.automation_current_url is None
+    assert worker.state.automation_last_error is None
 
 
 def test_worker_resumes_queue_after_failure_and_continues_next_item(tmp_path) -> None:
@@ -1206,6 +1365,75 @@ async def test_worker_apply_config_updates_live_fields_without_restart() -> None
     assert created_services == []
     assert created_pipelines == []
     assert created_listeners == []
+
+
+@pytest.mark.asyncio
+async def test_worker_apply_config_refreshes_auto_run_chrome_opener(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 46, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    AutomationStorage(tmp_path).save_sequences([build_sequence()])
+    created_openers: list[FakeChromeOpener] = []
+    runtime: FakeAutomationRuntime | None = None
+
+    def chrome_opener_factory(**kwargs):
+        opener = FakeChromeOpener(**kwargs)
+        created_openers.append(opener)
+        return opener
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=41,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=chrome_opener_factory,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    first_outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123"))
+    await worker.apply_config(
+        build_config(
+            chrome_profile_directory="Profile 9",
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        )
+    )
+    second_outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/456"))
+
+    assert first_outcome.kind == "job_detected"
+    assert second_outcome.kind == "job_detected"
+    assert [opener.profile_directory for opener in created_openers] == [
+        "Profile 3",
+        "Profile 9",
+    ]
+    assert [opener.open_calls for opener in created_openers] == [
+        [("https://x.com/i/status/123", 41)],
+        [("https://x.com/i/status/456", 41)],
+    ]
+    assert runtime is not None
+    assert runtime.run_calls == [("seq-1", 41), ("seq-1", 41)]
 
 
 def test_worker_build_service_uses_config_default_actions() -> None:

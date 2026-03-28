@@ -70,6 +70,7 @@ class DesktopBotWorker:
         self._automation_runtime: Any | None = None
         self._automation_processor: AutoRunProcessor | None = None
         self._chrome_opener: Any | None = None
+        self._automation_reserved_urls: set[str] = set()
         self._automation_storage = AutomationStorage(Path(self.storage.base_dir))
         self._restart_requested = False
         self._stop_requested = False
@@ -115,6 +116,7 @@ class DesktopBotWorker:
 
     async def apply_config(self, config: DesktopAppConfig) -> None:
         telegram_changed = self._telegram_config_changed(config)
+        profile_changed = self.config.chrome_profile_directory != config.chrome_profile_directory
         self.config = config
 
         if telegram_changed:
@@ -131,6 +133,8 @@ class DesktopBotWorker:
             if hasattr(self._service, "default_requirements"):
                 self._service.default_requirements = self._default_requirements(config)
 
+        if profile_changed:
+            self._chrome_opener = None
         self._update_pipeline_profile_directory(config.chrome_profile_directory)
 
     def _handle_message(self, message) -> Any:
@@ -146,6 +150,13 @@ class DesktopBotWorker:
             return detection
 
         self._record_detection_result(detection)
+        if detection.job.normalized_url in self._automation_reserved_urls:
+            duplicate = RaidDetectionResult(
+                kind="duplicate",
+                normalized_url=detection.job.normalized_url,
+            )
+            self._record_detection_result(duplicate)
+            return duplicate
         processor = self._ensure_automation_processor()
         item = PendingRaidWorkItem(
             normalized_url=detection.job.normalized_url,
@@ -153,7 +164,7 @@ class DesktopBotWorker:
         )
         admitted = processor.admit(item)
         if admitted:
-            self._dedupe_store.mark_if_new(detection.job.normalized_url)
+            self._automation_reserved_urls.add(detection.job.normalized_url)
             self._record_activity(
                 "auto_queued",
                 reason="auto_queued",
@@ -180,9 +191,12 @@ class DesktopBotWorker:
             return
         if processor.state != "paused" and not processor.queue_length:
             return
+        for pending_item in processor.pending_items:
+            self._automation_reserved_urls.discard(pending_item.normalized_url)
         if processor.queue_length:
             processor._pending.clear()
-        processor._state = "idle"
+        if processor.state in {"paused", "queued"} and not processor.queue_length:
+            processor._state = "idle"
         self._sync_automation_status()
 
     def _handle_connection_state_change(self, state: str) -> None:
@@ -262,7 +276,13 @@ class DesktopBotWorker:
         window,
     ):
         opener = self._build_chrome_opener()
-        return opener.open(item.normalized_url, window_handle=getattr(window, "handle", None))
+        context = opener.open(
+            item.normalized_url,
+            window_handle=getattr(window, "handle", None),
+        )
+        self._dedupe_store.mark_if_new(item.normalized_url)
+        self._automation_reserved_urls.discard(item.normalized_url)
+        return context
 
     def _execute_automation_sequence(
         self,
@@ -331,6 +351,7 @@ class DesktopBotWorker:
         reason: str,
         _context,
     ) -> None:
+        self._automation_reserved_urls.discard(item.normalized_url)
         self._record_activity(
             "automation_failed",
             reason=reason,
