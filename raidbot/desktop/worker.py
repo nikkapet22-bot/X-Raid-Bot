@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
-from pathlib import Path
 import time
 from typing import Any
 
@@ -11,10 +10,10 @@ from raidbot.browser.executors.noop import NoOpRaidExecutor
 from raidbot.browser.pipeline import BrowserPipeline
 from raidbot.chrome import ChromeOpener
 from raidbot.dedupe import InMemoryOpenedUrlStore
+from raidbot.desktop.bot_actions.sequence import build_bot_action_sequence
 from raidbot.desktop.chrome_profiles import detect_chrome_environment
 from raidbot.desktop.automation.autorun import AutoRunProcessor, PendingRaidWorkItem
 from raidbot.desktop.automation.runtime import AutomationRuntime
-from raidbot.desktop.automation.storage import AutomationStorage
 from raidbot.desktop.automation.windowing import find_existing_chrome_window
 from raidbot.desktop.models import (
     ActivityEntry,
@@ -77,7 +76,7 @@ class DesktopBotWorker:
         self._chrome_opener: Any | None = None
         self._automation_reserved_urls: set[str] = set()
         self._active_auto_sequence_id: str | None = None
-        self._automation_storage = AutomationStorage(Path(self.storage.base_dir))
+        self._bot_action_sequence_error: str | None = None
         self._restart_requested = False
         self._stop_requested = False
 
@@ -246,11 +245,7 @@ class DesktopBotWorker:
         self._automation_runtime = self._build_automation_runtime()
         self._automation_processor = AutoRunProcessor(
             auto_run_enabled=lambda: self.config.auto_run_enabled,
-            default_sequence_id=lambda: (
-                self.config.default_auto_sequence_id
-                if self._find_default_automation_sequence() is not None
-                else None
-            ),
+            default_sequence_id=self._bot_action_sequence_id,
             pre_open_check=lambda _item: self._find_existing_chrome_window(),
             open_raid=self._open_automation_raid,
             execute_raid=self._execute_automation_sequence,
@@ -281,14 +276,27 @@ class DesktopBotWorker:
             self.config.chrome_profile_directory,
         )
 
-    def _find_default_automation_sequence(self):
-        sequence_id = self.config.default_auto_sequence_id
-        if not sequence_id:
+    def _bot_action_sequence_id(self) -> str | None:
+        sequence = self._build_active_bot_action_sequence()
+        if sequence is None:
             return None
-        for sequence in self._automation_storage.load_sequences():
-            if getattr(sequence, "id", None) == sequence_id:
-                return sequence
-        return None
+        return sequence.id
+
+    def _build_active_bot_action_sequence(self):
+        enabled_slots = tuple(slot for slot in self.config.bot_action_slots if slot.enabled)
+        if not enabled_slots:
+            self._bot_action_sequence_error = "bot_action_not_configured"
+            return None
+        if any(slot.template_path is None for slot in enabled_slots):
+            self._bot_action_sequence_error = "captured_image_missing"
+            return None
+        self._bot_action_sequence_error = None
+        return build_bot_action_sequence(enabled_slots)
+
+    def _translate_automation_reason(self, reason: str | None) -> str | None:
+        if reason != "default_sequence_missing":
+            return reason
+        return self._bot_action_sequence_error or "bot_action_not_configured"
 
     def _open_automation_raid(
         self,
@@ -313,9 +321,9 @@ class DesktopBotWorker:
         runtime = self._automation_runtime
         if runtime is None:
             return False, "automation_runtime_unavailable"
-        sequence = self._find_default_automation_sequence()
-        if sequence is None or getattr(sequence, "id", None) != sequence_id:
-            return False, "default_sequence_missing"
+        sequence = self._build_active_bot_action_sequence()
+        if sequence is None or sequence.id != sequence_id:
+            return False, self._translate_automation_reason("default_sequence_missing")
         self._record_activity(
             "automation_started",
             reason="automation_started",
@@ -375,6 +383,7 @@ class DesktopBotWorker:
         reason: str,
         context,
     ) -> None:
+        reason = self._translate_automation_reason(reason) or "automation_execution_failed"
         self._automation_reserved_urls.discard(item.normalized_url)
         self._record_activity(
             "automation_failed",
@@ -401,6 +410,7 @@ class DesktopBotWorker:
         current_url: str | None,
         last_error: str | None,
     ) -> None:
+        last_error = self._translate_automation_reason(last_error)
         previous_state = self.state.automation_queue_state
         previous_length = self.state.automation_queue_length
         previous_url = self.state.automation_current_url

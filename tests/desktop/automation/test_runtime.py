@@ -23,10 +23,13 @@ class FakeSequenceRunner:
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs
         self.request_stop_called = False
+        self.run_result = RunResult(status="completed")
 
     def run_sequence(self, sequence: AutomationSequence, *, selected_window: WindowInfo | None):
         self.run_call = (sequence.id, getattr(selected_window, "handle", None))
-        return RunResult(status="completed", window_handle=getattr(selected_window, "handle", None))
+        if self.run_result.window_handle is None:
+            self.run_result.window_handle = getattr(selected_window, "handle", None)
+        return self.run_result
 
     def dry_run_step(
         self,
@@ -126,3 +129,34 @@ def test_runtime_fails_closed_when_selected_window_handle_is_missing() -> None:
 
     assert result.status == "failed"
     assert result.failure_reason == "target_window_not_found"
+
+
+def test_runtime_preserves_ui_did_not_change_failure_from_runner() -> None:
+    window = build_window()
+    created: list[FakeSequenceRunner] = []
+
+    def sequence_runner_factory(**kwargs):
+        runner = FakeSequenceRunner(**kwargs)
+        runner.run_result = RunResult(
+            status="failed",
+            failure_reason="ui_did_not_change",
+            window_handle=window.handle,
+            step_index=0,
+        )
+        created.append(runner)
+        return runner
+
+    runtime = AutomationRuntime(
+        emit_event=lambda _event: None,
+        window_manager_factory=lambda: FakeWindowManager([window]),
+        capture_factory=lambda: object(),
+        matcher_factory=lambda: object(),
+        input_driver_factory=lambda: object(),
+        sequence_runner_factory=sequence_runner_factory,
+    )
+
+    result = runtime.run_sequence(build_sequence(), selected_window_handle=window.handle)
+
+    assert result.status == "failed"
+    assert result.failure_reason == "ui_did_not_change"
+    assert created[0].run_call == ("seq-1", window.handle)

@@ -38,13 +38,7 @@ class AutomationRuntime:
         selected_window = self._selected_window(selected_window_handle)
         if selected_window is _MISSING_SELECTED_WINDOW:
             return self._run_result(status="failed", failure_reason="target_window_not_found")
-        runner = self.sequence_runner_factory(
-            window_manager=self.window_manager,
-            capture=self.capture_factory(),
-            matcher=self.matcher_factory(),
-            input_driver=self.input_driver_factory(),
-            emit_event=self.emit_event,
-        )
+        runner = self._build_runner()
         self._active_runner = runner
         return runner.run_sequence(sequence, selected_window=selected_window)
 
@@ -52,13 +46,7 @@ class AutomationRuntime:
         selected_window = self._selected_window(selected_window_handle)
         if selected_window is _MISSING_SELECTED_WINDOW:
             return self._run_result(status="failed", failure_reason="target_window_not_found")
-        runner = self.sequence_runner_factory(
-            window_manager=self.window_manager,
-            capture=self.capture_factory(),
-            matcher=self.matcher_factory(),
-            input_driver=self.input_driver_factory(),
-            emit_event=self.emit_event,
-        )
+        runner = self._build_runner()
         self._active_runner = runner
         return runner.dry_run_step(
             sequence,
@@ -69,6 +57,15 @@ class AutomationRuntime:
     def request_stop(self) -> None:
         if self._active_runner is not None and hasattr(self._active_runner, "request_stop"):
             self._active_runner.request_stop()
+
+    def _build_runner(self):
+        return self.sequence_runner_factory(
+            window_manager=self.window_manager,
+            capture=self.capture_factory(),
+            matcher=self.matcher_factory(),
+            input_driver=self.input_driver_factory(),
+            emit_event=self.emit_event,
+        )
 
     def _selected_window(self, selected_window_handle: int | None):
         if selected_window_handle is None:

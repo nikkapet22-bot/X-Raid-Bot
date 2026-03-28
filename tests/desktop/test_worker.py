@@ -14,6 +14,7 @@ from raidbot.desktop.automation.storage import AutomationStorage
 from raidbot.desktop.automation.windowing import WindowInfo
 from raidbot.desktop.models import (
     ActivityEntry,
+    BotActionSlotConfig,
     BotRuntimeState,
     DesktopAppConfig,
     DesktopAppState,
@@ -393,6 +394,33 @@ def build_sequence(sequence_id: str = "seq-1") -> AutomationSequence:
     )
 
 
+def build_bot_action_slots(
+    *,
+    enabled_keys: tuple[str, ...] = ("slot_1_r",),
+    missing_template_keys: tuple[str, ...] = (),
+) -> tuple[BotActionSlotConfig, ...]:
+    slots: list[BotActionSlotConfig] = []
+    for key, label in (
+        ("slot_1_r", "R"),
+        ("slot_2_l", "L"),
+        ("slot_3_r", "R"),
+        ("slot_4_b", "B"),
+    ):
+        enabled = key in enabled_keys
+        template_path = None
+        if enabled and key not in missing_template_keys:
+            template_path = Path(f"captures/{key}.png")
+        slots.append(
+            BotActionSlotConfig(
+                key=key,
+                label=label,
+                enabled=enabled,
+                template_path=template_path,
+            )
+        )
+    return tuple(slots)
+
+
 def test_worker_records_sender_rejected_detection() -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 0, 0)
@@ -429,7 +457,6 @@ def test_worker_queues_detected_links_and_processes_fifo(tmp_path) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 2, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     first_url = "https://x.com/i/status/111"
     second_url = "https://x.com/i/status/222"
     first_message = build_message(f"Likes 10 | 8 [%]\n\n{first_url}")
@@ -461,7 +488,9 @@ def test_worker_queues_detected_links_and_processes_fifo(tmp_path) -> None:
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(
+                enabled_keys=("slot_1_r", "slot_3_r")
+            ),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -491,8 +520,8 @@ def test_worker_queues_detected_links_and_processes_fifo(tmp_path) -> None:
     ]
     assert runtime is not None
     assert runtime.run_calls == [
-        ("seq-1", 7),
-        ("seq-1", 7),
+        ("bot-actions", 7),
+        ("bot-actions", 7),
     ]
     assert runtime.input_driver.close_active_tab_calls == 2
     assert worker.state.automation_queue_state == "idle"
@@ -528,8 +557,8 @@ def test_worker_queues_detected_links_and_processes_fifo(tmp_path) -> None:
     assert queue_states == ["queued", "running", "queued", "running", "idle"]
     assert queue_lengths == [1, 0, 1, 0]
     assert current_urls == [first_url, None, second_url, None]
-    assert [event["sequence_id"] for event in started] == ["seq-1", "seq-1"]
-    assert [event["sequence_id"] for event in succeeded] == ["seq-1", "seq-1"]
+    assert [event["sequence_id"] for event in started] == ["bot-actions", "bot-actions"]
+    assert [event["sequence_id"] for event in succeeded] == ["bot-actions", "bot-actions"]
 
 
 def test_worker_leaves_auto_run_queued_while_manual_automation_is_active_and_resumes_after_release(
@@ -538,7 +567,6 @@ def test_worker_leaves_auto_run_queued_while_manual_automation_is_active_and_res
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 3, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
     manual_run_active = {"value": True}
@@ -563,7 +591,7 @@ def test_worker_leaves_auto_run_queued_while_manual_automation_is_active_and_res
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -589,7 +617,7 @@ def test_worker_leaves_auto_run_queued_while_manual_automation_is_active_and_res
     worker.notify_manual_automation_finished()
 
     assert opener.open_calls == [("https://x.com/i/status/123", 9)]
-    assert runtime.run_calls == [("seq-1", 9)]
+    assert runtime.run_calls == [("bot-actions", 9)]
     assert worker.state.automation_queue_state == "idle"
     assert worker.state.automation_queue_length == 0
 
@@ -598,7 +626,6 @@ def test_worker_applies_auto_run_settle_delay_before_running_sequence(tmp_path) 
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 4, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
     calls: list[tuple[str, float | int | None]] = []
@@ -624,7 +651,7 @@ def test_worker_applies_auto_run_settle_delay_before_running_sequence(tmp_path) 
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
             auto_run_settle_ms=2200,
         ),
         service_factory=lambda config: FakeService(
@@ -642,7 +669,7 @@ def test_worker_applies_auto_run_settle_delay_before_running_sequence(tmp_path) 
     assert outcome.kind == "job_detected"
     assert opener.open_calls == [("https://x.com/i/status/123", 17)]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 17)]
+    assert runtime.run_calls == [("bot-actions", 17)]
     assert calls == [("wait", 2.2), ("run", 17)]
 
 
@@ -650,7 +677,6 @@ def test_worker_fails_safe_when_owned_chrome_window_cannot_be_proven(tmp_path) -
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 5, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
 
@@ -683,7 +709,7 @@ def test_worker_fails_safe_when_owned_chrome_window_cannot_be_proven(tmp_path) -
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -712,7 +738,6 @@ def test_worker_leaves_pending_queue_unopened_when_auto_run_is_disabled_mid_run(
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 4, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     first_url = "https://x.com/i/status/333"
     second_url = "https://x.com/i/status/444"
     first_message = build_message(f"Likes 10 | 8 [%]\n\n{first_url}")
@@ -744,7 +769,7 @@ def test_worker_leaves_pending_queue_unopened_when_auto_run_is_disabled_mid_run(
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -769,7 +794,7 @@ def test_worker_leaves_pending_queue_unopened_when_auto_run_is_disabled_mid_run(
     assert outcome.kind == "job_detected"
     assert opener.open_calls == [(first_url, 11)]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 11)]
+    assert runtime.run_calls == [("bot-actions", 11)]
     assert runtime.input_driver.close_active_tab_calls == 1
     assert worker.state.automation_queue_state == "queued"
     assert worker.state.automation_queue_length == 1
@@ -790,7 +815,6 @@ def test_worker_clear_automation_queue_preserves_running_state(tmp_path) -> None
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 5, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
     worker_ref: dict[str, object] = {}
@@ -806,7 +830,7 @@ def test_worker_clear_automation_queue_preserves_running_state(tmp_path) -> None
                 worker_ref["worker"].clear_automation_queue()
                 worker_ref["worker"]._handle_message(second_message)
                 assert runtime is not None
-                assert runtime.run_calls == [("seq-1", 7)]
+                assert runtime.run_calls == [("bot-actions", 7)]
             return None
 
         runtime = FakeAutomationRuntime(
@@ -828,7 +852,7 @@ def test_worker_clear_automation_queue_preserves_running_state(tmp_path) -> None
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -848,7 +872,7 @@ def test_worker_clear_automation_queue_preserves_running_state(tmp_path) -> None
         ("https://x.com/i/status/555", 7),
     ]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 7), ("seq-1", 7)]
+    assert runtime.run_calls == [("bot-actions", 7), ("bot-actions", 7)]
     assert runtime.input_driver.close_active_tab_calls == 2
     assert worker.state.automation_queue_state == "idle"
     assert worker.state.automation_queue_length == 0
@@ -874,7 +898,7 @@ def test_worker_uses_legacy_pipeline_path_when_auto_run_is_disabled(tmp_path) ->
         timestamp,
         config=build_config(
             auto_run_enabled=False,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -925,7 +949,7 @@ def test_worker_preserves_reserved_url_duplicate_guard_when_auto_run_is_disabled
         timestamp,
         config=build_config(
             auto_run_enabled=False,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -954,7 +978,6 @@ def test_worker_records_browser_session_failed_result(tmp_path) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 10, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     opener = FailingChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
 
@@ -978,7 +1001,7 @@ def test_worker_records_browser_session_failed_result(tmp_path) -> None:
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1015,7 +1038,7 @@ def test_worker_records_browser_session_failed_result(tmp_path) -> None:
     )
 
 
-def test_worker_missing_default_sequence_pauses_without_run_failed_event_or_open_failure(
+def test_worker_missing_bot_action_slots_pause_without_run_failed_event_or_open_failure(
     tmp_path,
 ) -> None:
     events: list[dict] = []
@@ -1028,7 +1051,7 @@ def test_worker_missing_default_sequence_pauses_without_run_failed_event_or_open
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-missing",
+            bot_action_slots=build_bot_action_slots(enabled_keys=()),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1048,7 +1071,7 @@ def test_worker_missing_default_sequence_pauses_without_run_failed_event_or_open
     assert worker.state.open_failures == 0
     assert worker.state.automation_queue_state == "paused"
     assert worker.state.automation_queue_length == 0
-    assert worker.state.automation_last_error == "default_sequence_missing"
+    assert worker.state.automation_last_error == "bot_action_not_configured"
 
 
 @pytest.mark.parametrize("failure_reason", ["navigation_failure", "page_ready_timeout"])
@@ -1059,7 +1082,6 @@ def test_worker_leaves_failed_tab_open_and_pauses_queue(
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 12, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
 
@@ -1086,7 +1108,7 @@ def test_worker_leaves_failed_tab_open_and_pauses_queue(
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1102,7 +1124,7 @@ def test_worker_leaves_failed_tab_open_and_pauses_queue(
     assert outcome.kind == "job_detected"
     assert opener.open_calls == [("https://x.com/i/status/123", 13)]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 13)]
+    assert runtime.run_calls == [("bot-actions", 13)]
     assert runtime.input_driver.close_active_tab_calls == 0
     assert worker.state.raids_opened == 1
     assert worker.state.last_successful_raid_open_at == "2026-03-27T10:12:00"
@@ -1126,7 +1148,6 @@ def test_worker_retries_same_url_after_empty_paused_queue_resume(tmp_path) -> No
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 11, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     opener = FlakyChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
     dedupe_store = TrackingDedupeStore()
@@ -1151,7 +1172,7 @@ def test_worker_retries_same_url_after_empty_paused_queue_resume(tmp_path) -> No
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1181,7 +1202,7 @@ def test_worker_retries_same_url_after_empty_paused_queue_resume(tmp_path) -> No
         ("https://x.com/i/status/123", 10),
     ]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 10)]
+    assert runtime.run_calls == [("bot-actions", 10)]
     assert runtime.input_driver.close_active_tab_calls == 1
     assert dedupe_store.mark_calls == ["https://x.com/i/status/123"]
     assert worker.state.browser_session_failed == 1
@@ -1195,16 +1216,15 @@ def test_worker_resumes_queue_after_failure_and_continues_next_item(tmp_path) ->
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 15, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
     worker_ref: dict[str, object] = {}
     second_message = build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/444")
 
     def fail_first_run(sequence: AutomationSequence, _handle: int | None):
-        if sequence.id == "seq-1" and len(opener.open_calls) == 1:
+        if sequence.id == "bot-actions" and len(opener.open_calls) == 1:
             worker_ref["worker"]._handle_message(second_message)
-            return RunResult(status="failed", failure_reason="executor_failed")
+            return RunResult(status="failed", failure_reason="ui_did_not_change")
         return RunResult(status="completed", window_handle=0)
 
     def runtime_factory(_emit_event):
@@ -1228,7 +1248,7 @@ def test_worker_resumes_queue_after_failure_and_continues_next_item(tmp_path) ->
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1249,7 +1269,7 @@ def test_worker_resumes_queue_after_failure_and_continues_next_item(tmp_path) ->
         ("https://x.com/i/status/444", 17),
     ]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 17), ("seq-1", 17)]
+    assert runtime.run_calls == [("bot-actions", 17), ("bot-actions", 17)]
     assert runtime.input_driver.close_active_tab_calls == 1
     assert worker.state.automation_queue_state == "idle"
     assert worker.state.automation_queue_length == 0
@@ -1268,11 +1288,115 @@ def test_worker_resumes_queue_after_failure_and_continues_next_item(tmp_path) ->
     ]
 
 
+def test_worker_rejects_bot_action_queue_when_no_slots_are_enabled(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 15, 30)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=18,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ]
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            bot_action_slots=build_bot_action_slots(enabled_keys=()),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/111"))
+
+    assert outcome.kind == "job_detected"
+    assert opener.open_calls == []
+    assert runtime is None or runtime.run_calls == []
+    assert worker.state.browser_session_failed == 0
+    assert worker.state.open_failures == 0
+    assert worker.state.automation_queue_state == "paused"
+    assert worker.state.automation_queue_length == 0
+    assert worker.state.automation_last_error == "bot_action_not_configured"
+
+
+def test_worker_refuses_to_open_chrome_when_bot_action_captured_image_is_missing(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 15, 45)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=19,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ]
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            bot_action_slots=build_bot_action_slots(
+                enabled_keys=("slot_1_r", "slot_2_l"),
+                missing_template_keys=("slot_2_l",),
+            ),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/222"))
+
+    assert outcome.kind == "job_detected"
+    assert opener.open_calls == []
+    assert runtime is None or runtime.run_calls == []
+    assert worker.state.browser_session_failed == 0
+    assert worker.state.open_failures == 0
+    assert worker.state.automation_queue_state == "paused"
+    assert worker.state.automation_queue_length == 0
+    assert worker.state.automation_last_error == "captured_image_missing"
+
+
 def test_worker_clear_automation_queue_preserves_failed_tab(tmp_path) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 20, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
     worker_ref: dict[str, object] = {}
@@ -1299,7 +1423,7 @@ def test_worker_clear_automation_queue_preserves_failed_tab(tmp_path) -> None:
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1314,7 +1438,7 @@ def test_worker_clear_automation_queue_preserves_failed_tab(tmp_path) -> None:
     def fail_first_run(sequence: AutomationSequence, _handle: int | None):
         if len(opener.open_calls) == 1:
             worker_ref["worker"]._handle_message(second_message)
-            return RunResult(status="failed", failure_reason="executor_failed")
+            return RunResult(status="failed", failure_reason="ui_did_not_change")
         return RunResult(status="completed", window_handle=0)
 
     runtime_factory_called = {"value": False}
@@ -1349,7 +1473,7 @@ def test_worker_clear_automation_queue_preserves_failed_tab(tmp_path) -> None:
         ("https://x.com/i/status/777", 23),
     ]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 23), ("seq-1", 23)]
+    assert runtime.run_calls == [("bot-actions", 23), ("bot-actions", 23)]
     assert runtime.input_driver.close_active_tab_calls == 1
     assert worker.state.automation_queue_state == "idle"
     assert worker.state.automation_queue_length == 0
@@ -1370,7 +1494,7 @@ def test_worker_clear_automation_queue_preserves_failed_tab(tmp_path) -> None:
     ]
 
 
-def test_worker_resume_automation_queue_recovers_after_missing_default_sequence(
+def test_worker_resume_automation_queue_recovers_after_bot_action_slots_are_configured(
     tmp_path,
 ) -> None:
     events: list[dict] = []
@@ -1401,7 +1525,7 @@ def test_worker_resume_automation_queue_recovers_after_missing_default_sequence(
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(enabled_keys=()),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1413,7 +1537,7 @@ def test_worker_resume_automation_queue_recovers_after_missing_default_sequence(
     worker._service = worker._build_service(worker.config)
 
     first_outcome = worker._handle_message(first_message)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
+    worker.config.bot_action_slots = build_bot_action_slots()
     worker.resume_automation_queue()
     second_outcome = worker._handle_message(second_message)
 
@@ -1421,7 +1545,7 @@ def test_worker_resume_automation_queue_recovers_after_missing_default_sequence(
     assert second_outcome.kind == "job_detected"
     assert opener.open_calls == [("https://x.com/i/status/999", 29)]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 29)]
+    assert runtime.run_calls == [("bot-actions", 29)]
     assert runtime.input_driver.close_active_tab_calls == 1
     assert worker.state.automation_queue_state == "idle"
     assert worker.state.automation_queue_length == 0
@@ -1442,7 +1566,6 @@ def test_worker_preserves_dedupe_across_service_rebuilds(tmp_path) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 25, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
 
@@ -1466,7 +1589,7 @@ def test_worker_preserves_dedupe_across_service_rebuilds(tmp_path) -> None:
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         chrome_environment_factory=lambda: SimpleNamespace(
             chrome_path=Path(r"C:\Chrome\chrome.exe"),
@@ -1486,7 +1609,7 @@ def test_worker_preserves_dedupe_across_service_rebuilds(tmp_path) -> None:
     assert second_outcome.kind == "duplicate"
     assert opener.open_calls == [("https://x.com/i/status/123", 31)]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 31)]
+    assert runtime.run_calls == [("bot-actions", 31)]
     assert worker.state.duplicates_skipped == 1
 
 
@@ -1631,7 +1754,6 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener(tmp_path) ->
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 46, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     created_openers: list[FakeChromeOpener] = []
     runtime: FakeAutomationRuntime | None = None
 
@@ -1660,7 +1782,7 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener(tmp_path) ->
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1676,7 +1798,7 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener(tmp_path) ->
         build_config(
             chrome_profile_directory="Profile 9",
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         )
     )
     second_outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/456"))
@@ -1692,7 +1814,7 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener(tmp_path) ->
         [("https://x.com/i/status/456", 41)],
     ]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 41), ("seq-1", 41)]
+    assert runtime.run_calls == [("bot-actions", 41), ("bot-actions", 41)]
 
 
 @pytest.mark.asyncio
@@ -1702,7 +1824,6 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener_on_telegram_
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 46, 30)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence()])
     created_openers: list[FakeChromeOpener] = []
     runtime: FakeAutomationRuntime | None = None
 
@@ -1731,7 +1852,7 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener_on_telegram_
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1749,7 +1870,7 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener_on_telegram_
             telegram_api_hash="new-hash",
             chrome_profile_directory="Profile 9",
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         )
     )
     restart_requested = worker._restart_requested
@@ -1770,7 +1891,7 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener_on_telegram_
         [("https://x.com/i/status/654", 43)],
     ]
     assert runtime is not None
-    assert runtime.run_calls == [("seq-1", 43), ("seq-1", 43)]
+    assert runtime.run_calls == [("bot-actions", 43), ("bot-actions", 43)]
 
 
 def test_worker_keeps_success_event_sequence_id_stable_when_config_changes_mid_run(
@@ -1779,9 +1900,6 @@ def test_worker_keeps_success_event_sequence_id_stable_when_config_changes_mid_r
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 46, 45)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences(
-        [build_sequence("seq-1"), build_sequence("seq-2")]
-    )
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
     worker_ref: dict[str, object] = {}
@@ -1799,8 +1917,8 @@ def test_worker_keeps_success_event_sequence_id_stable_when_config_changes_mid_r
             ],
             on_run_sequence=lambda _sequence, _handle: setattr(
                 worker_ref["worker"].config,
-                "default_auto_sequence_id",
-                "seq-2",
+                "bot_action_slots",
+                build_bot_action_slots(enabled_keys=("slot_2_l",)),
             ),
         )
         return runtime
@@ -1811,7 +1929,7 @@ def test_worker_keeps_success_event_sequence_id_stable_when_config_changes_mid_r
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1832,13 +1950,13 @@ def test_worker_keeps_success_event_sequence_id_stable_when_config_changes_mid_r
     assert run_events == [
         {
             "type": "automation_run_started",
-            "sequence_id": "seq-1",
+            "sequence_id": "bot-actions",
             "url": "https://x.com/i/status/321",
             "window_handle": 45,
         },
         {
             "type": "automation_run_succeeded",
-            "sequence_id": "seq-1",
+            "sequence_id": "bot-actions",
             "url": "https://x.com/i/status/321",
         },
     ]
@@ -1850,9 +1968,6 @@ def test_worker_keeps_failure_event_sequence_id_stable_when_config_changes_mid_r
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 46, 50)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences(
-        [build_sequence("seq-1"), build_sequence("seq-2")]
-    )
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
     worker_ref: dict[str, object] = {}
@@ -1871,8 +1986,8 @@ def test_worker_keeps_failure_event_sequence_id_stable_when_config_changes_mid_r
             on_run_sequence=lambda _sequence, _handle: (
                 setattr(
                     worker_ref["worker"].config,
-                    "default_auto_sequence_id",
-                    "seq-2",
+                    "bot_action_slots",
+                    build_bot_action_slots(enabled_keys=("slot_2_l",)),
                 ),
                 RunResult(status="failed", failure_reason="image_match_not_found"),
             )[1],
@@ -1885,7 +2000,7 @@ def test_worker_keeps_failure_event_sequence_id_stable_when_config_changes_mid_r
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1906,13 +2021,13 @@ def test_worker_keeps_failure_event_sequence_id_stable_when_config_changes_mid_r
     assert run_events == [
         {
             "type": "automation_run_started",
-            "sequence_id": "seq-1",
+            "sequence_id": "bot-actions",
             "url": "https://x.com/i/status/654",
             "window_handle": 47,
         },
         {
             "type": "automation_run_failed",
-            "sequence_id": "seq-1",
+            "sequence_id": "bot-actions",
             "url": "https://x.com/i/status/654",
             "reason": "image_match_not_found",
         },
@@ -1925,11 +2040,9 @@ def test_worker_does_not_corrupt_active_run_event_when_later_admission_fails_mid
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 46, 55)
     storage = FakeStorage(base_dir=tmp_path)
-    AutomationStorage(tmp_path).save_sequences([build_sequence("seq-1")])
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime: FakeAutomationRuntime | None = None
     worker_ref: dict[str, object] = {}
-    default_sequence = {"value": "seq-1"}
     second_message = build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/999")
 
     def runtime_factory(_emit_event):
@@ -1944,7 +2057,11 @@ def test_worker_does_not_corrupt_active_run_event_when_later_admission_fails_mid
                 )
             ],
             on_run_sequence=lambda _sequence, _handle: (
-                default_sequence.__setitem__("value", None),
+                setattr(
+                    worker_ref["worker"].config,
+                    "bot_action_slots",
+                    build_bot_action_slots(enabled_keys=()),
+                ),
                 worker_ref["worker"]._handle_message(second_message),
                 None,
             )[2],
@@ -1957,7 +2074,7 @@ def test_worker_does_not_corrupt_active_run_event_when_later_admission_fails_mid
         timestamp,
         config=build_config(
             auto_run_enabled=True,
-            default_auto_sequence_id="seq-1",
+            bot_action_slots=build_bot_action_slots(),
         ),
         service_factory=lambda config: FakeService(
             config,
@@ -1968,9 +2085,6 @@ def test_worker_does_not_corrupt_active_run_event_when_later_admission_fails_mid
     )
     worker_ref["worker"] = worker
     worker._service = worker._build_service(worker.config)
-    worker._find_default_automation_sequence = lambda: (
-        build_sequence(default_sequence["value"]) if default_sequence["value"] else None
-    )
 
     outcome = worker._handle_message(
         build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123")
@@ -1981,13 +2095,13 @@ def test_worker_does_not_corrupt_active_run_event_when_later_admission_fails_mid
     assert run_events == [
         {
             "type": "automation_run_started",
-            "sequence_id": "seq-1",
+            "sequence_id": "bot-actions",
             "url": "https://x.com/i/status/123",
             "window_handle": 49,
         },
         {
             "type": "automation_run_succeeded",
-            "sequence_id": "seq-1",
+            "sequence_id": "bot-actions",
             "url": "https://x.com/i/status/123",
         },
     ]
