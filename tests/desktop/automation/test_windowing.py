@@ -41,6 +41,55 @@ def test_window_manager_reports_focus_failure_for_minimized_window() -> None:
     assert outcome.reason == "window_not_focusable"
 
 
+def test_window_manager_keeps_most_recently_focused_matching_window_across_refreshes() -> None:
+    rounds = iter(
+        [
+            [
+                WindowInfo(
+                    handle=1,
+                    title="X - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                ),
+                WindowInfo(
+                    handle=2,
+                    title="X - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=0.0,
+                ),
+            ],
+            [
+                WindowInfo(
+                    handle=1,
+                    title="X - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=0.0,
+                ),
+                WindowInfo(
+                    handle=2,
+                    title="X - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=0.0,
+                ),
+            ],
+        ]
+    )
+    manager = WindowManager(
+        list_windows=lambda: next(rounds),
+        restore_window=lambda _handle: True,
+        focus_window=lambda _handle: True,
+        clock=iter([10.0, 20.0]).__next__,
+    )
+
+    first = manager.list_chrome_windows()
+    second = manager.list_chrome_windows()
+
+    assert choose_window_for_rule(first, "X - Chrome").handle == 1
+    assert choose_window_for_rule(second, "X - Chrome").handle == 1
+    assert second[0].last_focused_at == 10.0
+    assert second[1].last_focused_at == 0.0
+
+
 def test_input_driver_moves_waits_and_clicks() -> None:
     calls: list[tuple[str, object]] = []
     driver = InputDriver(

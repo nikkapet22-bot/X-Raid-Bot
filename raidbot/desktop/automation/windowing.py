@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from dataclasses import dataclass, replace
 from typing import Callable
 
@@ -37,13 +38,37 @@ class WindowManager:
         list_windows: Callable[[], list[WindowInfo]] | None = None,
         restore_window: Callable[[int], bool] | None = None,
         focus_window: Callable[[int], bool] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._list_windows = list_windows or self._list_windows_win32
         self._restore_window = restore_window or self._restore_window_win32
         self._focus_window = focus_window or self._focus_window_win32
+        self._clock = clock
+        self._focus_history: dict[int, float] = {}
 
     def list_chrome_windows(self) -> list[WindowInfo]:
-        return [window for window in self._list_windows() if "chrome" in window.title.lower()]
+        chrome_windows = [
+            window for window in self._list_windows() if "chrome" in window.title.lower()
+        ]
+        if not chrome_windows:
+            return []
+
+        if self._uses_foreground_sentinel(chrome_windows):
+            now = self._clock()
+            for window in chrome_windows:
+                if window.last_focused_at > 0.0:
+                    self._focus_history[window.handle] = now
+
+        return [
+            replace(
+                window,
+                last_focused_at=max(
+                    window.last_focused_at,
+                    self._focus_history.get(window.handle, 0.0),
+                ),
+            )
+            for window in chrome_windows
+        ]
 
     def ensure_interactable_window(self, window: WindowInfo) -> WindowInteractionOutcome:
         if window.is_minimized and not self._restore_window(window.handle):
@@ -96,3 +121,8 @@ class WindowManager:
         except Exception:
             return False
         return int(win32gui.GetForegroundWindow()) == int(handle)
+
+    def _uses_foreground_sentinel(self, windows: list[WindowInfo]) -> bool:
+        if not windows:
+            return False
+        return all(window.last_focused_at in {0.0, 1.0} for window in windows)
