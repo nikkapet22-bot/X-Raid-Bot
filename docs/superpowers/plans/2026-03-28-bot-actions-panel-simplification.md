@@ -258,13 +258,15 @@ git commit -m "feat: replace automation tab with bot actions panel"
 ```python
 def test_capture_saves_slot_image_to_deterministic_path(tmp_path):
     service = SlotCaptureService(base_dir=tmp_path, snip_image=fake_image)
-    path = service.capture_slot(0)
+    slot = BotActionSlotConfig(key="slot_1_r", label="R")
+    path = service.capture_slot(slot)
     assert path.name == "slot_1_r.png"
 
 
 def test_capture_cancel_keeps_existing_slot_image(tmp_path):
     service = SlotCaptureService(base_dir=tmp_path, snip_image=lambda: None)
-    assert service.capture_slot(0, existing_path=Path("existing.png")) == Path("existing.png")
+    slot = BotActionSlotConfig(key="slot_1_r", label="R")
+    assert service.capture_slot(slot, existing_path=Path("existing.png")) == Path("existing.png")
 ```
 
 - [ ] **Step 2: Run the targeted capture/controller tests to verify they fail**
@@ -282,10 +284,14 @@ Expected:
 
 ```python
 class SlotCaptureService:
-    def capture_slot(self, slot: BotActionSlotConfig) -> Path | None:
+    def capture_slot(
+        self,
+        slot: BotActionSlotConfig,
+        existing_path: Path | None = None,
+    ) -> Path | None:
         image = self.capture_overlay.capture()
         if image is None:
-            return None
+            return existing_path
         target_path = self.base_dir / "bot_actions" / f"{slot.key}.png"
         image.save(str(target_path))
         return target_path
@@ -532,7 +538,7 @@ Expected:
 Run:
 
 ```bash
-python -m pytest -q tests/desktop/test_worker.py -k "bot_actions and failure"
+python -m pytest -q tests/desktop/test_worker.py -k "pauses_remaining_queue_after_first_bot_action_failure"
 ```
 
 Expected:
