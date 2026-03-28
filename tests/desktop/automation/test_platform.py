@@ -24,9 +24,16 @@ def test_automation_runtime_available_reports_missing_optional_dependency(monkey
 def test_automation_runtime_available_returns_windows_only_on_non_windows(monkeypatch) -> None:
     from raidbot.desktop.automation.platform import automation_runtime_available
 
+    called = False
+
+    def fail_import(_name: str):
+        nonlocal called
+        called = True
+        raise AssertionError("imports should not be probed on non-Windows")
+
     monkeypatch.setattr(
         "raidbot.desktop.automation.platform.importlib.import_module",
-        lambda _name: None,
+        fail_import,
     )
     monkeypatch.setattr("raidbot.desktop.automation.platform.sys.platform", "linux")
 
@@ -34,6 +41,7 @@ def test_automation_runtime_available_returns_windows_only_on_non_windows(monkey
 
     assert available is False
     assert reason == "Windows only"
+    assert called is False
 
 
 def test_automation_runtime_available_returns_true_on_windows_when_dependencies_exist(
