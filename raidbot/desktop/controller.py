@@ -81,6 +81,7 @@ class DesktopController(QObject):
     automationSequencesChanged = Signal(object)
     automationRunEvent = Signal(object)
     automationRunStateChanged = Signal(str)
+    botActionRunEvent = Signal(object)
     automationQueueStateChanged = Signal(str)
     automationQueueLengthChanged = Signal(int)
     automationCurrentUrlChanged = Signal(object)
@@ -382,6 +383,11 @@ class DesktopController(QObject):
             "automation_run_failed",
         }:
             self.automationRunEvent.emit(event)
+            self.botActionRunEvent.emit(event)
+        elif event_type == "automation_runtime_event":
+            runtime_event = event.get("event")
+            if isinstance(runtime_event, dict):
+                self.botActionRunEvent.emit(runtime_event)
 
     def _load_automation_sequences(self) -> list[Any]:
         storage = self._load_automation_storage()

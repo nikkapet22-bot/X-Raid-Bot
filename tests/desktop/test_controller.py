@@ -688,6 +688,74 @@ def test_controller_forwards_queue_and_auto_run_worker_events(qtbot) -> None:
     assert len(runner.submitted_coroutines) == 2
 
 
+def test_controller_forwards_bot_action_runtime_worker_events(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    runner = FakeRunner()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(
+            bot_action_slots=(
+                replace(build_config().bot_action_slots[0], enabled=False),
+                replace(build_config().bot_action_slots[1], enabled=True),
+                replace(build_config().bot_action_slots[2], enabled=False),
+                replace(build_config().bot_action_slots[3], enabled=False),
+            )
+        ),
+        worker_factory=worker_factory,
+        runner_factory=lambda: runner,
+    )
+    bot_action_events = []
+    controller.botActionRunEvent.connect(bot_action_events.append)
+
+    controller.start_bot()
+
+    created["worker"].emit_event(
+        {
+            "type": "automation_run_started",
+            "sequence_id": "slot-2-sequence",
+            "url": "https://example.com",
+        }
+    )
+    created["worker"].emit_event(
+        {
+            "type": "automation_runtime_event",
+            "event": {"type": "step_search_started", "step_index": 0},
+        }
+    )
+    created["worker"].emit_event(
+        {
+            "type": "automation_run_succeeded",
+            "sequence_id": "slot-2-sequence",
+            "url": "https://example.com",
+        }
+    )
+
+    qtbot.waitUntil(lambda: len(bot_action_events) == 3)
+
+    assert bot_action_events == [
+        {
+            "type": "automation_run_started",
+            "sequence_id": "slot-2-sequence",
+            "url": "https://example.com",
+        },
+        {"type": "step_search_started", "step_index": 0},
+        {
+            "type": "automation_run_succeeded",
+            "sequence_id": "slot-2-sequence",
+            "url": "https://example.com",
+        },
+    ]
+
+
 def test_controller_rejects_manual_automation_actions_when_queue_owns_slot(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 

@@ -112,6 +112,7 @@ class FakeController(QObject):
     errorRaised = Signal(str)
     automationSequencesChanged = Signal(object)
     automationRunEvent = Signal(object)
+    botActionRunEvent = Signal(object)
     automationRunStateChanged = Signal(str)
     automationQueueStateChanged = Signal(str)
     automationQueueLengthChanged = Signal(int)
@@ -523,8 +524,10 @@ def test_main_window_bot_actions_step_event_shows_and_clears_current_slot(qtbot)
     window = build_window(FakeController(config=config), FakeStorage(config=config))
     qtbot.addWidget(window)
 
-    window.controller.automationRunStateChanged.emit("running")
-    window.controller.automationRunEvent.emit(
+    window.controller.botActionRunEvent.emit(
+        {"type": "automation_run_started", "sequence_id": "seq-1"}
+    )
+    window.controller.botActionRunEvent.emit(
         {"type": "step_search_started", "step_index": 1}
     )
 
@@ -532,7 +535,7 @@ def test_main_window_bot_actions_step_event_shows_and_clears_current_slot(qtbot)
         "Status: Running\nCurrent slot: Slot 2 (L)"
     )
 
-    window.controller.automationRunEvent.emit({"type": "automation_run_succeeded"})
+    window.controller.botActionRunEvent.emit({"type": "automation_run_succeeded"})
 
     assert window.bot_actions_page.status_label.text() == "Status: Idle"
 
@@ -549,14 +552,102 @@ def test_main_window_current_slot_uses_enabled_slot_order(qtbot) -> None:
     window = build_window(FakeController(config=config), FakeStorage(config=config))
     qtbot.addWidget(window)
 
-    window.controller.automationRunStateChanged.emit("running")
-    window.controller.automationRunEvent.emit(
+    window.controller.botActionRunEvent.emit(
+        {"type": "automation_run_started", "sequence_id": "seq-1"}
+    )
+    window.controller.botActionRunEvent.emit(
         {"type": "step_search_started", "step_index": 0}
     )
 
     assert window.bot_actions_page.status_label.text() == (
         "Status: Running\nCurrent slot: Slot 2 (L)"
     )
+
+
+def test_main_window_worker_bot_action_step_event_updates_current_slot(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    class WorkerBackedRunner:
+        def __init__(self) -> None:
+            self.running = False
+
+        def start(self, job) -> None:
+            self.running = True
+
+        def submit(self, job):
+            return None
+
+        def is_running(self) -> bool:
+            return self.running
+
+        def wait_until_stopped(self, timeout: float | None = None) -> bool:
+            self.running = False
+            return True
+
+    class WorkerBackedWorker:
+        def __init__(self, *, emit_event, config, **_kwargs) -> None:
+            self.emit_event = emit_event
+            self.config = config
+
+        async def run(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        async def apply_config(self, config) -> None:
+            self.config = config
+
+        def resume_automation_queue(self) -> None:
+            return None
+
+        def clear_automation_queue(self) -> None:
+            return None
+
+        def notify_manual_automation_finished(self) -> None:
+            return None
+
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], enabled=False),
+            replace(build_config().bot_action_slots[1], enabled=True),
+            replace(build_config().bot_action_slots[2], enabled=False),
+            replace(build_config().bot_action_slots[3], enabled=False),
+        )
+    )
+    storage = FakeStorage(config=config)
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = WorkerBackedWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    controller = DesktopController(
+        storage=storage,
+        config=config,
+        worker_factory=worker_factory,
+        runner_factory=WorkerBackedRunner,
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    controller.start_bot()
+    created["worker"].emit_event(
+        {"type": "automation_run_started", "sequence_id": "slot-2-sequence"}
+    )
+    created["worker"].emit_event(
+        {
+            "type": "automation_runtime_event",
+            "event": {"type": "step_search_started", "step_index": 0},
+        }
+    )
+
+    qtbot.waitUntil(
+        lambda: window.bot_actions_page.status_label.text()
+        == "Status: Running\nCurrent slot: Slot 2 (L)"
+    )
+    controller._runner.running = False
 
 
 def test_main_window_capture_updates_bot_action_slot_via_controller(qtbot) -> None:

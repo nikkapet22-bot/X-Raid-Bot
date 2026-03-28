@@ -60,6 +60,7 @@ class MainWindow(QMainWindow):
         self._bot_actions_status_text = "Idle"
         self._bot_actions_current_slot_text: str | None = None
         self._bot_actions_last_error_text: str | None = None
+        self._bot_actions_run_slots_snapshot: tuple[tuple[int, str], ...] = ()
 
         self.setWindowTitle("Raid Bot")
 
@@ -302,8 +303,7 @@ class MainWindow(QMainWindow):
         self.controller.errorRaised.connect(self._show_bot_actions_error)
         self.controller.configChanged.connect(self._sync_bot_actions_config)
         self.controller.automationQueueStateChanged.connect(self._update_bot_actions_queue_state)
-        self.controller.automationRunStateChanged.connect(self._update_bot_actions_run_state)
-        self.controller.automationRunEvent.connect(self._handle_bot_actions_run_event)
+        self.controller.botActionRunEvent.connect(self._handle_bot_actions_run_event)
 
     def _update_bot_state(self, state: str) -> None:
         self.bot_state = state
@@ -478,15 +478,7 @@ class MainWindow(QMainWindow):
         }
         self._bot_actions_status_text = queue_status_map.get(str(state), "Idle")
         if state == "idle":
-            self._bot_actions_current_slot_text = None
-        self._render_bot_actions_status()
-
-    def _update_bot_actions_run_state(self, state: str) -> None:
-        if state == "running":
-            self._bot_actions_status_text = "Running"
-        elif state == "idle":
-            self._bot_actions_status_text = "Idle"
-            self._bot_actions_current_slot_text = None
+            self._clear_bot_actions_run_snapshot()
         self._render_bot_actions_status()
 
     def _handle_bot_actions_run_event(self, event: dict[str, object]) -> None:
@@ -494,14 +486,15 @@ class MainWindow(QMainWindow):
         if event_type == "automation_run_started":
             self._bot_actions_status_text = "Running"
             self._bot_actions_current_slot_text = None
+            self._snapshot_bot_actions_run_slots()
             self._bot_actions_last_error_text = None
         elif event_type == "automation_run_succeeded":
             self._bot_actions_status_text = "Idle"
-            self._bot_actions_current_slot_text = None
+            self._clear_bot_actions_run_snapshot()
             self._bot_actions_last_error_text = None
         elif event_type in {"automation_run_failed", "step_failed", "target_window_lost"}:
             self._bot_actions_status_text = "Idle"
-            self._bot_actions_current_slot_text = None
+            self._clear_bot_actions_run_snapshot()
             reason = event.get("reason")
             if reason:
                 self._bot_actions_last_error_text = str(reason)
@@ -511,19 +504,25 @@ class MainWindow(QMainWindow):
             )
         self._render_bot_actions_status()
 
+    def _snapshot_bot_actions_run_slots(self) -> None:
+        slots = getattr(self.controller.config, "bot_action_slots", ())
+        self._bot_actions_run_slots_snapshot = tuple(
+            (slot_index + 1, str(slot.label))
+            for slot_index, slot in enumerate(slots)
+            if getattr(slot, "enabled", False)
+        )
+
+    def _clear_bot_actions_run_snapshot(self) -> None:
+        self._bot_actions_run_slots_snapshot = ()
+        self._bot_actions_current_slot_text = None
+
     def _bot_actions_slot_text(self, step_index: object) -> str | None:
         if not isinstance(step_index, int) or step_index < 0:
             return None
-        slots = getattr(self.controller.config, "bot_action_slots", ())
-        enabled_slots = [
-            (slot_index, slot)
-            for slot_index, slot in enumerate(slots)
-            if getattr(slot, "enabled", False)
-        ]
-        if step_index >= len(enabled_slots):
+        if step_index >= len(self._bot_actions_run_slots_snapshot):
             return None
-        slot_index, slot = enabled_slots[step_index]
-        return f"Slot {slot_index + 1} ({slot.label})"
+        slot_number, slot_label = self._bot_actions_run_slots_snapshot[step_index]
+        return f"Slot {slot_number} ({slot_label})"
 
     def _render_bot_actions_status(self) -> None:
         lines = [f"Status: {self._bot_actions_status_text}"]
