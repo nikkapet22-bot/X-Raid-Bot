@@ -32,6 +32,8 @@ class FakeWorker:
         self.run_calls = 0
         self.stop_calls = 0
         self.apply_calls: list[DesktopAppConfig] = []
+        self.resume_calls = 0
+        self.clear_calls = 0
 
     async def run(self) -> None:
         self.run_calls += 1
@@ -42,6 +44,12 @@ class FakeWorker:
     async def apply_config(self, config: DesktopAppConfig) -> None:
         self.config = config
         self.apply_calls.append(config)
+
+    def resume_automation_queue(self) -> None:
+        self.resume_calls += 1
+
+    def clear_automation_queue(self) -> None:
+        self.clear_calls += 1
 
 
 class FakeRunner:
@@ -257,6 +265,36 @@ def test_controller_apply_config_saves_and_live_applies_when_running(qtbot) -> N
     assert len(runner.submitted_coroutines) == 1
 
 
+def test_controller_updates_auto_run_config_through_apply_config(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(
+            auto_run_enabled=False,
+            default_auto_sequence_id=None,
+            auto_run_settle_ms=1500,
+        ),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+    )
+    configs = []
+    controller.configChanged.connect(configs.append)
+
+    controller.set_auto_run_enabled(True)
+    controller.set_default_auto_sequence_id("seq-2")
+    controller.set_auto_run_settle_ms(2750)
+
+    assert storage.saved_configs[-1].auto_run_enabled is True
+    assert storage.saved_configs[-1].default_auto_sequence_id == "seq-2"
+    assert storage.saved_configs[-1].auto_run_settle_ms == 2750
+    assert controller.config.auto_run_enabled is True
+    assert controller.config.default_auto_sequence_id == "seq-2"
+    assert controller.config.auto_run_settle_ms == 2750
+    assert configs[-1] == controller.config
+
+
 def test_controller_stop_bot_submits_stop_when_running(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 
@@ -336,6 +374,101 @@ def test_controller_routes_submission_failures_to_error_signal(qtbot) -> None:
 
     controller.apply_config(build_config(chrome_profile_directory="Profile 9"))
     qtbot.waitUntil(lambda: errors == ["submit boom", "submit boom"])
+
+
+def test_controller_forwards_queue_and_auto_run_worker_events(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    runner = FakeRunner()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        ),
+        worker_factory=worker_factory,
+        runner_factory=lambda: runner,
+    )
+
+    queue_states = []
+    queue_lengths = []
+    current_urls = []
+    run_events = []
+    controller.automationQueueStateChanged.connect(queue_states.append)
+    controller.automationQueueLengthChanged.connect(queue_lengths.append)
+    controller.automationCurrentUrlChanged.connect(current_urls.append)
+    controller.automationRunEvent.connect(run_events.append)
+
+    controller.start_bot()
+
+    created["worker"].emit_event({"type": "automation_queue_state_changed", "state": "queued"})
+    created["worker"].emit_event({"type": "automation_queue_length_changed", "length": 3})
+    created["worker"].emit_event(
+        {"type": "automation_current_url_changed", "url": "https://example.com"}
+    )
+    created["worker"].emit_event(
+        {
+            "type": "automation_run_started",
+            "sequence_id": "seq-1",
+            "url": "https://example.com",
+            "window_handle": 7,
+        }
+    )
+    created["worker"].emit_event(
+        {
+            "type": "automation_run_succeeded",
+            "sequence_id": "seq-1",
+            "url": "https://example.com",
+        }
+    )
+    created["worker"].emit_event(
+        {
+            "type": "automation_run_failed",
+            "sequence_id": "seq-1",
+            "url": "https://example.com",
+            "reason": "boom",
+        }
+    )
+
+    qtbot.waitUntil(
+        lambda: queue_states == ["queued"]
+        and queue_lengths == [3]
+        and current_urls == ["https://example.com"]
+        and len(run_events) == 3
+    )
+
+    assert run_events == [
+        {
+            "type": "automation_run_started",
+            "sequence_id": "seq-1",
+            "url": "https://example.com",
+            "window_handle": 7,
+        },
+        {
+            "type": "automation_run_succeeded",
+            "sequence_id": "seq-1",
+            "url": "https://example.com",
+        },
+        {
+            "type": "automation_run_failed",
+            "sequence_id": "seq-1",
+            "url": "https://example.com",
+            "reason": "boom",
+        },
+    ]
+
+    controller.resume_automation_queue()
+    controller.clear_automation_queue()
+
+    assert len(runner.submitted_coroutines) == 2
 
 
 def test_async_worker_runner_submit_returns_future(monkeypatch) -> None:

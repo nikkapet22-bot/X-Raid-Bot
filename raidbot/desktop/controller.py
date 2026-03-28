@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from dataclasses import replace
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -74,9 +75,13 @@ class DesktopController(QObject):
     statsChanged = Signal(object)
     activityAdded = Signal(object)
     errorRaised = Signal(str)
+    configChanged = Signal(object)
     automationSequencesChanged = Signal(object)
     automationRunEvent = Signal(object)
     automationRunStateChanged = Signal(str)
+    automationQueueStateChanged = Signal(str)
+    automationQueueLengthChanged = Signal(int)
+    automationCurrentUrlChanged = Signal(object)
     _workerEventReceived = Signal(object)
     _submissionFailed = Signal(str)
     _automationEventReceived = Signal(object)
@@ -157,9 +162,19 @@ class DesktopController(QObject):
     def apply_config(self, config) -> None:
         self.storage.save_config(config)
         self.config = config
+        self.configChanged.emit(config)
         if self._worker is None or self._runner is None or not self._runner.is_running():
             return
         self._submit_to_runner(lambda: self._worker.apply_config(config))
+
+    def set_auto_run_enabled(self, enabled: bool) -> None:
+        self.apply_config(replace(self.config, auto_run_enabled=enabled))
+
+    def set_default_auto_sequence_id(self, sequence_id: str | None) -> None:
+        self.apply_config(replace(self.config, default_auto_sequence_id=sequence_id))
+
+    def set_auto_run_settle_ms(self, settle_ms: int) -> None:
+        self.apply_config(replace(self.config, auto_run_settle_ms=int(settle_ms)))
 
     def list_automation_sequences(self) -> list[Any]:
         return list(self._automation_sequences)
@@ -234,6 +249,16 @@ class DesktopController(QObject):
             return
         self._submit_to_specific_runner(self._automation_runner, self._automation_runtime.request_stop)
 
+    def resume_automation_queue(self) -> None:
+        if self._worker is None or self._runner is None or not self._runner.is_running():
+            return
+        self._submit_to_runner(lambda: self._worker.resume_automation_queue())
+
+    def clear_automation_queue(self) -> None:
+        if self._worker is None or self._runner is None or not self._runner.is_running():
+            return
+        self._submit_to_runner(lambda: self._worker.clear_automation_queue())
+
     def _load_config(self):
         if hasattr(self.storage, "is_first_run") and self.storage.is_first_run():
             return None
@@ -277,6 +302,18 @@ class DesktopController(QObject):
             self.activityAdded.emit(event.get("entry"))
         elif event_type == "error":
             self.errorRaised.emit(str(event.get("message", "")))
+        elif event_type == "automation_queue_state_changed":
+            self.automationQueueStateChanged.emit(str(event.get("state", "idle")))
+        elif event_type == "automation_queue_length_changed":
+            self.automationQueueLengthChanged.emit(int(event.get("length", 0)))
+        elif event_type == "automation_current_url_changed":
+            self.automationCurrentUrlChanged.emit(event.get("url"))
+        elif event_type in {
+            "automation_run_started",
+            "automation_run_succeeded",
+            "automation_run_failed",
+        }:
+            self.automationRunEvent.emit(event)
 
     def _load_automation_sequences(self) -> list[Any]:
         storage = self._load_automation_storage()

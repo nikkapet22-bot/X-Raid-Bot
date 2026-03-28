@@ -4,8 +4,9 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSignalBlocker, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -42,6 +43,11 @@ def _default_step() -> AutomationStep:
 class AutomationPage(QWidget):
     sequenceSaveRequested = Signal(object)
     sequenceDeleteRequested = Signal(str)
+    autoRunEnabledRequested = Signal(bool)
+    defaultAutoSequenceRequested = Signal(object)
+    autoRunSettleMsRequested = Signal(int)
+    resumeQueueRequested = Signal()
+    clearQueueRequested = Signal()
     runRequested = Signal(str, object)
     dryRunRequested = Signal(str, int, object)
     stopRequested = Signal()
@@ -53,11 +59,23 @@ class AutomationPage(QWidget):
         sequences: list[AutomationSequence] | None = None,
         windows: list[object] | None = None,
         run_state: str = "idle",
+        auto_run_enabled: bool = False,
+        default_auto_sequence_id: str | None = None,
+        auto_run_settle_ms: int = 1500,
+        queue_state: str = "idle",
+        queue_length: int = 0,
+        current_url: str | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._sequences: list[AutomationSequence] = []
         self._steps: list[AutomationStep] = []
+        self._run_state = "idle"
+        self._queue_state = "idle"
+        self._queue_length = 0
+        self._auto_run_enabled = False
+        self._auto_run_default_sequence_id: str | None = None
+        self._auto_run_settle_ms = 1500
 
         self.sequence_list = QListWidget()
         self.sequence_list.currentRowChanged.connect(self._load_selected_sequence)
@@ -105,6 +123,34 @@ class AutomationPage(QWidget):
         self.status_label.setProperty("muted", "true")
         self.activity_log = QListWidget()
 
+        self.auto_run_enabled_toggle = QCheckBox("Enable auto-run")
+        self.auto_run_enabled_toggle.stateChanged.connect(self._handle_auto_run_enabled_changed)
+
+        self.default_auto_sequence_combo = QComboBox()
+        self.default_auto_sequence_combo.currentIndexChanged.connect(
+            self._handle_default_auto_sequence_changed
+        )
+
+        self.settle_delay_input = QSpinBox()
+        self.settle_delay_input.setRange(0, 60000)
+        self.settle_delay_input.valueChanged.connect(self._handle_auto_run_settle_ms_changed)
+
+        self.queue_state_label = QLabel("idle")
+        self.queue_state_label.setProperty("muted", "true")
+        self.queue_length_label = QLabel("0")
+        self.queue_length_label.setProperty("muted", "true")
+        self.current_url_label = QLabel("None")
+        self.current_url_label.setWordWrap(True)
+        self.current_url_label.setProperty("muted", "true")
+
+        self.resume_queue_button = QPushButton("Resume queue")
+        self.resume_queue_button.setProperty("variant", "primary")
+        self.resume_queue_button.clicked.connect(self.resumeQueueRequested.emit)
+
+        self.clear_queue_button = QPushButton("Clear queue")
+        self.clear_queue_button.setProperty("variant", "danger")
+        self.clear_queue_button.clicked.connect(self.clearQueueRequested.emit)
+
         self.save_button = QPushButton("Save sequence")
         self.save_button.setProperty("variant", "primary")
         self.save_button.clicked.connect(self._emit_save_request)
@@ -140,6 +186,14 @@ class AutomationPage(QWidget):
         self._build_layout()
         self.set_sequences(sequences or [])
         self.refresh_windows(windows or [])
+        self.set_auto_run_config(
+            auto_run_enabled,
+            default_auto_sequence_id,
+            auto_run_settle_ms,
+        )
+        self.set_queue_state(queue_state)
+        self.set_queue_length(queue_length)
+        self.set_current_url(current_url)
         self.set_run_state(run_state)
 
     def set_sequences(self, sequences: list[AutomationSequence]) -> None:
@@ -157,6 +211,7 @@ class AutomationPage(QWidget):
             self.sequence_list.setCurrentRow(selected_row if selected_row >= 0 else 0)
         else:
             self._load_blank_sequence()
+        self._refresh_auto_run_sequence_combo()
 
     def refresh_windows(self, windows: list[object]) -> None:
         previous_handle = self.window_combo.currentData()
@@ -170,12 +225,93 @@ class AutomationPage(QWidget):
         self.window_combo.setCurrentIndex(index if index >= 0 else 0)
 
     def set_run_state(self, state: str) -> None:
-        is_running = state == "running"
-        self.start_button.setEnabled(not is_running)
-        self.dry_run_button.setEnabled(not is_running)
-        self.stop_button.setEnabled(is_running)
+        self._run_state = state
+        is_running = self._run_state == "running"
+        self._refresh_manual_run_buttons()
         if not is_running and self.status_label.text().strip() in {"Running sequence", "Automation idle"}:
             self.status_label.setText("Automation idle")
+
+    def set_auto_run_config(
+        self,
+        auto_run_enabled: bool,
+        default_auto_sequence_id: str | None,
+        auto_run_settle_ms: int,
+    ) -> None:
+        self._auto_run_enabled = bool(auto_run_enabled)
+        self._auto_run_default_sequence_id = default_auto_sequence_id
+        self._auto_run_settle_ms = int(auto_run_settle_ms)
+
+        with QSignalBlocker(self.auto_run_enabled_toggle):
+            self.auto_run_enabled_toggle.setChecked(self._auto_run_enabled)
+        with QSignalBlocker(self.settle_delay_input):
+            self.settle_delay_input.setValue(self._auto_run_settle_ms)
+        self._refresh_auto_run_sequence_combo()
+        self._refresh_queue_controls()
+
+    def set_queue_state(self, state: str) -> None:
+        self._queue_state = state or "idle"
+        self.queue_state_label.setText(self._queue_state)
+        self._refresh_queue_controls()
+        self._refresh_manual_run_buttons()
+
+    def set_queue_length(self, length: int) -> None:
+        self._queue_length = max(0, int(length))
+        self.queue_length_label.setText(str(self._queue_length))
+        self._refresh_queue_controls()
+
+    def set_current_url(self, url: str | None) -> None:
+        self.current_url_label.setText(str(url) if url else "None")
+
+    def _handle_auto_run_enabled_changed(self, _state: int) -> None:
+        enabled = self.auto_run_enabled_toggle.isChecked()
+        if enabled == self._auto_run_enabled:
+            return
+        self._auto_run_enabled = enabled
+        self.autoRunEnabledRequested.emit(enabled)
+        self._refresh_queue_controls()
+
+    def _handle_default_auto_sequence_changed(self, _index: int) -> None:
+        sequence_id = self.default_auto_sequence_combo.currentData()
+        if sequence_id == self._auto_run_default_sequence_id:
+            return
+        self._auto_run_default_sequence_id = sequence_id
+        self.defaultAutoSequenceRequested.emit(sequence_id)
+
+    def _handle_auto_run_settle_ms_changed(self, value: int) -> None:
+        settle_ms = int(value)
+        if settle_ms == self._auto_run_settle_ms:
+            return
+        self._auto_run_settle_ms = settle_ms
+        self.autoRunSettleMsRequested.emit(settle_ms)
+
+    def _refresh_auto_run_sequence_combo(self) -> None:
+        selected_id = self._auto_run_default_sequence_id
+        with QSignalBlocker(self.default_auto_sequence_combo):
+            self.default_auto_sequence_combo.clear()
+            self.default_auto_sequence_combo.addItem("No default sequence", None)
+            for sequence in self._sequences:
+                self.default_auto_sequence_combo.addItem(sequence.name, sequence.id)
+            index = self.default_auto_sequence_combo.findData(selected_id)
+            self.default_auto_sequence_combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def _refresh_manual_run_buttons(self) -> None:
+        queue_blocks_manual = self._queue_state in {"queued", "running", "paused"}
+        is_running = self._run_state == "running"
+        can_start = not is_running and not queue_blocks_manual
+        self.start_button.setEnabled(can_start)
+        self.dry_run_button.setEnabled(can_start)
+        self.stop_button.setEnabled(is_running)
+
+    def _refresh_queue_controls(self) -> None:
+        queue_active = self._queue_state in {"queued", "running", "paused"}
+        can_resume = (
+            self._auto_run_enabled
+            and self._queue_state in {"queued", "paused"}
+            and self._queue_length > 0
+        )
+        can_clear = queue_active or self._queue_length > 0
+        self.resume_queue_button.setEnabled(can_resume)
+        self.clear_queue_button.setEnabled(can_clear)
 
     def handle_run_event(self, event: dict[str, object]) -> None:
         event_type = str(event.get("type", "event"))
@@ -193,6 +329,12 @@ class AutomationPage(QWidget):
             self.status_label.setText("Run completed")
         elif event_type == "step_failed":
             self.status_label.setText(f"Step failed: {event.get('reason')}")
+        elif event_type == "automation_run_started":
+            self.status_label.setText("Auto-run started")
+        elif event_type == "automation_run_succeeded":
+            self.status_label.setText("Auto-run succeeded")
+        elif event_type == "automation_run_failed":
+            self.status_label.setText(f"Auto-run failed: {event.get('reason')}")
         elif event_type == "target_window_lost":
             self.status_label.setText(f"Window lost: {event.get('reason')}")
         elif event_type == "run_stopped":
@@ -258,6 +400,23 @@ class AutomationPage(QWidget):
         top_layout.addWidget(sequence_group, 1)
         top_layout.addWidget(editor_group, 2)
         root_layout.addLayout(top_layout)
+
+        auto_run_group = QGroupBox("Auto-run")
+        auto_run_layout = QVBoxLayout(auto_run_group)
+        auto_run_form = QFormLayout()
+        auto_run_form.addRow("Enabled", self.auto_run_enabled_toggle)
+        auto_run_form.addRow("Default sequence", self.default_auto_sequence_combo)
+        auto_run_form.addRow("Settle delay ms", self.settle_delay_input)
+        auto_run_form.addRow("Queue state", self.queue_state_label)
+        auto_run_form.addRow("Queue length", self.queue_length_label)
+        auto_run_form.addRow("Current URL", self.current_url_label)
+        auto_run_layout.addLayout(auto_run_form)
+
+        auto_run_buttons = QHBoxLayout()
+        auto_run_buttons.addWidget(self.resume_queue_button)
+        auto_run_buttons.addWidget(self.clear_queue_button)
+        auto_run_layout.addLayout(auto_run_buttons)
+        root_layout.addWidget(auto_run_group)
 
         runner_group = QGroupBox("Runner")
         runner_layout = QVBoxLayout(runner_group)

@@ -111,6 +111,10 @@ class FakeController(QObject):
     automationSequencesChanged = Signal(object)
     automationRunEvent = Signal(object)
     automationRunStateChanged = Signal(str)
+    automationQueueStateChanged = Signal(str)
+    automationQueueLengthChanged = Signal(int)
+    automationCurrentUrlChanged = Signal(object)
+    configChanged = Signal(object)
 
     def __init__(self, config: DesktopAppConfig | None = None) -> None:
         super().__init__()
@@ -143,6 +147,7 @@ class FakeController(QObject):
     def apply_config(self, config: DesktopAppConfig) -> None:
         self.config = config
         self.apply_calls.append(config)
+        self.configChanged.emit(config)
 
     def is_bot_active(self) -> bool:
         return self.active
@@ -183,6 +188,42 @@ class FakeController(QObject):
 
     def stop_automation_run(self) -> None:
         self.automation_stop_calls += 1
+
+    def resume_automation_queue(self) -> None:
+        self.automation_resume_calls = getattr(self, "automation_resume_calls", 0) + 1
+
+    def clear_automation_queue(self) -> None:
+        self.automation_clear_calls = getattr(self, "automation_clear_calls", 0) + 1
+
+    def set_auto_run_enabled(self, enabled: bool) -> None:
+        self.apply_config(
+            build_config(
+                **{
+                    **self.config.__dict__,
+                    "auto_run_enabled": enabled,
+                }
+            )
+        )
+
+    def set_default_auto_sequence_id(self, sequence_id: str | None) -> None:
+        self.apply_config(
+            build_config(
+                **{
+                    **self.config.__dict__,
+                    "default_auto_sequence_id": sequence_id,
+                }
+            )
+        )
+
+    def set_auto_run_settle_ms(self, settle_ms: int) -> None:
+        self.apply_config(
+            build_config(
+                **{
+                    **self.config.__dict__,
+                    "auto_run_settle_ms": settle_ms,
+                }
+            )
+        )
 
     def _sync_active_state(self, state: str) -> None:
         self.active = state in {"starting", "running", "stopping"}
@@ -385,6 +426,63 @@ def test_main_window_adds_automation_tab(qtbot) -> None:
 
     assert window.tabs.tabText(2) == "Automation"
     assert window.automation_page.sequence_list.count() == 1
+
+
+def test_automation_page_shows_auto_run_controls_and_updates_from_queue_signals(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+            auto_run_settle_ms=2200,
+        )
+    )
+    controller.saved_sequences = [build_sequence("seq-1"), build_sequence("seq-2")]
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+
+    page = window.automation_page
+
+    assert page.auto_run_enabled_toggle.isChecked() is True
+    assert page.default_auto_sequence_combo.currentData() == "seq-1"
+    assert page.settle_delay_input.value() == 2200
+    assert page.queue_state_label.text() == "idle"
+    assert page.queue_length_label.text() == "0"
+    assert page.current_url_label.text() == "None"
+    assert page.start_button.isEnabled() is True
+    assert page.dry_run_button.isEnabled() is True
+    assert page.stop_button.isEnabled() is False
+
+    controller.automationQueueStateChanged.emit("queued")
+    controller.automationQueueLengthChanged.emit(2)
+    controller.automationCurrentUrlChanged.emit("https://example.com")
+
+    assert page.queue_state_label.text() == "queued"
+    assert page.queue_length_label.text() == "2"
+    assert page.current_url_label.text() == "https://example.com"
+    assert page.start_button.isEnabled() is False
+    assert page.dry_run_button.isEnabled() is False
+    assert page.resume_queue_button.isEnabled() is True
+    assert page.clear_queue_button.isEnabled() is True
+
+    controller.automationRunStateChanged.emit("running")
+
+    assert page.stop_button.isEnabled() is True
+    assert page.start_button.isEnabled() is False
+    assert page.dry_run_button.isEnabled() is False
+
+    page.auto_run_enabled_toggle.setChecked(False)
+    qtbot.waitUntil(lambda: controller.config.auto_run_enabled is False)
+    assert page.auto_run_enabled_toggle.isChecked() is False
+    assert page.resume_queue_button.isEnabled() is False
+
+    page.default_auto_sequence_combo.setCurrentIndex(2)
+    page.settle_delay_input.setValue(2750)
+    qtbot.waitUntil(
+        lambda: controller.config.default_auto_sequence_id == "seq-2"
+        and controller.config.auto_run_settle_ms == 2750
+    )
+    assert controller.apply_calls[-1].default_auto_sequence_id == "seq-2"
+    assert controller.apply_calls[-1].auto_run_settle_ms == 2750
 
 
 def test_automation_page_emits_start_and_save_requests(qtbot) -> None:

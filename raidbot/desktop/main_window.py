@@ -99,12 +99,30 @@ class MainWindow(QMainWindow):
         self.automation_page = AutomationPage(
             sequences=self._load_automation_sequences(),
             windows=self._load_automation_windows(),
+            auto_run_enabled=self.controller.config.auto_run_enabled,
+            default_auto_sequence_id=self.controller.config.default_auto_sequence_id,
+            auto_run_settle_ms=self.controller.config.auto_run_settle_ms,
         )
         self.automation_page.sequenceSaveRequested.connect(
             self.controller.save_automation_sequence
         )
         self.automation_page.sequenceDeleteRequested.connect(
             self.controller.delete_automation_sequence
+        )
+        self.automation_page.autoRunEnabledRequested.connect(
+            self.controller.set_auto_run_enabled
+        )
+        self.automation_page.defaultAutoSequenceRequested.connect(
+            self.controller.set_default_auto_sequence_id
+        )
+        self.automation_page.autoRunSettleMsRequested.connect(
+            self.controller.set_auto_run_settle_ms
+        )
+        self.automation_page.resumeQueueRequested.connect(
+            self.controller.resume_automation_queue
+        )
+        self.automation_page.clearQueueRequested.connect(
+            self.controller.clear_automation_queue
         )
         self.automation_page.runRequested.connect(self.controller.start_automation_run)
         self.automation_page.dryRunRequested.connect(
@@ -120,7 +138,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         self._connect_controller_signals()
-        self._apply_state(self.storage.load_state(), include_activity=True)
+        state = self.storage.load_state()
+        self._apply_state(state, include_activity=True)
+        self._sync_automation_config(self.controller.config)
+        self._sync_automation_queue_state(state)
         self._ensure_window_icon()
         self.tray_controller = tray_controller_factory(
             window=self,
@@ -288,12 +309,22 @@ class MainWindow(QMainWindow):
         self.controller.activityAdded.connect(self._append_activity_entry)
         self.controller.errorRaised.connect(self.last_error_label.setText)
         self.controller.errorRaised.connect(self.automation_page.show_error)
+        self.controller.configChanged.connect(self._sync_automation_config)
         self.controller.automationSequencesChanged.connect(
             self.automation_page.set_sequences
         )
         self.controller.automationRunEvent.connect(self.automation_page.handle_run_event)
         self.controller.automationRunStateChanged.connect(
             self.automation_page.set_run_state
+        )
+        self.controller.automationQueueStateChanged.connect(
+            self.automation_page.set_queue_state
+        )
+        self.controller.automationQueueLengthChanged.connect(
+            self.automation_page.set_queue_length
+        )
+        self.controller.automationCurrentUrlChanged.connect(
+            self.automation_page.set_current_url
         )
 
     def _update_bot_state(self, state: str) -> None:
@@ -445,3 +476,15 @@ class MainWindow(QMainWindow):
 
     def _refresh_automation_windows(self) -> None:
         self.automation_page.refresh_windows(self._load_automation_windows())
+
+    def _sync_automation_config(self, config) -> None:
+        self.automation_page.set_auto_run_config(
+            config.auto_run_enabled,
+            config.default_auto_sequence_id,
+            config.auto_run_settle_ms,
+        )
+
+    def _sync_automation_queue_state(self, state: DesktopAppState) -> None:
+        self.automation_page.set_queue_state(state.automation_queue_state)
+        self.automation_page.set_queue_length(state.automation_queue_length)
+        self.automation_page.set_current_url(state.automation_current_url)
