@@ -65,6 +65,19 @@ Automation workflow:
 
 The automation runtime captures only the selected Chrome window, picks the highest-confidence match for each step, waits `0.5` seconds before clicking, and moves to the next step only after the UI changes. If a step cannot be found within its search and scroll budget, the run stops and the failure is shown in the activity area.
 
+### Telegram auto-run (first version)
+
+Telegram raid detection can also feed a worker-owned auto-run queue in the desktop app. This first version is intentionally narrow:
+
+- Chrome must already be open for the configured profile before auto-run can start
+- auto-run uses the default automation sequence selected in the `Automation` tab
+- detected links are queued and processed one by one
+- the `Automation` tab also carries the auto-run settle-delay control and the shared image-based automation runtime used for this flow
+- on success, the bot closes only the active tab it opened
+- on failure, the tab stays open, the failure is visible in the desktop app, and queue processing pauses so you can inspect and recover
+- manual automation still exists separately in the `Automation` tab
+- do not interact with the Chrome window owned by the bot while an auto-run is active
+
 ## CLI daemon
 
 The original headless daemon is still available.

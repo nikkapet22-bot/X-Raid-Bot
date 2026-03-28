@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -8,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QIcon
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QScrollArea, QSystemTrayIcon
 
 from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
 from raidbot.desktop.automation.windowing import WindowInfo
@@ -30,6 +31,7 @@ def build_config(**overrides) -> DesktopAppConfig:
         "telegram_phone_number": "+40123456789",
         "whitelisted_chat_ids": [-1001],
         "allowed_sender_ids": [42],
+        "allowed_sender_entries": ("42",),
         "chrome_profile_directory": "Profile 3",
         "browser_mode": "launch-only",
         "executor_name": "noop",
@@ -110,7 +112,12 @@ class FakeController(QObject):
     errorRaised = Signal(str)
     automationSequencesChanged = Signal(object)
     automationRunEvent = Signal(object)
+    botActionRunEvent = Signal(object)
     automationRunStateChanged = Signal(str)
+    automationQueueStateChanged = Signal(str)
+    automationQueueLengthChanged = Signal(int)
+    automationCurrentUrlChanged = Signal(object)
+    configChanged = Signal(object)
 
     def __init__(self, config: DesktopAppConfig | None = None) -> None:
         super().__init__()
@@ -123,6 +130,10 @@ class FakeController(QObject):
         self.deleted_sequence_ids = []
         self.automation_run_calls = []
         self.automation_dry_run_calls = []
+        self.bot_action_slot_template_updates = []
+        self.bot_action_slot_test_calls = []
+        self.bot_action_slot_enabled_updates = []
+        self.auto_run_settle_ms_updates = []
         self.available_windows = [build_window_info()]
         self.active = False
         self.botStateChanged.connect(self._sync_active_state)
@@ -143,6 +154,7 @@ class FakeController(QObject):
     def apply_config(self, config: DesktopAppConfig) -> None:
         self.config = config
         self.apply_calls.append(config)
+        self.configChanged.emit(config)
 
     def is_bot_active(self) -> bool:
         return self.active
@@ -161,6 +173,15 @@ class FakeController(QObject):
         self.saved_sequences = [
             item for item in self.saved_sequences if item.id != sequence_id
         ]
+        if self.config.default_auto_sequence_id == sequence_id:
+            self.apply_config(
+                build_config(
+                    **{
+                        **self.config.__dict__,
+                        "default_auto_sequence_id": None,
+                    }
+                )
+            )
         self.automationSequencesChanged.emit(self.list_automation_sequences())
 
     def list_target_windows(self):
@@ -184,8 +205,90 @@ class FakeController(QObject):
     def stop_automation_run(self) -> None:
         self.automation_stop_calls += 1
 
+    def resume_automation_queue(self) -> None:
+        self.automation_resume_calls = getattr(self, "automation_resume_calls", 0) + 1
+
+    def clear_automation_queue(self) -> None:
+        self.automation_clear_calls = getattr(self, "automation_clear_calls", 0) + 1
+
+    def set_auto_run_enabled(self, enabled: bool) -> None:
+        self.apply_config(
+            build_config(
+                **{
+                    **self.config.__dict__,
+                    "auto_run_enabled": enabled,
+                }
+            )
+        )
+
+    def set_default_auto_sequence_id(self, sequence_id: str | None) -> None:
+        self.apply_config(
+            build_config(
+                **{
+                    **self.config.__dict__,
+                    "default_auto_sequence_id": sequence_id,
+                }
+            )
+        )
+
+    def set_auto_run_settle_ms(self, settle_ms: int) -> None:
+        self.auto_run_settle_ms_updates.append(settle_ms)
+        self.apply_config(
+            build_config(
+                **{
+                    **self.config.__dict__,
+                    "auto_run_settle_ms": settle_ms,
+                }
+            )
+        )
+
+    def set_bot_action_slot_template_path(
+        self, slot_index: int, template_path: Path | None
+    ) -> None:
+        self.bot_action_slot_template_updates.append((slot_index, template_path))
+        if self.config.bot_action_slots[slot_index].template_path == template_path:
+            return
+        updated_slots = list(self.config.bot_action_slots)
+        updated_slots[slot_index] = replace(
+            updated_slots[slot_index],
+            template_path=template_path,
+        )
+        self.apply_config(replace(self.config, bot_action_slots=tuple(updated_slots)))
+
+    def set_bot_action_slot_enabled(self, slot_index: int, enabled: bool) -> None:
+        self.bot_action_slot_enabled_updates.append((slot_index, enabled))
+        if self.config.bot_action_slots[slot_index].enabled == enabled:
+            return
+        updated_slots = list(self.config.bot_action_slots)
+        updated_slots[slot_index] = replace(
+            updated_slots[slot_index],
+            enabled=enabled,
+        )
+        self.apply_config(replace(self.config, bot_action_slots=tuple(updated_slots)))
+
+    def test_bot_action_slot(self, slot_index: int) -> None:
+        self.bot_action_slot_test_calls.append(slot_index)
+
     def _sync_active_state(self, state: str) -> None:
         self.active = state in {"starting", "running", "stopping"}
+
+
+class FailingApplyController(FakeController):
+    def apply_config(self, config: DesktopAppConfig) -> None:
+        raise ValueError("Could not resolve sender '@missing'.")
+
+
+class FakeSlotCaptureService:
+    def __init__(self, returned_path: Path | None = None, error: Exception | None = None) -> None:
+        self.returned_path = returned_path
+        self.error = error
+        self.calls = []
+
+    def capture_slot(self, slot, existing_path: Path | None = None):
+        self.calls.append((slot, existing_path))
+        if self.error is not None:
+            raise self.error
+        return self.returned_path
 
 
 def build_window(controller: FakeController, storage: FakeStorage, **overrides):
@@ -286,6 +389,12 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
                     action="sender_rejected",
                     url="https://x.com/i/status/100",
                     reason="sender 42 not allowed",
+                ),
+                ActivityEntry(
+                    timestamp=datetime(2026, 3, 26, 9, 57, 0),
+                    action="page_ready",
+                    url="https://x.com/i/status/101",
+                    reason="page ready",
                 )
             ],
             last_error="boom",
@@ -306,8 +415,9 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
     assert window.executor_failed_label.text() == "10"
     assert window.session_closed_label.text() == "11"
     assert window.last_error_label.text() == "boom"
-    assert window.activity_list.count() == 1
-    assert "Sender Rejected" in window.activity_list.item(0).text()
+    assert window.activity_list.count() == 2
+    assert "Page Ready" in window.activity_list.item(0).text()
+    assert "Sender Rejected" in window.activity_list.item(1).text()
 
     updated_state = DesktopAppState(
         bot_state=BotRuntimeState.running,
@@ -353,8 +463,9 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
         assert window.session_closed_label.text() == "18"
         assert window.last_successful_label.text() == "2026-03-26T10:10:00"
         assert window.last_error_label.text() == "new-error"
-        assert window.activity_list.count() == 2
-        assert "Executor Failed" in window.activity_list.item(1).text()
+        assert window.activity_list.count() == 3
+        assert "Executor Failed" in window.activity_list.item(0).text()
+        assert "Page Ready" in window.activity_list.item(1).text()
     finally:
         controller.botStateChanged.emit("stopped")
 
@@ -379,12 +490,377 @@ def test_main_window_dashboard_exposes_metric_cards_and_panels(qtbot) -> None:
     assert window.error_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
 
 
-def test_main_window_adds_automation_tab(qtbot) -> None:
+def test_main_window_removed_generic_automation_controls_are_not_visible(qtbot) -> None:
     window = build_window(FakeController(), FakeStorage())
     qtbot.addWidget(window)
 
-    assert window.tabs.tabText(2) == "Automation"
-    assert window.automation_page.sequence_list.count() == 1
+    assert window.tabs.tabText(2) == "Bot Actions"
+    assert hasattr(window, "bot_actions_page")
+    assert not hasattr(window, "automation_page")
+    assert not hasattr(window.bot_actions_page, "sequence_list")
+    assert not hasattr(window.bot_actions_page, "window_combo")
+    assert not hasattr(window.bot_actions_page, "start_button")
+    assert not hasattr(window.bot_actions_page, "dry_run_button")
+    assert not hasattr(window.bot_actions_page, "resume_queue_button")
+    assert not hasattr(window.bot_actions_page, "clear_queue_button")
+
+
+def test_main_window_bot_actions_runtime_failure_keeps_simple_status(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    window.controller.errorRaised.emit("runtime boom")
+
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Idle\nLast error: runtime boom"
+    )
+
+
+def test_main_window_bot_actions_step_event_shows_and_clears_current_slot(qtbot) -> None:
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], enabled=True),
+            replace(build_config().bot_action_slots[1], enabled=True),
+            replace(build_config().bot_action_slots[2], enabled=False),
+            replace(build_config().bot_action_slots[3], enabled=False),
+        )
+    )
+    window = build_window(FakeController(config=config), FakeStorage(config=config))
+    qtbot.addWidget(window)
+
+    window.controller.botActionRunEvent.emit(
+        {"type": "automation_run_started", "sequence_id": "seq-1"}
+    )
+    window.controller.botActionRunEvent.emit(
+        {"type": "step_search_started", "step_index": 1}
+    )
+
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Running\nCurrent slot: Slot 2 (L)"
+    )
+
+    window.controller.botActionRunEvent.emit({"type": "automation_run_succeeded"})
+
+    assert window.bot_actions_page.status_label.text() == "Status: Idle"
+
+
+def test_main_window_bot_actions_failure_keeps_current_slot_when_step_index_is_available(qtbot) -> None:
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], enabled=True),
+            replace(build_config().bot_action_slots[1], enabled=True),
+            replace(build_config().bot_action_slots[2], enabled=False),
+            replace(build_config().bot_action_slots[3], enabled=False),
+        )
+    )
+    window = build_window(FakeController(config=config), FakeStorage(config=config))
+    qtbot.addWidget(window)
+
+    window.controller.botActionRunEvent.emit(
+        {"type": "automation_run_started", "sequence_id": "seq-1"}
+    )
+    window.controller.botActionRunEvent.emit(
+        {"type": "step_failed", "step_index": 1, "reason": "click_failed"}
+    )
+
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Idle\nCurrent slot: Slot 2 (L)\nLast error: click_failed"
+    )
+
+
+def test_main_window_bot_actions_failure_keeps_current_slot_across_followup_run_failed_event(
+    qtbot,
+) -> None:
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], enabled=True),
+            replace(build_config().bot_action_slots[1], enabled=True),
+            replace(build_config().bot_action_slots[2], enabled=False),
+            replace(build_config().bot_action_slots[3], enabled=False),
+        )
+    )
+    window = build_window(FakeController(config=config), FakeStorage(config=config))
+    qtbot.addWidget(window)
+
+    window.controller.botActionRunEvent.emit(
+        {"type": "automation_run_started", "sequence_id": "seq-1"}
+    )
+    window.controller.botActionRunEvent.emit(
+        {"type": "step_failed", "step_index": 1, "reason": "ui_did_not_change"}
+    )
+    window.controller.botActionRunEvent.emit(
+        {"type": "automation_run_failed", "reason": "ui_did_not_change"}
+    )
+
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Idle\nCurrent slot: Slot 2 (L)\nLast error: ui_did_not_change"
+    )
+
+
+def test_main_window_current_slot_uses_enabled_slot_order(qtbot) -> None:
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], enabled=False),
+            replace(build_config().bot_action_slots[1], enabled=True),
+            replace(build_config().bot_action_slots[2], enabled=False),
+            replace(build_config().bot_action_slots[3], enabled=False),
+        )
+    )
+    window = build_window(FakeController(config=config), FakeStorage(config=config))
+    qtbot.addWidget(window)
+
+    window.controller.botActionRunEvent.emit(
+        {"type": "automation_run_started", "sequence_id": "seq-1"}
+    )
+    window.controller.botActionRunEvent.emit(
+        {"type": "step_search_started", "step_index": 0}
+    )
+
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Running\nCurrent slot: Slot 2 (L)"
+    )
+
+
+def test_main_window_worker_bot_action_step_event_updates_current_slot(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    class WorkerBackedRunner:
+        def __init__(self) -> None:
+            self.running = False
+
+        def start(self, job) -> None:
+            self.running = True
+
+        def submit(self, job):
+            return None
+
+        def is_running(self) -> bool:
+            return self.running
+
+        def wait_until_stopped(self, timeout: float | None = None) -> bool:
+            self.running = False
+            return True
+
+    class WorkerBackedWorker:
+        def __init__(self, *, emit_event, config, **_kwargs) -> None:
+            self.emit_event = emit_event
+            self.config = config
+
+        async def run(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        async def apply_config(self, config) -> None:
+            self.config = config
+
+        def resume_automation_queue(self) -> None:
+            return None
+
+        def clear_automation_queue(self) -> None:
+            return None
+
+        def notify_manual_automation_finished(self) -> None:
+            return None
+
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], enabled=False),
+            replace(build_config().bot_action_slots[1], enabled=True),
+            replace(build_config().bot_action_slots[2], enabled=False),
+            replace(build_config().bot_action_slots[3], enabled=False),
+        )
+    )
+    storage = FakeStorage(config=config)
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = WorkerBackedWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    controller = DesktopController(
+        storage=storage,
+        config=config,
+        worker_factory=worker_factory,
+        runner_factory=WorkerBackedRunner,
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    controller.start_bot()
+    created["worker"].emit_event(
+        {"type": "automation_run_started", "sequence_id": "slot-2-sequence"}
+    )
+    created["worker"].emit_event(
+        {
+            "type": "automation_runtime_event",
+            "event": {"type": "step_search_started", "step_index": 0},
+        }
+    )
+
+    qtbot.waitUntil(
+        lambda: window.bot_actions_page.status_label.text()
+        == "Status: Running\nCurrent slot: Slot 2 (L)"
+    )
+    controller._runner.running = False
+
+
+def test_main_window_capture_updates_bot_action_slot_via_controller(qtbot) -> None:
+    captured_path = Path("bot_actions/slot_1_r.png")
+    capture_service = FakeSlotCaptureService(captured_path)
+    controller = FakeController()
+    window = build_window(
+        controller,
+        FakeStorage(),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.bot_actions_page.slot_boxes[0].capture_button, Qt.MouseButton.LeftButton)
+
+    captured_slot, existing_path = capture_service.calls[-1]
+    assert captured_slot.key == "slot_1_r"
+    assert existing_path is None
+    assert controller.bot_action_slot_template_updates == [(0, captured_path)]
+    assert controller.config.bot_action_slots[0].template_path == captured_path
+    assert (
+        window.bot_actions_page.slot_boxes[0].template_status_label.text()
+        == str(captured_path)
+    )
+
+
+def test_main_window_test_button_calls_controller_slot_test(qtbot) -> None:
+    controller = FakeController()
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.bot_actions_page.slot_boxes[0].test_button, Qt.MouseButton.LeftButton)
+
+    assert controller.bot_action_slot_test_calls == [0]
+
+
+def test_main_window_slot_test_events_show_simple_status(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    window.controller.botActionRunEvent.emit(
+        {
+            "type": "slot_test_started",
+            "slot_index": 0,
+            "message": "Slot 1 (R): testing",
+        }
+    )
+    assert window.bot_actions_page.status_label.text() == "Status: Slot 1 (R): testing"
+
+    window.controller.botActionRunEvent.emit(
+        {
+            "type": "slot_test_failed",
+            "slot_index": 0,
+            "reason": "match_not_found",
+            "message": "Slot 1 (R): image not found",
+        }
+    )
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Slot 1 (R): image not found"
+    )
+
+    window.controller.botActionRunEvent.emit(
+        {
+            "type": "slot_test_succeeded",
+            "slot_index": 0,
+            "message": "Slot 1 (R): success",
+        }
+    )
+    assert window.bot_actions_page.status_label.text() == "Status: Slot 1 (R): success"
+
+
+def test_main_window_capture_cancel_with_existing_path_does_not_persist_noop(qtbot) -> None:
+    existing_path = Path("bot_actions/slot_1_r.png")
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], template_path=existing_path),
+            *build_config().bot_action_slots[1:],
+        )
+    )
+    capture_service = FakeSlotCaptureService(existing_path)
+    controller = FakeController(config=config)
+    window = build_window(
+        controller,
+        FakeStorage(config=config),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.bot_actions_page.slot_boxes[0].capture_button, Qt.MouseButton.LeftButton)
+
+    assert capture_service.calls[-1][1] == existing_path
+    assert controller.bot_action_slot_template_updates == [(0, existing_path)]
+    assert controller.apply_calls == []
+
+
+def test_main_window_capture_save_failure_surfaces_error_without_persisting(qtbot) -> None:
+    capture_service = FakeSlotCaptureService(error=OSError("Could not save bot_actions/slot_1_r.png"))
+    controller = FakeController()
+    window = build_window(
+        controller,
+        FakeStorage(),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.bot_actions_page.slot_boxes[0].capture_button, Qt.MouseButton.LeftButton)
+
+    assert controller.bot_action_slot_template_updates == []
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Idle\nLast error: Could not save bot_actions/slot_1_r.png"
+    )
+
+
+def test_main_window_wraps_long_tabs_in_scroll_areas(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    dashboard_tab = window.tabs.widget(0)
+    settings_tab = window.tabs.widget(1)
+    bot_actions_tab = window.tabs.widget(2)
+
+    assert isinstance(dashboard_tab, QScrollArea)
+    assert dashboard_tab.widgetResizable() is True
+    assert settings_tab.widget() is window.settings_page
+    assert bot_actions_tab.widget() is window.bot_actions_page
+
+
+def test_main_window_slot_enabled_changes_persist_through_controller(qtbot) -> None:
+    controller = FakeController()
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+
+    window.bot_actions_page.slot_boxes[1].enabled_checkbox.setChecked(True)
+
+    assert controller.bot_action_slot_enabled_updates == [(1, True)]
+    assert controller.config.bot_action_slots[1].enabled is True
+
+
+def test_main_window_settle_delay_changes_persist_through_controller(qtbot) -> None:
+    controller = FakeController()
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+
+    window.bot_actions_page.settle_delay_input.setValue(2750)
+
+    assert controller.auto_run_settle_ms_updates == [2750]
+    assert controller.config.auto_run_settle_ms == 2750
+
+
+def test_main_window_running_queue_state_renders_running_status(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    window.controller.automationQueueStateChanged.emit("running")
+
+    assert window.bot_actions_page.status_label.text() == "Status: Running"
 
 
 def test_automation_page_emits_start_and_save_requests(qtbot) -> None:
@@ -450,6 +926,75 @@ def test_automation_page_displays_dry_run_match_without_clicking(qtbot) -> None:
     assert "0.97" in page.status_label.text()
 
 
+def test_automation_page_shows_immediate_feedback_for_common_buttons(qtbot) -> None:
+    from raidbot.desktop.automation.page import AutomationPage
+
+    page = AutomationPage(
+        sequences=[build_sequence()],
+        windows=[build_window_info()],
+        auto_run_enabled=True,
+    )
+    qtbot.addWidget(page)
+
+    saved = []
+    deleted = []
+    refreshed = []
+    started = []
+    dry_runs = []
+    resumed = []
+    cleared = []
+    stopped = []
+    page.sequenceSaveRequested.connect(saved.append)
+    page.sequenceDeleteRequested.connect(deleted.append)
+    page.windowsRefreshRequested.connect(lambda: refreshed.append(True))
+    page.runRequested.connect(lambda sequence_id, handle: started.append((sequence_id, handle)))
+    page.dryRunRequested.connect(lambda sequence_id, step_index, handle: dry_runs.append((sequence_id, step_index, handle)))
+    page.resumeQueueRequested.connect(lambda: resumed.append(True))
+    page.clearQueueRequested.connect(lambda: cleared.append(True))
+    page.stopRequested.connect(lambda: stopped.append(True))
+
+    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Sequence saved."
+    assert len(saved) == 1
+
+    qtbot.mouseClick(page.add_step_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Step added."
+
+    qtbot.mouseClick(page.remove_step_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Step removed."
+
+    qtbot.mouseClick(page.refresh_windows_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Refreshing target windows..."
+    assert refreshed == [True]
+
+    qtbot.mouseClick(page.start_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Starting manual run..."
+    assert started == [("seq-1", None)]
+
+    qtbot.mouseClick(page.dry_run_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Running dry run..."
+    assert dry_runs == [("seq-1", 0, None)]
+
+    page.set_queue_state("paused")
+    page.set_queue_length(0)
+    qtbot.mouseClick(page.resume_queue_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Resuming queue..."
+    assert resumed == [True]
+
+    qtbot.mouseClick(page.clear_queue_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Clearing queue..."
+    assert cleared == [True]
+
+    page.set_run_state("running")
+    qtbot.mouseClick(page.stop_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Stopping run..."
+    assert stopped == [True]
+
+    qtbot.mouseClick(page.delete_button, Qt.MouseButton.LeftButton)
+    assert page.status_label.text() == "Sequence deleted."
+    assert deleted == ["seq-1"]
+
+
 def test_main_window_settings_page_shows_browser_mode_and_executor(qtbot) -> None:
     from raidbot.desktop.main_window import MainWindow
 
@@ -458,6 +1003,15 @@ def test_main_window_settings_page_shows_browser_mode_and_executor(qtbot) -> Non
 
     assert window.settings_page.browser_mode_combo.currentText() == "launch-only"
     assert window.settings_page.executor_name_label.text() == "noop"
+
+
+def test_main_window_routes_settings_apply_errors_back_to_settings_status(qtbot) -> None:
+    window = build_window(FailingApplyController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.settings_page.save_button, Qt.MouseButton.LeftButton)
+
+    assert window.settings_page.status_label.text() == "Could not resolve sender '@missing'."
 
 
 def test_main_window_uses_visible_fallback_icon_for_tray(qtbot) -> None:

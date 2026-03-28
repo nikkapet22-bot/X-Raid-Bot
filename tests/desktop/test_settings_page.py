@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -18,6 +19,7 @@ def build_config(**overrides) -> DesktopAppConfig:
         "telegram_phone_number": "+40123456789",
         "whitelisted_chat_ids": [-1001],
         "allowed_sender_ids": [42],
+        "allowed_sender_entries": ("42",),
         "chrome_profile_directory": "Profile 3",
         "browser_mode": "launch-only",
         "executor_name": "noop",
@@ -31,7 +33,7 @@ def build_config(**overrides) -> DesktopAppConfig:
     return DesktopAppConfig(**values)
 
 
-def test_settings_save_emits_allowlist_and_preset_replies(qtbot) -> None:
+def test_settings_save_emits_sender_entries_and_numeric_sender_ids(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
@@ -46,7 +48,9 @@ def test_settings_save_emits_allowlist_and_preset_replies(qtbot) -> None:
 
     page.api_hash_input.setText("new-hash")
     page.whitelist_input.setText("-1001, -2002")
-    page.allowed_senders_input.setText("99, 101")
+    page.sender_entry_inputs[0].setText("99")
+    qtbot.mouseClick(page.add_sender_button, Qt.MouseButton.LeftButton)
+    page.sender_entry_inputs[1].setText("@delugeraidbot")
     page.reply_pool_input.setPlainText("gm\nlfggg")
     page.like_toggle.setChecked(False)
     page.repost_toggle.setChecked(False)
@@ -59,7 +63,8 @@ def test_settings_save_emits_allowlist_and_preset_replies(qtbot) -> None:
         build_config(
             telegram_api_hash="new-hash",
             whitelisted_chat_ids=[-1001, -2002],
-            allowed_sender_ids=[99, 101],
+            allowed_sender_ids=[99],
+            allowed_sender_entries=("99", "@delugeraidbot"),
             chrome_profile_directory="Profile 9",
             preset_replies=("gm", "lfggg"),
             default_action_like=False,
@@ -68,6 +73,42 @@ def test_settings_save_emits_allowlist_and_preset_replies(qtbot) -> None:
             default_action_reply=False,
         )
     ]
+
+
+def test_settings_save_preserves_hidden_bot_action_config(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    updated_config = build_config(
+        auto_run_enabled=True,
+        default_auto_sequence_id="seq-9",
+        auto_run_settle_ms=2750,
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], enabled=True, template_path=Path("slot-1.png")),
+            replace(build_config().bot_action_slots[1], enabled=True, template_path=Path("slot-2.png")),
+            *build_config().bot_action_slots[2:],
+        ),
+    )
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3", "Profile 9"],
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+    page.set_config(updated_config)
+
+    applied = []
+    page.applyRequested.connect(applied.append)
+
+    page.api_hash_input.setText("new-hash")
+    page.whitelist_input.setText("-1001, -2002")
+    page.sender_entry_inputs[0].setText("99")
+    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+
+    assert len(applied) == 1
+    assert applied[0].auto_run_enabled is True
+    assert applied[0].default_auto_sequence_id == "seq-9"
+    assert applied[0].auto_run_settle_ms == 2750
+    assert applied[0].bot_action_slots == updated_config.bot_action_slots
 
 
 def test_settings_save_rejects_invalid_numeric_input_without_crashing(qtbot) -> None:
@@ -85,7 +126,7 @@ def test_settings_save_rejects_invalid_numeric_input_without_crashing(qtbot) -> 
 
     page.api_id_input.setText("not-a-number")
     page.whitelist_input.setText("-1001, -2002")
-    page.allowed_senders_input.setText("99")
+    page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
@@ -107,7 +148,7 @@ def test_settings_save_rejects_blank_telegram_api_hash(qtbot) -> None:
 
     page.api_hash_input.setText("   ")
     page.whitelist_input.setText("-1001, -2002")
-    page.allowed_senders_input.setText("99")
+    page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
@@ -133,14 +174,14 @@ def test_settings_save_clears_previous_error_on_success(qtbot) -> None:
 
     page.api_id_input.setText("123456")
     page.whitelist_input.setText("-1001, -2002")
-    page.allowed_senders_input.setText("99")
+    page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert len(applied) == 1
     assert page.status_label.text() == ""
 
 
-def test_settings_save_rejects_blank_sender_allowlist(qtbot) -> None:
+def test_settings_save_rejects_when_all_sender_rows_are_blank(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
@@ -156,18 +197,18 @@ def test_settings_save_rejects_blank_sender_allowlist(qtbot) -> None:
     page.api_id_input.setText("123456")
     page.api_hash_input.setText("new-hash")
     page.whitelist_input.setText("-1001, -2002")
-    page.allowed_senders_input.setText("   ")
+    page.sender_entry_inputs[0].setText("   ")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
-    assert page.status_label.text() == "Allowed sender IDs is required."
+    assert page.status_label.text() == "At least one allowed sender is required."
 
 
-def test_settings_save_rejects_missing_persisted_sender_allowlist(qtbot) -> None:
+def test_settings_save_rejects_missing_persisted_sender_rows(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
-        config=build_config(allowed_sender_ids=[]),
+        config=build_config(allowed_sender_ids=[], allowed_sender_entries=()),
         available_profiles=["Default", "Profile 3", "Profile 9"],
         session_status="authorized",
     )
@@ -179,7 +220,7 @@ def test_settings_save_rejects_missing_persisted_sender_allowlist(qtbot) -> None
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
-    assert page.status_label.text() == "Allowed sender IDs is required."
+    assert page.status_label.text() == "At least one allowed sender is required."
 
 
 def test_settings_save_rejects_invalid_whitelist_without_crashing(qtbot) -> None:
@@ -197,14 +238,14 @@ def test_settings_save_rejects_invalid_whitelist_without_crashing(qtbot) -> None
 
     page.api_id_input.setText("123456")
     page.whitelist_input.setText("-1001, nope")
-    page.allowed_senders_input.setText("99")
+    page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
     assert page.status_label.text() == "Chat whitelist must contain valid integers."
 
 
-def test_settings_save_rejects_invalid_sender_allowlist_without_crashing(qtbot) -> None:
+def test_settings_page_supports_adding_and_removing_sender_rows(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
@@ -214,16 +255,13 @@ def test_settings_save_rejects_invalid_sender_allowlist_without_crashing(qtbot) 
     )
     qtbot.addWidget(page)
 
-    applied = []
-    page.applyRequested.connect(applied.append)
+    assert [entry.text() for entry in page.sender_entry_inputs] == ["42"]
 
-    page.api_id_input.setText("123456")
-    page.whitelist_input.setText("-1001, -2002")
-    page.allowed_senders_input.setText("42, oops")
-    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(page.add_sender_button, Qt.MouseButton.LeftButton)
+    page.sender_entry_inputs[1].setText("@delugeraidbot")
+    qtbot.mouseClick(page.sender_remove_buttons[0], Qt.MouseButton.LeftButton)
 
-    assert applied == []
-    assert page.status_label.text() == "Allowed sender IDs must contain valid integers."
+    assert [entry.text() for entry in page.sender_entry_inputs] == ["@delugeraidbot"]
 
 
 def test_settings_page_marks_sender_allowlist_as_required(qtbot) -> None:
@@ -236,8 +274,9 @@ def test_settings_page_marks_sender_allowlist_as_required(qtbot) -> None:
     )
     qtbot.addWidget(page)
 
-    assert page.allowed_senders_input.placeholderText() == "Comma-separated sender IDs"
+    assert page.sender_entry_inputs[0].placeholderText() == "Sender username or ID"
     assert page.allowed_senders_hint_label.text() == "Required to start the bot."
+    assert page.add_sender_button.text() == "Add sender"
 
 
 def test_settings_page_exposes_session_status_and_reauthorize(qtbot) -> None:
@@ -356,3 +395,20 @@ def test_settings_page_preserves_apply_and_reauthorize_signals(qtbot) -> None:
 
     assert len(apply_events) == 1
     assert reauthorize_events == [True]
+
+
+def test_settings_page_exposes_status_feedback_helpers(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3"],
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+
+    page.show_error("Resolve failed.")
+    assert page.status_label.text() == "Resolve failed."
+
+    page.show_success("Settings saved.")
+    assert page.status_label.text() == "Settings saved."

@@ -303,3 +303,48 @@ def test_controller_surfaces_dry_run_match_result_to_ui(qtbot, tmp_path) -> None
     controller.dry_run_automation_step("seq-1", 0, selected_window_handle=7)
 
     assert received[-1]["type"] == "dry_run_match_found"
+
+
+def test_controller_uses_shared_runtime_module_for_manual_automation(monkeypatch, tmp_path) -> None:
+    from raidbot.desktop.automation import runtime as runtime_module
+    from raidbot.desktop.automation.runner import RunResult
+    from raidbot.desktop.controller import DesktopController
+
+    created = {}
+
+    class FakeRuntime:
+        def __init__(self, *, emit_event) -> None:
+            created["emit_event"] = emit_event
+
+        def list_target_windows(self):
+            return []
+
+        def run_sequence(self, sequence, selected_window_handle):
+            created["run_sequence"] = (sequence.id, selected_window_handle)
+            return RunResult(status="completed", window_handle=selected_window_handle)
+
+        def dry_run_step(self, sequence, step_index, selected_window_handle):
+            created["dry_run_step"] = (sequence.id, step_index, selected_window_handle)
+            return RunResult(status="dry_run_match_found", step_index=step_index)
+
+        def request_stop(self) -> None:
+            created["request_stop"] = True
+
+    monkeypatch.setattr(runtime_module, "AutomationRuntime", FakeRuntime)
+
+    controller = DesktopController(
+        storage=FakeStorage(tmp_path, build_config()),
+        config=build_config(),
+        runner_factory=ImmediateRunner,
+        automation_runtime_probe=lambda: (True, None),
+    )
+    controller._automation_sequences = [build_sequence()]
+
+    states = []
+    controller.automationRunStateChanged.connect(states.append)
+
+    controller.start_automation_run("seq-1", selected_window_handle=7)
+
+    assert created["run_sequence"] == ("seq-1", 7)
+    assert created["emit_event"] is not None
+    assert states == ["running", "idle"]

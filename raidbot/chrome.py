@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import subprocess
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Any
+
+
+@dataclass(frozen=True)
+class OpenedRaidContext:
+    normalized_url: str
+    opened_at: float
+    window_handle: int | None
+    profile_directory: str
 
 
 class ChromeOpener:
@@ -12,13 +22,15 @@ class ChromeOpener:
         user_data_dir: Path,
         profile_directory: str,
         launcher: Callable[[list[str]], Any] = subprocess.Popen,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.chrome_path = chrome_path
         self.user_data_dir = user_data_dir
         self.profile_directory = profile_directory
         self.launcher = launcher
+        self.clock = clock
 
-    def open(self, url: str) -> None:
+    def open(self, url: str, *, window_handle: int | None = None) -> OpenedRaidContext:
         self.launcher(
             [
                 str(self.chrome_path),
@@ -27,4 +39,10 @@ class ChromeOpener:
                 f"--profile-directory={self.profile_directory}",
                 url,
             ]
+        )
+        return OpenedRaidContext(
+            normalized_url=url,
+            opened_at=self.clock(),
+            window_handle=window_handle,
+            profile_directory=self.profile_directory,
         )

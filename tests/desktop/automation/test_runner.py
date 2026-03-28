@@ -183,21 +183,48 @@ def test_runner_fails_when_template_never_appears_after_scroll_budget() -> None:
 
 
 def test_runner_retries_after_non_changing_click_then_fails() -> None:
+    clock = FakeClock()
+    matcher = FakeMatcher([_match()] * 64)
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
-        matcher=FakeMatcher([_match(), _match(), _match()]),
+        matcher=matcher,
         input_driver=FakeInputDriver(),
         template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
-        now=FakeClock().now,
-        sleep=FakeClock().sleep,
+        now=clock.now,
+        sleep=clock.sleep,
     )
 
-    result = runner.run_sequence(_sequence(_step(max_click_attempts=2)), selected_window=_window())
+    result = runner.run_sequence(_sequence(_step(max_click_attempts=1)), selected_window=_window())
 
     assert result.status == "failed"
-    assert result.failure_reason == "no_ui_change_after_click"
-    assert len(runner.input_driver.clicks) == 2
+    assert result.failure_reason == "ui_did_not_change"
+    assert len(runner.input_driver.clicks) == 1
+    assert matcher.calls >= 3
+
+
+def test_runner_caps_no_change_confirmation_budget_at_two_seconds_from_click() -> None:
+    clock = FakeClock()
+    matcher = FakeMatcher([_match()] * 64)
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=matcher,
+        input_driver=FakeInputDriver(),
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+        scan_interval_seconds=0.6,
+    )
+
+    result = runner.run_sequence(
+        _sequence(_step(max_click_attempts=1, post_click_settle_ms=500)),
+        selected_window=_window(),
+    )
+
+    assert result.status == "failed"
+    assert result.failure_reason == "ui_did_not_change"
+    assert clock.value <= 102.0
 
 
 def test_runner_rejects_click_offset_outside_window_bounds() -> None:

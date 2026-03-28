@@ -4,11 +4,13 @@ from datetime import datetime
 from pathlib import Path
 
 from raidbot.desktop.models import (
+    BotActionSlotConfig,
     ActivityEntry,
     BotRuntimeState,
     DesktopAppConfig,
     DesktopAppState,
     TelegramConnectionState,
+    default_bot_action_slots,
 )
 
 
@@ -28,6 +30,21 @@ def test_desktop_app_config_holds_required_values() -> None:
         default_action_repost=False,
         default_action_bookmark=True,
         default_action_reply=False,
+        auto_run_enabled=True,
+        default_auto_sequence_id="seq-1",
+        auto_run_settle_ms=1500,
+        bot_action_slots=(
+            BotActionSlotConfig(key="slot_1_r", label="R", enabled=True),
+            BotActionSlotConfig(
+                key="slot_2_l",
+                label="L",
+                enabled=False,
+                template_path=Path("templates/l.png"),
+                updated_at="2026-03-28T12:00:00",
+            ),
+            BotActionSlotConfig(key="slot_3_r", label="R"),
+            BotActionSlotConfig(key="slot_4_b", label="B"),
+        ),
     )
 
     assert config.telegram_api_id == 123
@@ -44,6 +61,35 @@ def test_desktop_app_config_holds_required_values() -> None:
     assert config.default_action_repost is False
     assert config.default_action_bookmark is True
     assert config.default_action_reply is False
+    assert config.auto_run_enabled is True
+    assert config.default_auto_sequence_id == "seq-1"
+    assert config.auto_run_settle_ms == 1500
+    assert config.bot_action_slots == (
+        BotActionSlotConfig(key="slot_1_r", label="R", enabled=True),
+        BotActionSlotConfig(
+            key="slot_2_l",
+            label="L",
+            enabled=False,
+            template_path=Path("templates/l.png"),
+            updated_at="2026-03-28T12:00:00",
+        ),
+        BotActionSlotConfig(key="slot_3_r", label="R"),
+        BotActionSlotConfig(key="slot_4_b", label="B"),
+    )
+
+
+def test_desktop_app_config_uses_default_bot_action_slots_when_unspecified() -> None:
+    config = DesktopAppConfig(
+        telegram_api_id=123,
+        telegram_api_hash="hash",
+        telegram_session_path=Path("session.session"),
+        telegram_phone_number=None,
+        whitelisted_chat_ids=[111],
+        allowed_sender_ids=[333],
+        chrome_profile_directory="Default",
+    )
+
+    assert config.bot_action_slots == default_bot_action_slots()
 
 
 def test_desktop_model_enums_expose_expected_values() -> None:
@@ -78,6 +124,10 @@ def test_desktop_app_state_defaults_are_stopped_and_disconnected() -> None:
     assert state.session_closed == 0
     assert state.activity == []
     assert state.last_successful_raid_open_at is None
+    assert state.automation_queue_state == "idle"
+    assert state.automation_queue_length == 0
+    assert state.automation_current_url is None
+    assert state.automation_last_error is None
 
 
 def test_desktop_app_config_exposes_legacy_sender_property_for_compatibility() -> None:

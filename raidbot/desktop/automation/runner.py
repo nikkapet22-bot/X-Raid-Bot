@@ -33,6 +33,7 @@ class SequenceRunner:
         sleep: Callable[[float], None] = time.sleep,
         emit_event: Callable[[dict[str, Any]], None] | None = None,
         scan_interval_seconds: float = 0.05,
+        click_confirmation_seconds: float = 2.0,
     ) -> None:
         self.window_manager = window_manager
         self.capture = capture
@@ -43,6 +44,7 @@ class SequenceRunner:
         self.sleep = sleep
         self.emit_event = emit_event or (lambda _event: None)
         self.scan_interval_seconds = scan_interval_seconds
+        self.click_confirmation_seconds = click_confirmation_seconds
         self._stop_requested = False
 
     def request_stop(self) -> None:
@@ -227,17 +229,25 @@ class SequenceRunner:
                                 "point": point,
                             }
                         )
-                        self.sleep(step.post_click_settle_ms / 1000)
-                        window = self._refresh_active_window(window, step_index)
-                        if isinstance(window, RunResult):
-                            return window
-                        next_frame = self.capture.capture(window.bounds)
-                        next_match = self.matcher.find_best_match(
-                            next_frame,
+                        confirmation = self._confirm_ui_changed_after_click(
+                            window,
+                            step,
+                            step_index,
                             template,
-                            threshold=step.match_threshold,
+                            match,
                         )
-                        if self._step_succeeded(match, next_match):
+                        if isinstance(confirmation, RunResult):
+                            if confirmation.status == "completed":
+                                self.emit_event(
+                                    {
+                                        "type": "step_succeeded",
+                                        "step_index": step_index,
+                                        "window_handle": window.handle,
+                                    }
+                                )
+                                return None
+                            return confirmation
+                        if self._step_succeeded(match, confirmation):
                             self.emit_event(
                                 {
                                     "type": "step_succeeded",
@@ -249,13 +259,11 @@ class SequenceRunner:
                         if click_attempts >= step.max_click_attempts:
                             return RunResult(
                                 status="failed",
-                                failure_reason="no_ui_change_after_click",
+                                failure_reason="ui_did_not_change",
                                 window_handle=window.handle,
                                 step_index=step_index,
                             )
-                        match = next_match
-                        if match is None:
-                            break
+                        match = confirmation
                     break
                 if self.now() >= deadline:
                     break
@@ -281,10 +289,49 @@ class SequenceRunner:
     def _step_succeeded(self, previous_match: MatchResult, next_match: MatchResult | None) -> bool:
         if next_match is None:
             return True
-        if next_match.score < previous_match.score:
-            if next_match.score < 0:
-                return True
         return self._has_material_shift(previous_match, next_match)
+
+    def _confirm_ui_changed_after_click(
+        self,
+        window: WindowInfo,
+        step: AutomationStep,
+        step_index: int,
+        template: Any,
+        clicked_match: MatchResult,
+    ) -> RunResult | MatchResult | None:
+        deadline = self.now() + self.click_confirmation_seconds
+        settle_seconds = min(step.post_click_settle_ms / 1000, max(0.0, deadline - self.now()))
+        if settle_seconds > 0:
+            self.sleep(settle_seconds)
+        while True:
+            if self._stop_requested:
+                return RunResult(
+                    status="stopped",
+                    failure_reason="stopped",
+                    window_handle=window.handle,
+                    step_index=step_index,
+                )
+            window = self._refresh_active_window(window, step_index)
+            if isinstance(window, RunResult):
+                return window
+            frame = self.capture.capture(window.bounds)
+            next_match = self.matcher.find_best_match(
+                frame,
+                template,
+                threshold=step.match_threshold,
+            )
+            if self._step_succeeded(clicked_match, next_match):
+                return RunResult(
+                    status="completed",
+                    window_handle=window.handle,
+                    step_index=step_index,
+                )
+            if self.now() >= deadline:
+                return next_match
+            sleep_seconds = min(self.scan_interval_seconds, max(0.0, deadline - self.now()))
+            if sleep_seconds <= 0:
+                return next_match
+            self.sleep(sleep_seconds)
 
     def _has_material_shift(self, previous_match: MatchResult, next_match: MatchResult) -> bool:
         min_dimension = min(previous_match.width, previous_match.height)

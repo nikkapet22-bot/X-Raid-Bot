@@ -31,6 +31,18 @@ def choose_window_for_rule(windows: list[WindowInfo], rule: str) -> WindowInfo |
     return max(matches, key=lambda item: item.last_focused_at, default=None)
 
 
+def find_existing_chrome_window(
+    window_manager: "WindowManager",
+    profile_directory: str | None = None,
+) -> WindowInfo | None:
+    if not profile_directory:
+        return None
+    finder = getattr(window_manager, "find_owned_chrome_window", None)
+    if callable(finder):
+        return finder(profile_directory)
+    return None
+
+
 class WindowManager:
     def __init__(
         self,
@@ -79,6 +91,13 @@ class WindowManager:
             success=True,
             window=replace(window, is_minimized=False),
         )
+
+    def find_owned_chrome_window(self, profile_directory: str) -> WindowInfo | None:
+        _ = profile_directory
+        chrome_windows = self.list_chrome_windows()
+        if len(chrome_windows) == 1:
+            return chrome_windows[0]
+        return None
 
     def _list_windows_win32(self) -> list[WindowInfo]:
         win32gui = importlib.import_module("win32gui")

@@ -9,6 +9,7 @@ from typing import Any
 
 from .models import (
     ActivityEntry,
+    BotActionSlotConfig,
     BotRuntimeState,
     DesktopAppConfig,
     DesktopAppState,
@@ -71,6 +72,7 @@ class DesktopStorage:
             "telegram_phone_number": config.telegram_phone_number,
             "whitelisted_chat_ids": list(config.whitelisted_chat_ids),
             "allowed_sender_ids": list(config.allowed_sender_ids),
+            "allowed_sender_entries": list(config.allowed_sender_entries),
             "chrome_profile_directory": config.chrome_profile_directory,
             "browser_mode": config.browser_mode,
             "executor_name": config.executor_name,
@@ -79,6 +81,12 @@ class DesktopStorage:
             "default_action_repost": config.default_action_repost,
             "default_action_bookmark": config.default_action_bookmark,
             "default_action_reply": config.default_action_reply,
+            "auto_run_enabled": config.auto_run_enabled,
+            "default_auto_sequence_id": config.default_auto_sequence_id,
+            "auto_run_settle_ms": config.auto_run_settle_ms,
+            "bot_action_slots": [
+                self._bot_action_slot_to_data(slot) for slot in config.bot_action_slots
+            ],
         }
 
     def _config_from_data(self, data: dict[str, Any]) -> DesktopAppConfig:
@@ -86,6 +94,10 @@ class DesktopStorage:
         if allowed_sender_ids is None:
             legacy_sender_id = self._maybe_int(data.get("raidar_sender_id"))
             allowed_sender_ids = [] if legacy_sender_id is None else [legacy_sender_id]
+        allowed_sender_entries = data.get("allowed_sender_entries")
+        if allowed_sender_entries is None:
+            allowed_sender_entries = [str(sender_id) for sender_id in allowed_sender_ids]
+        bot_action_slots_data = data.get("bot_action_slots") or ()
         return DesktopAppConfig(
             telegram_api_id=int(data["telegram_api_id"]),
             telegram_api_hash=str(data["telegram_api_hash"]),
@@ -93,6 +105,7 @@ class DesktopStorage:
             telegram_phone_number=data.get("telegram_phone_number"),
             whitelisted_chat_ids=[int(chat_id) for chat_id in data["whitelisted_chat_ids"]],
             allowed_sender_ids=[int(sender_id) for sender_id in allowed_sender_ids],
+            allowed_sender_entries=tuple(str(entry) for entry in allowed_sender_entries),
             chrome_profile_directory=str(data["chrome_profile_directory"]),
             browser_mode=str(data.get("browser_mode", "launch-only")),
             executor_name=str(data.get("executor_name", "noop")),
@@ -107,6 +120,18 @@ class DesktopStorage:
                 default=False,
             ),
             default_action_reply=self._maybe_bool(data.get("default_action_reply"), default=True),
+            auto_run_enabled=self._maybe_bool(data.get("auto_run_enabled"), default=False),
+            default_auto_sequence_id=data.get("default_auto_sequence_id"),
+            auto_run_settle_ms=(
+                int(data["auto_run_settle_ms"])
+                if data.get("auto_run_settle_ms") is not None
+                else 1500
+            ),
+            bot_action_slots=tuple(
+                self._bot_action_slot_from_data(slot_data)
+                for slot_data in bot_action_slots_data
+                if isinstance(slot_data, dict)
+            ),
         )
 
     def _state_to_data(self, state: DesktopAppState) -> dict[str, Any]:
@@ -128,6 +153,10 @@ class DesktopStorage:
             "last_successful_raid_open_at": state.last_successful_raid_open_at,
             "activity": [self._activity_to_data(entry) for entry in activity],
             "last_error": state.last_error,
+            "automation_queue_state": state.automation_queue_state,
+            "automation_queue_length": state.automation_queue_length,
+            "automation_current_url": state.automation_current_url,
+            "automation_last_error": state.automation_last_error,
         }
 
     def _state_from_data(self, data: dict[str, Any]) -> DesktopAppState:
@@ -151,6 +180,14 @@ class DesktopStorage:
             last_successful_raid_open_at=data.get("last_successful_raid_open_at"),
             activity=activity[-_ACTIVITY_LIMIT:],
             last_error=data.get("last_error"),
+            automation_queue_state=str(data.get("automation_queue_state") or "idle"),
+            automation_queue_length=(
+                int(data["automation_queue_length"])
+                if data.get("automation_queue_length") is not None
+                else 0
+            ),
+            automation_current_url=data.get("automation_current_url"),
+            automation_last_error=data.get("automation_last_error"),
         )
 
     def _normalize_loaded_state(self, state: DesktopAppState) -> DesktopAppState:
@@ -158,6 +195,10 @@ class DesktopStorage:
             state,
             bot_state=self._normalize_bot_state(state.bot_state),
             connection_state=self._normalize_connection_state(state.connection_state),
+            automation_queue_state="idle",
+            automation_queue_length=0,
+            automation_current_url=None,
+            automation_last_error=None,
         )
 
     def _activity_to_data(self, entry: ActivityEntry) -> dict[str, Any]:
@@ -188,6 +229,25 @@ class DesktopStorage:
         if value is None:
             return default
         return bool(value)
+
+    def _bot_action_slot_to_data(self, slot: BotActionSlotConfig) -> dict[str, Any]:
+        return {
+            "key": slot.key,
+            "label": slot.label,
+            "enabled": slot.enabled,
+            "template_path": str(slot.template_path) if slot.template_path is not None else None,
+            "updated_at": slot.updated_at,
+        }
+
+    def _bot_action_slot_from_data(self, data: dict[str, Any]) -> BotActionSlotConfig:
+        template_path = data.get("template_path")
+        return BotActionSlotConfig(
+            key=str(data.get("key") or ""),
+            label=str(data.get("label") or ""),
+            enabled=self._maybe_bool(data.get("enabled"), default=False),
+            template_path=Path(template_path) if template_path is not None else None,
+            updated_at=data.get("updated_at"),
+        )
 
     def _normalize_bot_state(self, state: BotRuntimeState) -> BotRuntimeState:
         if state in {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -13,14 +14,16 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTabWidget,
     QVBoxLayout,
     QWidget,
     QStyle,
 )
 
+from raidbot.desktop.bot_actions import BotActionsPage
+from raidbot.desktop.bot_actions.capture import SlotCaptureService
 from raidbot.desktop.chrome_profiles import detect_chrome_environment
-from raidbot.desktop.automation.page import AutomationPage
 from raidbot.desktop.models import DesktopAppState
 from raidbot.desktop.settings_page import SettingsPage
 from raidbot.desktop.telegram_setup import TelegramSetupService
@@ -38,6 +41,7 @@ class MainWindow(QMainWindow):
         confirm_close=None,
         available_profiles_loader=None,
         session_status_loader=None,
+        slot_capture_service=None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -48,8 +52,15 @@ class MainWindow(QMainWindow):
             available_profiles_loader or self._load_available_profiles
         )
         self.session_status_loader = session_status_loader or self._load_session_status
+        self.slot_capture_service = slot_capture_service or SlotCaptureService(
+            base_dir=getattr(self.storage, "base_dir", Path(".")),
+        )
         self.bot_state = "stopped"
         self.connection_state = "disconnected"
+        self._bot_actions_status_text = "Idle"
+        self._bot_actions_current_slot_text: str | None = None
+        self._bot_actions_last_error_text: str | None = None
+        self._bot_actions_run_slots_snapshot: tuple[tuple[int, str], ...] = ()
 
         self.setWindowTitle("Raid Bot")
 
@@ -83,44 +94,42 @@ class MainWindow(QMainWindow):
         central_layout = QVBoxLayout(central_widget)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_dashboard_tab(), "Dashboard")
+        self.tabs.addTab(self._wrap_tab_content(self._build_dashboard_tab()), "Dashboard")
         self.settings_page = SettingsPage(
             config=self.controller.config,
             available_profiles=self.available_profiles_loader(),
             session_status=self.session_status_loader(),
             reauthorize_available=hasattr(self.controller, "reauthorize_session"),
         )
-        self.settings_page.applyRequested.connect(self.controller.apply_config)
+        self.settings_page.applyRequested.connect(self._apply_settings_config)
         if hasattr(self.controller, "reauthorize_session"):
             self.settings_page.reauthorizeRequested.connect(
                 self.controller.reauthorize_session
             )
-        self.tabs.addTab(self.settings_page, "Settings")
-        self.automation_page = AutomationPage(
-            sequences=self._load_automation_sequences(),
-            windows=self._load_automation_windows(),
+        self.tabs.addTab(self._wrap_tab_content(self.settings_page), "Settings")
+        self.bot_actions_page = BotActionsPage(
+            config=self.controller.config,
         )
-        self.automation_page.sequenceSaveRequested.connect(
-            self.controller.save_automation_sequence
+        self.bot_actions_page.slotCaptureRequested.connect(self._capture_bot_action_slot)
+        self.bot_actions_page.slotTestRequested.connect(
+            self.controller.test_bot_action_slot
         )
-        self.automation_page.sequenceDeleteRequested.connect(
-            self.controller.delete_automation_sequence
+        self.bot_actions_page.slotEnabledChanged.connect(
+            self.controller.set_bot_action_slot_enabled
         )
-        self.automation_page.runRequested.connect(self.controller.start_automation_run)
-        self.automation_page.dryRunRequested.connect(
-            self.controller.dry_run_automation_step
+        self.bot_actions_page.settleDelayChanged.connect(
+            self.controller.set_auto_run_settle_ms
         )
-        self.automation_page.stopRequested.connect(self.controller.stop_automation_run)
-        self.automation_page.windowsRefreshRequested.connect(
-            self._refresh_automation_windows
-        )
-        self.tabs.addTab(self.automation_page, "Automation")
+        self.tabs.addTab(self._wrap_tab_content(self.bot_actions_page), "Bot Actions")
         central_layout.addWidget(self.tabs)
 
         self.setCentralWidget(central_widget)
 
         self._connect_controller_signals()
-        self._apply_state(self.storage.load_state(), include_activity=True)
+        state = self.storage.load_state()
+        self._apply_state(state, include_activity=True)
+        self._sync_config(self.controller.config)
+        self._render_bot_actions_status()
         self._ensure_window_icon()
         self.tray_controller = tray_controller_factory(
             window=self,
@@ -271,6 +280,13 @@ class MainWindow(QMainWindow):
         panel_layout.addWidget(surface)
         return panel, surface
 
+    def _wrap_tab_content(self, widget: QWidget) -> QScrollArea:
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setWidget(widget)
+        return scroll_area
+
     def _build_section_title(self, text: str) -> QLabel:
         label = QLabel(text)
         return label
@@ -287,14 +303,10 @@ class MainWindow(QMainWindow):
         self.controller.statsChanged.connect(self._apply_stats_state)
         self.controller.activityAdded.connect(self._append_activity_entry)
         self.controller.errorRaised.connect(self.last_error_label.setText)
-        self.controller.errorRaised.connect(self.automation_page.show_error)
-        self.controller.automationSequencesChanged.connect(
-            self.automation_page.set_sequences
-        )
-        self.controller.automationRunEvent.connect(self.automation_page.handle_run_event)
-        self.controller.automationRunStateChanged.connect(
-            self.automation_page.set_run_state
-        )
+        self.controller.errorRaised.connect(self._show_bot_actions_error)
+        self.controller.configChanged.connect(self._sync_config)
+        self.controller.automationQueueStateChanged.connect(self._update_bot_actions_queue_state)
+        self.controller.botActionRunEvent.connect(self._handle_bot_actions_run_event)
 
     def _update_bot_state(self, state: str) -> None:
         self.bot_state = state
@@ -326,14 +338,14 @@ class MainWindow(QMainWindow):
         self.last_error_label.setText(state.last_error or "")
         if include_activity:
             self.activity_list.clear()
-            for entry in state.activity:
+            for entry in reversed(state.activity):
                 self.activity_list.addItem(self._format_activity(entry))
 
     def _apply_stats_state(self, state: DesktopAppState) -> None:
         self._apply_state(state, include_activity=False)
 
     def _append_activity_entry(self, entry) -> None:
-        self.activity_list.addItem(self._format_activity(entry))
+        self.activity_list.insertItem(0, self._format_activity(entry))
 
     def _format_activity(self, entry) -> str:
         timestamp = entry.timestamp
@@ -433,15 +445,105 @@ class MainWindow(QMainWindow):
             return "unknown"
         return getattr(status, "value", str(status))
 
-    def _load_automation_sequences(self) -> list[object]:
-        if hasattr(self.controller, "list_automation_sequences"):
-            return self.controller.list_automation_sequences()
-        return []
+    def _apply_settings_config(self, config) -> None:
+        try:
+            self.controller.apply_config(config)
+        except Exception as exc:
+            self.settings_page.show_error(str(exc))
+            return
+        self.settings_page.show_success("Settings saved.")
 
-    def _load_automation_windows(self) -> list[object]:
-        if hasattr(self.controller, "list_target_windows"):
-            return self.controller.list_target_windows()
-        return []
+    def _capture_bot_action_slot(self, slot_index: int) -> None:
+        slot = self.controller.config.bot_action_slots[slot_index]
+        try:
+            template_path = self.slot_capture_service.capture_slot(
+                slot,
+                existing_path=slot.template_path,
+            )
+            self.controller.set_bot_action_slot_template_path(slot_index, template_path)
+        except Exception as exc:
+            self._show_bot_actions_error(str(exc))
 
-    def _refresh_automation_windows(self) -> None:
-        self.automation_page.refresh_windows(self._load_automation_windows())
+    def _sync_config(self, config) -> None:
+        self.settings_page.set_config(config)
+        self.bot_actions_page.set_slots(config.bot_action_slots)
+        self.bot_actions_page.set_settle_delay(config.auto_run_settle_ms)
+
+    def _show_bot_actions_error(self, message: str) -> None:
+        self._bot_actions_last_error_text = str(message)
+        self._render_bot_actions_status()
+
+    def _update_bot_actions_queue_state(self, state: str) -> None:
+        queue_status_map = {
+            "queued": "Queued",
+            "running": "Running",
+            "paused": "Paused",
+            "idle": "Idle",
+        }
+        self._bot_actions_status_text = queue_status_map.get(str(state), "Idle")
+        if state == "idle":
+            self._clear_bot_actions_run_snapshot()
+        self._render_bot_actions_status()
+
+    def _handle_bot_actions_run_event(self, event: dict[str, object]) -> None:
+        event_type = str(event.get("type", ""))
+        if event_type in {"slot_test_started", "slot_test_succeeded", "slot_test_failed"}:
+            self._bot_actions_status_text = str(event.get("message", "Idle"))
+            self._bot_actions_current_slot_text = None
+            self._bot_actions_last_error_text = None
+            self._clear_bot_actions_run_snapshot()
+        elif event_type == "automation_run_started":
+            self._bot_actions_status_text = "Running"
+            self._bot_actions_current_slot_text = None
+            self._snapshot_bot_actions_run_slots()
+            self._bot_actions_last_error_text = None
+        elif event_type == "automation_run_succeeded":
+            self._bot_actions_status_text = "Idle"
+            self._clear_bot_actions_run_snapshot()
+            self._bot_actions_last_error_text = None
+        elif event_type in {"automation_run_failed", "step_failed", "target_window_lost"}:
+            self._bot_actions_status_text = "Idle"
+            slot_text = self._bot_actions_slot_text(event.get("step_index"))
+            if slot_text is not None:
+                self._bot_actions_current_slot_text = slot_text
+            self._clear_bot_actions_run_snapshot(clear_current_slot=False)
+            reason = event.get("reason")
+            if reason:
+                self._bot_actions_last_error_text = str(reason)
+        elif "step_index" in event:
+            self._bot_actions_current_slot_text = self._bot_actions_slot_text(
+                event.get("step_index")
+            )
+        self._render_bot_actions_status()
+
+    def _snapshot_bot_actions_run_slots(self) -> None:
+        slots = getattr(self.controller.config, "bot_action_slots", ())
+        self._bot_actions_run_slots_snapshot = tuple(
+            (slot_index + 1, str(slot.label))
+            for slot_index, slot in enumerate(slots)
+            if getattr(slot, "enabled", False)
+        )
+
+    def _clear_bot_actions_run_snapshot(self, *, clear_current_slot: bool = True) -> None:
+        self._bot_actions_run_slots_snapshot = ()
+        if clear_current_slot:
+            self._bot_actions_current_slot_text = None
+
+    def _bot_actions_slot_text(self, step_index: object) -> str | None:
+        if not isinstance(step_index, int) or step_index < 0:
+            return None
+        if step_index >= len(self._bot_actions_run_slots_snapshot):
+            return None
+        slot_number, slot_label = self._bot_actions_run_slots_snapshot[step_index]
+        return f"Slot {slot_number} ({slot_label})"
+
+    def _render_bot_actions_status(self) -> None:
+        lines = [f"Status: {self._bot_actions_status_text}"]
+        if self._bot_actions_current_slot_text:
+            lines.append(f"Current slot: {self._bot_actions_current_slot_text}")
+        if self._bot_actions_last_error_text:
+            lines.append(f"Last error: {self._bot_actions_last_error_text}")
+        self.bot_actions_page.status_label.setText("\n".join(lines))
+
+    def _bot_state_is_active(self, state: str) -> bool:
+        return state in {"starting", "running", "stopping"}

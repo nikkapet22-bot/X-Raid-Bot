@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Signal
@@ -79,6 +80,7 @@ class SettingsPage(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._config = config
         self._session_path = config.telegram_session_path
         self._phone_number = config.telegram_phone_number
         self._reauthorize_available = reauthorize_available
@@ -144,11 +146,18 @@ class SettingsPage(QWidget):
         routing_layout = QFormLayout()
         routing_layout.setContentsMargins(0, 0, 0, 0)
         whitelist_text = ", ".join(str(chat_id) for chat_id in config.whitelisted_chat_ids)
-        allowed_sender_text = ", ".join(str(sender_id) for sender_id in config.allowed_sender_ids)
         self.whitelist_input = QLineEdit(whitelist_text)
-        self.allowed_senders_input = QLineEdit(allowed_sender_text)
         self.whitelist_input.setPlaceholderText("Comma-separated chat IDs")
-        self.allowed_senders_input.setPlaceholderText("Comma-separated sender IDs")
+        self.sender_row_widgets: list[QWidget] = []
+        self.sender_entry_inputs: list[QLineEdit] = []
+        self.sender_remove_buttons: list[QPushButton] = []
+        self.sender_rows_container = QWidget()
+        self.sender_rows_layout = QVBoxLayout(self.sender_rows_container)
+        self.sender_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.sender_rows_layout.setSpacing(8)
+        self.add_sender_button = QPushButton("Add sender")
+        self.add_sender_button.setProperty("variant", "secondary")
+        self.add_sender_button.clicked.connect(self._handle_add_sender_row)
         self.profile_combo = QComboBox()
         for profile in available_profiles:
             self.profile_combo.addItem(profile)
@@ -160,7 +169,25 @@ class SettingsPage(QWidget):
         routing_hint.setProperty("muted", True)
         routing_hint.setWordWrap(True)
         routing_layout.addRow("", routing_hint)
-        routing_layout.addRow("Allowed senders", self.allowed_senders_input)
+        allowed_sender_entries = config.allowed_sender_entries or tuple(
+            str(sender_id) for sender_id in config.allowed_sender_ids
+        )
+        if allowed_sender_entries:
+            for entry in allowed_sender_entries:
+                self._add_sender_row(entry)
+        else:
+            self._add_sender_row("")
+        sender_actions = QHBoxLayout()
+        sender_actions.setContentsMargins(0, 0, 0, 0)
+        sender_actions.addWidget(self.add_sender_button, 0)
+        sender_actions.addStretch(1)
+        sender_editor = QWidget()
+        sender_editor_layout = QVBoxLayout(sender_editor)
+        sender_editor_layout.setContentsMargins(0, 0, 0, 0)
+        sender_editor_layout.setSpacing(8)
+        sender_editor_layout.addWidget(self.sender_rows_container)
+        sender_editor_layout.addLayout(sender_actions)
+        routing_layout.addRow("Allowed senders", sender_editor)
         self.allowed_senders_hint_label = QLabel("Required to start the bot.")
         self.allowed_senders_hint_label.setProperty("muted", True)
         self.allowed_senders_hint_label.setWordWrap(True)
@@ -221,6 +248,9 @@ class SettingsPage(QWidget):
     def set_session_status(self, status: str) -> None:
         self.session_status_label.setText(status)
 
+    def set_config(self, config: DesktopAppConfig) -> None:
+        self._config = config
+
     def set_available_profiles(self, profiles: list[str]) -> None:
         current_profile = self.profile_combo.currentText()
         self.profile_combo.clear()
@@ -239,6 +269,12 @@ class SettingsPage(QWidget):
             return
         self.status_label.clear()
         self.applyRequested.emit(config)
+
+    def show_error(self, message: str) -> None:
+        self.status_label.setText(message)
+
+    def show_success(self, message: str) -> None:
+        self.status_label.setText(message)
 
     def _build_section(
         self,
@@ -274,11 +310,14 @@ class SettingsPage(QWidget):
 
     def _build_config(self) -> DesktopAppConfig:
         whitelist = _parse_int_list(self.whitelist_input.text(), field_name="Chat whitelist")
-        allowed_sender_ids = _parse_required_int_list(
-            self.allowed_senders_input.text(),
-            field_name="Allowed sender IDs",
-        )
-        return DesktopAppConfig(
+        allowed_sender_entries = self._parse_required_sender_entries()
+        allowed_sender_ids = [
+            int(entry)
+            for entry in allowed_sender_entries
+            if entry.lstrip("-").isdigit()
+        ]
+        return replace(
+            self._config,
             telegram_api_id=_parse_int_field(self.api_id_input.text(), field_name="Telegram API ID"),
             telegram_api_hash=_require_text(
                 self.api_hash_input.text(),
@@ -288,6 +327,7 @@ class SettingsPage(QWidget):
             telegram_phone_number=self._phone_number,
             whitelisted_chat_ids=whitelist,
             allowed_sender_ids=allowed_sender_ids,
+            allowed_sender_entries=allowed_sender_entries,
             chrome_profile_directory=self.profile_combo.currentText(),
             browser_mode=self.browser_mode_combo.currentText(),
             executor_name=self.executor_name_label.text(),
@@ -297,3 +337,51 @@ class SettingsPage(QWidget):
             default_action_bookmark=self.bookmark_toggle.isChecked(),
             default_action_reply=self.reply_toggle.isChecked(),
         )
+
+    def _parse_required_sender_entries(self) -> tuple[str, ...]:
+        entries = tuple(
+            entry_input.text().strip()
+            for entry_input in self.sender_entry_inputs
+            if entry_input.text().strip()
+        )
+        if not entries:
+            raise ValueError("At least one allowed sender is required.")
+        return entries
+
+    def _handle_add_sender_row(self) -> None:
+        self._add_sender_row("")
+
+    def _add_sender_row(self, text: str) -> None:
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        entry_input = QLineEdit(text)
+        entry_input.setPlaceholderText("Sender username or ID")
+        remove_button = QPushButton("Remove")
+        remove_button.setProperty("variant", "secondary")
+        remove_button.clicked.connect(lambda: self._remove_sender_row(row_widget))
+        row_layout.addWidget(entry_input, 1)
+        row_layout.addWidget(remove_button, 0)
+        self.sender_rows_layout.addWidget(row_widget)
+        self.sender_row_widgets.append(row_widget)
+        self.sender_entry_inputs.append(entry_input)
+        self.sender_remove_buttons.append(remove_button)
+        self._sync_sender_remove_buttons()
+
+    def _remove_sender_row(self, row_widget: QWidget) -> None:
+        index = self.sender_row_widgets.index(row_widget)
+        if len(self.sender_row_widgets) == 1:
+            self.sender_entry_inputs[0].clear()
+            return
+        removed_widget = self.sender_row_widgets.pop(index)
+        self.sender_entry_inputs.pop(index)
+        self.sender_remove_buttons.pop(index)
+        self.sender_rows_layout.removeWidget(removed_widget)
+        removed_widget.deleteLater()
+        self._sync_sender_remove_buttons()
+
+    def _sync_sender_remove_buttons(self) -> None:
+        allow_remove = len(self.sender_remove_buttons) > 1
+        for button in self.sender_remove_buttons:
+            button.setEnabled(allow_remove)
