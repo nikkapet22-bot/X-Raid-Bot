@@ -31,6 +31,10 @@ def choose_window_for_rule(windows: list[WindowInfo], rule: str) -> WindowInfo |
     return max(matches, key=lambda item: item.last_focused_at, default=None)
 
 
+def find_existing_chrome_window(window_manager: "WindowManager") -> WindowInfo | None:
+    return choose_window_for_rule(window_manager.list_chrome_windows(), "chrome")
+
+
 class WindowManager:
     def __init__(
         self,

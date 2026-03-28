@@ -2,6 +2,7 @@ from pathlib import Path
 import subprocess
 
 from raidbot.chrome import ChromeOpener
+from raidbot.desktop.automation.autorun import OpenedRaidContext
 
 
 def test_chrome_opener_builds_expected_command(monkeypatch):
@@ -15,9 +16,10 @@ def test_chrome_opener_builds_expected_command(monkeypatch):
         user_data_dir=Path(r"C:\ChromeProfile"),
         profile_directory="Profile 3",
         launcher=fake_launcher,
+        clock=lambda: 42.5,
     )
 
-    opener.open("https://example.com/status/123")
+    context = opener.open("https://example.com/status/123", window_handle=777)
 
     assert captured["cmd"] == [
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -26,6 +28,12 @@ def test_chrome_opener_builds_expected_command(monkeypatch):
         "--profile-directory=Profile 3",
         "https://example.com/status/123",
     ]
+    assert context == OpenedRaidContext(
+        normalized_url="https://example.com/status/123",
+        opened_at=42.5,
+        window_handle=777,
+        profile_directory="Profile 3",
+    )
 
 
 def test_chrome_opener_defaults_launcher_to_popen():
