@@ -511,6 +511,24 @@ def test_main_window_bot_actions_runtime_failure_keeps_simple_status(qtbot) -> N
     )
 
 
+def test_main_window_bot_actions_step_event_shows_and_clears_current_slot(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    window.controller.automationRunStateChanged.emit("running")
+    window.controller.automationRunEvent.emit(
+        {"type": "step_search_started", "step_index": 1}
+    )
+
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Running\nCurrent slot: Slot 2 (L)"
+    )
+
+    window.controller.automationRunEvent.emit({"type": "automation_run_succeeded"})
+
+    assert window.bot_actions_page.status_label.text() == "Status: Idle"
+
+
 def test_main_window_capture_updates_bot_action_slot_via_controller(qtbot) -> None:
     captured_path = Path("bot_actions/slot_1_r.png")
     capture_service = FakeSlotCaptureService(captured_path)

@@ -477,6 +477,8 @@ class MainWindow(QMainWindow):
             "idle": "Idle",
         }
         self._bot_actions_status_text = queue_status_map.get(str(state), "Idle")
+        if state == "idle":
+            self._bot_actions_current_slot_text = None
         self._render_bot_actions_status()
 
     def _update_bot_actions_run_state(self, state: str) -> None:
@@ -484,22 +486,39 @@ class MainWindow(QMainWindow):
             self._bot_actions_status_text = "Running"
         elif state == "idle":
             self._bot_actions_status_text = "Idle"
+            self._bot_actions_current_slot_text = None
         self._render_bot_actions_status()
 
     def _handle_bot_actions_run_event(self, event: dict[str, object]) -> None:
         event_type = str(event.get("type", ""))
         if event_type == "automation_run_started":
             self._bot_actions_status_text = "Running"
+            self._bot_actions_current_slot_text = None
             self._bot_actions_last_error_text = None
         elif event_type == "automation_run_succeeded":
             self._bot_actions_status_text = "Idle"
+            self._bot_actions_current_slot_text = None
             self._bot_actions_last_error_text = None
         elif event_type in {"automation_run_failed", "step_failed", "target_window_lost"}:
             self._bot_actions_status_text = "Idle"
+            self._bot_actions_current_slot_text = None
             reason = event.get("reason")
             if reason:
                 self._bot_actions_last_error_text = str(reason)
+        elif "step_index" in event:
+            self._bot_actions_current_slot_text = self._bot_actions_slot_text(
+                event.get("step_index")
+            )
         self._render_bot_actions_status()
+
+    def _bot_actions_slot_text(self, step_index: object) -> str | None:
+        if not isinstance(step_index, int) or step_index < 0:
+            return None
+        slots = getattr(self.controller.config, "bot_action_slots", ())
+        if step_index >= len(slots):
+            return None
+        slot = slots[step_index]
+        return f"Slot {step_index + 1} ({slot.label})"
 
     def _render_bot_actions_status(self) -> None:
         lines = [f"Status: {self._bot_actions_status_text}"]
