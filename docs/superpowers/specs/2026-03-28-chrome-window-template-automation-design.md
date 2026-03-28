@@ -85,17 +85,21 @@ Each saved sequence should contain:
 
 - `id`
 - `name`
-- `target_window_rule`
+- optional `target_window_rule`
 - ordered `steps`
+
+`target_window_rule` should be a reusable window-selection hint rather than a hard binding. In the first version it should support a Chrome window title substring match. At run time, the user-selected live window should win if one is explicitly chosen; otherwise the runner should attempt to reacquire a Chrome window using the saved rule. If neither path yields a valid window, the run should fail before step execution starts.
 
 Each step should contain:
 
 - `name`
 - `template_path`
 - `match_threshold`
+- `match_method`
 - `max_search_seconds`
 - `max_scroll_attempts`
 - `scroll_amount`
+- `max_click_attempts`
 - `post_click_settle_ms`
 - optional `click_offset_x`
 - optional `click_offset_y`
@@ -115,6 +119,14 @@ Template matching rules for each step:
 
 The first version should use classic template matching. This is more predictable than a generalized vision model and matches the user's requirement to provide explicit template images.
 
+The scoring contract should be explicit in the spec and persisted data:
+
+- the first version should use OpenCV normalized template matching with a score range of `0.0` to `1.0`
+- `match_method` should default to `TM_CCOEFF_NORMED`
+- `match_threshold` should be interpreted only against that normalized score range
+- "best match" should mean the highest score above threshold in the current frame
+- "location shifts materially" should mean the best-match center moves by more than `max(10 px, 0.25 * min(template_width, template_height))`
+
 ## Success Detection
 
 After a step is clicked:
@@ -129,7 +141,13 @@ For the first version, "UI changed" should be defined conservatively:
 - its confidence falls below threshold, or
 - the best match location shifts materially after the click
 
-If the template remains in place after the settle delay, the runner should treat the step as not yet complete and continue according to the step's retry policy rather than blindly advancing.
+If the template remains in place after the settle delay, the runner should not advance. Instead it should:
+
+- rescan the current frame
+- if the same step is still matched, allow another click attempt up to `max_click_attempts`
+- fail the step with a clear `no_ui_change_after_click` reason once click attempts are exhausted
+
+Repeated clicks should be allowed only within the current step and only until `max_click_attempts` is reached.
 
 ## Scrolling Behavior
 
@@ -152,8 +170,9 @@ The desktop app should gain a new automation area with four parts:
 
 2. `Sequence editor`
    - ordered step list
+   - template file picker and replace/remove controls
    - template preview
-   - step settings for threshold, search time, scroll attempts, settle delay, and offsets
+   - step settings for threshold, match method, search time, scroll attempts, scroll amount, click attempts, settle delay, and offsets
 
 3. `Runner panel`
    - select target Chrome window
@@ -205,12 +224,27 @@ The worker should emit structured events back to the UI for:
 
 This matches the project's existing background-work pattern and keeps the app responsive.
 
+## Windows Preconditions
+
+The first version should define and enforce these platform rules:
+
+- the target Chrome window must be restored, not minimized
+- the runner should bring the target window to the foreground before scrolling or clicking
+- the run should fail if the app cannot focus the window
+- the user should keep the target window visible during execution; full occlusion by other windows is unsupported in the first version
+- capture and input must use the same coordinate space; the implementation should operate in DPI-aware physical pixels rather than mixing logical and physical coordinates
+
+These rules are required for stable matching and stable mouse targeting on Windows.
+
 ## Failure Handling
 
 The module should fail safely and visibly in these cases:
 
 - target Chrome window not found
+- target window rule does not resolve to a live Chrome window
+- target window is minimized and cannot be restored
 - selected window disappears during a run
+- target window cannot be focused
 - template file missing or unreadable
 - no match reaches threshold
 - click occurs but no UI change follows
