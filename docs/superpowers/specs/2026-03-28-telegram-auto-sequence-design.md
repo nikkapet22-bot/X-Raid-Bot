@@ -128,7 +128,7 @@ The queue should be FIFO and single-consumer.
 
 Behavior rules:
 
-- every successfully detected Telegram raid link may enqueue one pending raid work item
+- every successfully detected Telegram raid link may enqueue one pending raid work item only after admission checks pass
 - only one auto-run may be active at a time
 - if a new Telegram link arrives while another auto-run is active, it waits in the queue unopened
 - if two supported bots post links at nearly the same time, both links are queued and processed one by one
@@ -160,7 +160,7 @@ Rules:
 
 - the default auto-run sequence is configured in the Automation tab
 - the setting is optional
-- if auto-run is enabled but no default sequence is configured, detected Telegram items should fail at pre-open admission time, Chrome should not be opened for them, and the queue should enter `paused`
+- if auto-run is enabled but no default sequence is configured, detected Telegram items should fail at admission time, Chrome should not be opened for them, and the queue should enter `paused`
 - the manual sequence editor remains available and unchanged in purpose
 
 This avoids per-bot or per-chat routing logic in the first version.
@@ -169,32 +169,54 @@ This avoids per-bot or per-chat routing logic in the first version.
 
 When a supported Telegram message produces a detected raid link:
 
-1. create pending raid work item
-2. enqueue the item
-3. if the queue was idle before admission, transition it to `queued`
-4. if the shared automation slot is free, start processing the head-of-queue item immediately
-5. before opening Chrome, validate that auto-run is still enabled, the queue is not paused, and a default auto sequence is configured
-6. if any of those pre-open checks fail:
+1. validate admission:
+   - `auto_run_enabled` is `true`
+   - queue state is not `paused`
+   - a default auto sequence is configured
+2. if admission fails because auto-run is disabled or the queue is paused:
+   - do not enqueue the item
+   - do not open Chrome
+   - emit a visible rejection reason
+3. if admission fails because the default auto sequence is missing:
+   - do not enqueue the item
+   - do not open Chrome
+   - emit a visible failure reason
+   - move the queue state to `paused`
+4. create pending raid work item
+5. enqueue the item
+6. if the queue was idle before admission, transition it to `queued`
+7. if the shared automation slot is free, start processing the head-of-queue item immediately
+8. before opening Chrome for the head-of-queue item, validate that:
+   - `auto_run_enabled` is still `true`
+   - the queue is not `paused`
+   - an existing Chrome window for the owned profile is already open so the raid URL will open as a new tab instead of a brand-new window
+9. if `auto_run_enabled` has been turned off after admission:
+   - do not open Chrome
+   - leave the item pending at the head of the queue
+   - keep queue state at `queued`
+   - emit a visible blocked reason
+   - wait until `auto_run_enabled` is turned back on or the user clears the queue
+10. if any other pre-open check fails:
    - do not open Chrome
    - emit a visible failure reason
    - pause the queue
    - leave the item terminal and continue only after user recovery
-7. open the URL in Chrome for the head-of-queue item
-8. if Chrome open itself fails:
+11. open the URL in Chrome for the head-of-queue item
+12. if Chrome open itself fails:
    - emit a visible failure reason
    - pause the queue
    - no tab exists, so there is nothing to keep open for inspection
-9. create opened raid context for that active item
-10. transition queue state to `running`
-11. wait the configured settle delay
-12. force the relevant Chrome window to foreground
-13. run the default automation sequence against the foreground Chrome window
-14. if the sequence succeeds:
-   - close only the active tab in the owned foreground Chrome window
+13. create opened raid context for that active item
+14. transition queue state to `running`
+15. wait the configured settle delay
+16. force the relevant Chrome window to foreground
+17. run the default automation sequence against the foreground Chrome window
+18. if the sequence succeeds:
+   - close only the active tab in the already-existing owned foreground Chrome window
    - mark the queue item completed
    - if pending items remain, transition to `queued` and continue to the next queued item
    - otherwise transition to `idle`
-15. if the sequence fails:
+19. if the sequence fails:
    - leave the tab open
    - emit a visible failure message
    - pause the queue
@@ -209,7 +231,7 @@ Failed-item lifecycle rules:
 - pending items remain pending
 - `Resume queue` continues with the next pending item; it does not automatically retry the failed item
 - `Clear queue` removes only pending items; it does not close or alter the failed tab that was left open
-- if `Clear queue` is pressed while the queue is `paused`, the queue transitions to `idle`, reopens admission for new Telegram items, and re-enables manual automation controls
+- if `Clear queue` is pressed while the queue is `paused`, the queue transitions to `idle`, removes pending items, and re-enables manual automation controls; new admissions then follow the current `auto_run_enabled` setting
 - if `Resume queue` is pressed while the queue is `paused` and there are pending items, the queue transitions to `running` and continues with the next pending item
 - if `Resume queue` is pressed while the queue is `paused` and there are no pending items, the queue transitions to `idle`
 
@@ -218,9 +240,10 @@ Failed-item lifecycle rules:
 The first version should stay simple and explicit:
 
 - the queue opens the head-of-queue URL as a new Chrome tab only when that item becomes active
+- the first version requires that an owned Chrome window for the configured profile is already open before the queue processes an item
 - the automation run assumes the newly opened tab is the active tab in the Chrome window that was just used
 - the system forces that Chrome window to the foreground before the sequence starts
-- on success, the app closes only the active tab of that owned foreground Chrome window using tab-close input behavior
+- on success, the app closes only the active tab of that already-existing owned foreground Chrome window using tab-close input behavior
 
 The first version should not depend on browser-debugging protocols or browser-internal tab enumeration.
 
@@ -228,6 +251,7 @@ This implies one important safety rule:
 
 - if the system can no longer reacquire the intended Chrome window, it must fail visibly and pause the queue rather than guessing another target
 - if the foreground Chrome window loses focus or its handle changes during the run, the system must fail visibly rather than guessing
+- if no existing owned Chrome window is available for pre-open validation, the system must fail visibly before opening Chrome rather than risking a brand-new window that cannot be safely tab-closed
 
 User-interaction contract for the first version:
 
@@ -315,7 +339,7 @@ UI/button rules:
 - when queue state is `paused`, manual run controls remain disabled until the user presses `Resume queue` or `Clear queue`
 - `Clear queue` is enabled only when there are pending items or the queue is `paused`
 - toggling `auto_run_enabled` to `false` prevents new admissions immediately but does not cancel the currently active run
-- toggling `auto_run_enabled` to `false` while items are pending prevents further admissions; existing pending items remain until they are processed, resumed, or cleared
+- toggling `auto_run_enabled` to `false` while items are pending prevents further admissions and prevents pending items from starting until auto-run is enabled again or the queue is cleared
 
 ## Desktop State And Persistence
 
@@ -362,7 +386,7 @@ State progression rules:
 - `idle` means no active auto-run and no admitted pending auto items
 - `queued` means at least one admitted pending auto item exists and the shared automation slot is not currently executing an auto step loop
 - `running` means a head-of-queue item has been opened and is currently in settle/run processing
-- `paused` means the active auto item has failed terminally and pending items, if any, are blocked until user recovery
+- `paused` means auto-processing is blocked by a visible failure or configuration problem and pending items, if any, are blocked until user recovery
 
 ## Testing
 
@@ -370,12 +394,15 @@ Implementation should cover:
 
 - successful Telegram detection enqueues one auto-run item
 - two detected links are processed one by one
+- disabled auto-run rejects new admissions without enqueuing
+- disabling auto-run while items are already pending leaves them pending and unopened
 - head-of-queue item opens only when it becomes active
+- missing default sequence rejects admission, opens no Chrome window, and pauses the queue visibly
+- missing existing owned Chrome window fails before opening Chrome and pauses the queue visibly
 - pre-open validation failure does not open Chrome and pauses the queue visibly
 - Chrome open failure pauses the queue visibly
 - success closes only the active tab and continues
 - failure leaves the tab open and pauses the queue
-- missing default sequence fails visibly
 - explicit window reacquisition failure pauses the queue
 - resume continues processing remaining queued items
 - clear queue removes pending items
