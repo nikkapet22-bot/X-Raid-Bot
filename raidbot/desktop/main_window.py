@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from raidbot.desktop.bot_actions import BotActionsPage
+from raidbot.desktop.bot_actions.capture import SlotCaptureService
 from raidbot.desktop.chrome_profiles import detect_chrome_environment
 from raidbot.desktop.models import DesktopAppState
 from raidbot.desktop.settings_page import SettingsPage
@@ -39,6 +41,7 @@ class MainWindow(QMainWindow):
         confirm_close=None,
         available_profiles_loader=None,
         session_status_loader=None,
+        slot_capture_service=None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -49,6 +52,9 @@ class MainWindow(QMainWindow):
             available_profiles_loader or self._load_available_profiles
         )
         self.session_status_loader = session_status_loader or self._load_session_status
+        self.slot_capture_service = slot_capture_service or SlotCaptureService(
+            base_dir=getattr(self.storage, "base_dir", Path(".")),
+        )
         self.bot_state = "stopped"
         self.connection_state = "disconnected"
 
@@ -100,6 +106,7 @@ class MainWindow(QMainWindow):
         self.bot_actions_page = BotActionsPage(
             config=self.controller.config,
         )
+        self.bot_actions_page.slotCaptureRequested.connect(self._capture_bot_action_slot)
         self.bot_actions_page.settleDelayChanged.connect(
             self.controller.set_auto_run_settle_ms
         )
@@ -432,6 +439,17 @@ class MainWindow(QMainWindow):
             self.settings_page.show_error(str(exc))
             return
         self.settings_page.show_success("Settings saved.")
+
+    def _capture_bot_action_slot(self, slot_index: int) -> None:
+        slot = self.controller.config.bot_action_slots[slot_index]
+        try:
+            template_path = self.slot_capture_service.capture_slot(
+                slot,
+                existing_path=slot.template_path,
+            )
+            self.controller.set_bot_action_slot_template_path(slot_index, template_path)
+        except Exception as exc:
+            self.bot_actions_page.show_error(str(exc))
 
     def _sync_bot_actions_config(self, config) -> None:
         self.bot_actions_page.set_slots(config.bot_action_slots)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+from dataclasses import replace
 from pathlib import Path
 from concurrent.futures import Future
 
@@ -154,6 +155,19 @@ class FailIfCalledSequenceRunner:
         raise AssertionError("sequence runner should not be created")
 
 
+class FakeSenderResolverService:
+    def __init__(self, resolved_ids_by_entry=None, failures=None) -> None:
+        self.resolved_ids_by_entry = resolved_ids_by_entry or {}
+        self.failures = set(failures or [])
+        self.resolve_calls = []
+
+    async def resolve_sender_entry(self, entry: str) -> int:
+        self.resolve_calls.append(entry)
+        if entry in self.failures:
+            raise ValueError(f"Could not resolve sender '{entry}'.")
+        return int(self.resolved_ids_by_entry[entry])
+
+
 def build_config(**overrides) -> DesktopAppConfig:
     values = {
         "telegram_api_id": 123456,
@@ -162,6 +176,7 @@ def build_config(**overrides) -> DesktopAppConfig:
         "telegram_phone_number": "+40123456789",
         "whitelisted_chat_ids": [-1001],
         "allowed_sender_ids": [42],
+        "allowed_sender_entries": ("42",),
         "chrome_profile_directory": "Profile 3",
     }
     values.update(overrides)
@@ -259,6 +274,7 @@ def test_controller_apply_config_saves_and_live_applies_when_running(qtbot) -> N
     new_config = build_config(
         whitelisted_chat_ids=[-1001, -2002],
         allowed_sender_ids=[99, 101],
+        allowed_sender_entries=("99", "101"),
         chrome_profile_directory="Profile 9",
     )
 
@@ -267,6 +283,67 @@ def test_controller_apply_config_saves_and_live_applies_when_running(qtbot) -> N
     assert storage.saved_configs == [new_config]
     assert controller.config == new_config
     assert len(runner.submitted_coroutines) == 1
+
+
+def test_controller_resolves_sender_entries_before_saving(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    resolver = FakeSenderResolverService(
+        resolved_ids_by_entry={"@delugeraidbot": 99, "raidar": 101}
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: resolver,
+    )
+
+    controller.apply_config(
+        build_config(
+            allowed_sender_ids=[],
+            allowed_sender_entries=("@delugeraidbot", "raidar", "123"),
+        )
+    )
+
+    assert resolver.resolve_calls == ["@delugeraidbot", "raidar"]
+    assert storage.saved_configs[-1].allowed_sender_entries == (
+        "@delugeraidbot",
+        "raidar",
+        "123",
+    )
+    assert storage.saved_configs[-1].allowed_sender_ids == [99, 101, 123]
+    assert controller.config.allowed_sender_ids == [99, 101, 123]
+
+
+def test_controller_rejects_unresolved_sender_entries_without_saving(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    resolver = FakeSenderResolverService(failures={"@missing"})
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: resolver,
+    )
+
+    try:
+        controller.apply_config(
+            build_config(
+                allowed_sender_ids=[],
+                allowed_sender_entries=("@missing",),
+            )
+        )
+    except ValueError as exc:
+        assert str(exc) == "Could not resolve sender '@missing'."
+    else:
+        raise AssertionError("Expected unresolved sender entry to raise ValueError.")
+
+    assert storage.saved_configs == []
+    assert controller.config == build_config()
 
 
 def test_controller_updates_auto_run_config_through_apply_config(qtbot) -> None:
@@ -297,6 +374,30 @@ def test_controller_updates_auto_run_config_through_apply_config(qtbot) -> None:
     assert controller.config.default_auto_sequence_id == "seq-2"
     assert controller.config.auto_run_settle_ms == 2750
     assert configs[-1] == controller.config
+
+
+def test_controller_capture_updates_bot_action_slot_template_and_saves(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+    )
+    updated_configs = []
+    controller.configChanged.connect(updated_configs.append)
+    captured_path = Path("bot_actions/slot_1_r.png")
+
+    controller.set_bot_action_slot_template_path(0, captured_path)
+
+    assert storage.saved_configs[-1].bot_action_slots[0].template_path == captured_path
+    assert controller.config.bot_action_slots[0].template_path == captured_path
+    assert updated_configs[-1].bot_action_slots[0].template_path == captured_path
+    assert storage.saved_configs[-1].bot_action_slots[1:] == replace(
+        build_config(), bot_action_slots=storage.saved_configs[-1].bot_action_slots
+    ).bot_action_slots[1:]
 
 
 def test_controller_stop_bot_submits_stop_when_running(qtbot) -> None:

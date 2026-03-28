@@ -98,6 +98,7 @@ class DesktopController(QObject):
         runner_factory: Callable[[], Any] = AsyncWorkerRunner,
         automation_runtime_probe: Callable[[], tuple[bool, str | None]] | None = None,
         automation_runtime_factory: Callable[[Callable[[dict[str, Any]], None]], Any] | None = None,
+        telegram_setup_service_factory: Callable[[Any], Any] | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -108,6 +109,9 @@ class DesktopController(QObject):
         self.automation_runtime_probe = automation_runtime_probe or self._probe_automation_runtime
         self.automation_runtime_factory = (
             automation_runtime_factory or self._default_automation_runtime_factory
+        )
+        self.telegram_setup_service_factory = (
+            telegram_setup_service_factory or self._default_telegram_setup_service_factory
         )
         self._worker: DesktopBotWorker | Any | None = None
         self._runner: AsyncWorkerRunner | Any | None = None
@@ -165,12 +169,13 @@ class DesktopController(QObject):
         return self._runner is not None and self._runner.is_running()
 
     def apply_config(self, config) -> None:
-        self.storage.save_config(config)
-        self.config = config
-        self.configChanged.emit(config)
+        resolved_config = self._resolve_sender_entries(config)
+        self.storage.save_config(resolved_config)
+        self.config = resolved_config
+        self.configChanged.emit(resolved_config)
         if self._worker is None or self._runner is None or not self._runner.is_running():
             return
-        self._submit_to_runner(lambda: self._worker.apply_config(config))
+        self._submit_to_runner(lambda: self._worker.apply_config(resolved_config))
 
     def set_auto_run_enabled(self, enabled: bool) -> None:
         self.apply_config(replace(self.config, auto_run_enabled=enabled))
@@ -180,6 +185,22 @@ class DesktopController(QObject):
 
     def set_auto_run_settle_ms(self, settle_ms: int) -> None:
         self.apply_config(replace(self.config, auto_run_settle_ms=int(settle_ms)))
+
+    def set_bot_action_slot_template_path(
+        self,
+        slot_index: int,
+        template_path: Path | None,
+    ) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        updated_slots = list(self.config.bot_action_slots)
+        updated_slots[slot_index] = replace(
+            updated_slots[slot_index],
+            template_path=(
+                Path(template_path) if template_path is not None else None
+            ),
+        )
+        self.apply_config(replace(self.config, bot_action_slots=tuple(updated_slots)))
 
     def list_automation_sequences(self) -> list[Any]:
         return list(self._automation_sequences)
@@ -352,6 +373,43 @@ class DesktopController(QObject):
             return None
         base_dir = getattr(self.storage, "base_dir", Path("."))
         return AutomationStorage(base_dir)
+
+    def _default_telegram_setup_service_factory(self, config):
+        from raidbot.desktop.telegram_setup import TelegramSetupService
+
+        return TelegramSetupService(
+            api_id=config.telegram_api_id,
+            api_hash=config.telegram_api_hash,
+            session_path=config.telegram_session_path,
+        )
+
+    def _resolve_sender_entries(self, config):
+        normalized_entries = tuple(
+            str(entry).strip()
+            for entry in getattr(config, "allowed_sender_entries", ())
+            if str(entry).strip()
+        )
+        if not normalized_entries:
+            raise ValueError("At least one allowed sender is required.")
+        resolved_sender_ids: list[int] = []
+        seen_sender_ids: set[int] = set()
+        service = None
+        for entry in normalized_entries:
+            if entry.lstrip("-").isdigit():
+                sender_id = int(entry)
+            else:
+                if service is None:
+                    service = self.telegram_setup_service_factory(config)
+                sender_id = int(asyncio.run(service.resolve_sender_entry(entry)))
+            if sender_id in seen_sender_ids:
+                continue
+            seen_sender_ids.add(sender_id)
+            resolved_sender_ids.append(sender_id)
+        return replace(
+            config,
+            allowed_sender_entries=normalized_entries,
+            allowed_sender_ids=resolved_sender_ids,
+        )
 
     def _probe_automation_runtime(self) -> tuple[bool, str | None]:
         from raidbot.desktop.automation.platform import automation_runtime_available

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -128,6 +129,7 @@ class FakeController(QObject):
         self.deleted_sequence_ids = []
         self.automation_run_calls = []
         self.automation_dry_run_calls = []
+        self.bot_action_slot_template_updates = []
         self.available_windows = [build_window_info()]
         self.active = False
         self.botStateChanged.connect(self._sync_active_state)
@@ -235,6 +237,17 @@ class FakeController(QObject):
             )
         )
 
+    def set_bot_action_slot_template_path(
+        self, slot_index: int, template_path: Path | None
+    ) -> None:
+        self.bot_action_slot_template_updates.append((slot_index, template_path))
+        updated_slots = list(self.config.bot_action_slots)
+        updated_slots[slot_index] = replace(
+            updated_slots[slot_index],
+            template_path=template_path,
+        )
+        self.apply_config(replace(self.config, bot_action_slots=tuple(updated_slots)))
+
     def _sync_active_state(self, state: str) -> None:
         self.active = state in {"starting", "running", "stopping"}
 
@@ -242,6 +255,16 @@ class FakeController(QObject):
 class FailingApplyController(FakeController):
     def apply_config(self, config: DesktopAppConfig) -> None:
         raise ValueError("Could not resolve sender '@missing'.")
+
+
+class FakeSlotCaptureService:
+    def __init__(self, returned_path: Path | None) -> None:
+        self.returned_path = returned_path
+        self.calls = []
+
+    def capture_slot(self, slot, existing_path: Path | None = None):
+        self.calls.append((slot, existing_path))
+        return self.returned_path
 
 
 def build_window(controller: FakeController, storage: FakeStorage, **overrides):
@@ -450,6 +473,30 @@ def test_main_window_uses_bot_actions_page_instead_of_generic_automation_page(qt
     assert window.tabs.tabText(2) == "Bot Actions"
     assert hasattr(window, "bot_actions_page")
     assert not hasattr(window, "automation_page")
+
+
+def test_main_window_capture_updates_bot_action_slot_via_controller(qtbot) -> None:
+    captured_path = Path("bot_actions/slot_1_r.png")
+    capture_service = FakeSlotCaptureService(captured_path)
+    controller = FakeController()
+    window = build_window(
+        controller,
+        FakeStorage(),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.bot_actions_page.slot_boxes[0].capture_button, Qt.MouseButton.LeftButton)
+
+    captured_slot, existing_path = capture_service.calls[-1]
+    assert captured_slot.key == "slot_1_r"
+    assert existing_path is None
+    assert controller.bot_action_slot_template_updates == [(0, captured_path)]
+    assert controller.config.bot_action_slots[0].template_path == captured_path
+    assert (
+        window.bot_actions_page.slot_boxes[0].template_status_label.text()
+        == str(captured_path)
+    )
 
 
 def test_main_window_wraps_long_tabs_in_scroll_areas(qtbot) -> None:
