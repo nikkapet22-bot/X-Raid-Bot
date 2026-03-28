@@ -119,7 +119,7 @@ def test_capture_raises_when_image_save_fails(tmp_path) -> None:
         raise AssertionError("Expected image save failure to raise OSError.")
 
 
-def test_capture_virtual_desktop_snapshot_composes_screen_pixmaps() -> None:
+def test_capture_virtual_desktop_snapshot_composes_screen_pixmaps(qtbot) -> None:
     from raidbot.desktop.bot_actions.capture import capture_virtual_desktop_snapshot
 
     left_screen = FakeScreen(QRect(0, 0, 40, 20), "left", QColor("red"))
