@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from raidbot.browser.backends import LaunchOnlyBrowserBackend
@@ -10,6 +11,10 @@ from raidbot.browser.pipeline import BrowserPipeline
 from raidbot.chrome import ChromeOpener
 from raidbot.dedupe import InMemoryOpenedUrlStore
 from raidbot.desktop.chrome_profiles import detect_chrome_environment
+from raidbot.desktop.automation.autorun import AutoRunProcessor, PendingRaidWorkItem
+from raidbot.desktop.automation.runtime import AutomationRuntime
+from raidbot.desktop.automation.storage import AutomationStorage
+from raidbot.desktop.automation.windowing import find_existing_chrome_window
 from raidbot.desktop.models import (
     ActivityEntry,
     BotRuntimeState,
@@ -41,6 +46,8 @@ class DesktopBotWorker:
         service_factory: Callable[[DesktopAppConfig], Any] | None = None,
         pipeline_factory: Callable[[DesktopAppConfig], Any] | None = None,
         listener_factory: Callable[..., Any] | None = None,
+        automation_runtime_factory: Callable[[EmitEvent], Any] | None = None,
+        chrome_opener_factory: Callable[..., Any] | None = None,
         chrome_environment_factory: Callable[[], Any] = detect_chrome_environment,
         now: NowFactory = datetime.utcnow,
     ) -> None:
@@ -50,6 +57,8 @@ class DesktopBotWorker:
         self.service_factory = service_factory
         self.pipeline_factory = pipeline_factory
         self.listener_factory = listener_factory or TelegramRaidListener
+        self.automation_runtime_factory = automation_runtime_factory
+        self.chrome_opener_factory = chrome_opener_factory
         self.chrome_environment_factory = chrome_environment_factory
         self.now = now
 
@@ -58,6 +67,10 @@ class DesktopBotWorker:
         self._service: Any | None = None
         self._pipeline: Any | None = None
         self._listener: Any | None = None
+        self._automation_runtime: Any | None = None
+        self._automation_processor: AutoRunProcessor | None = None
+        self._chrome_opener: Any | None = None
+        self._automation_storage = AutomationStorage(Path(self.storage.base_dir))
         self._restart_requested = False
         self._stop_requested = False
 
@@ -88,6 +101,10 @@ class DesktopBotWorker:
 
     async def stop(self) -> None:
         self._stop_requested = True
+        if self._automation_runtime is not None and hasattr(
+            self._automation_runtime, "request_stop"
+        ):
+            self._automation_runtime.request_stop()
         if self._listener is None:
             self._set_bot_state(BotRuntimeState.stopped)
             return
@@ -122,8 +139,6 @@ class DesktopBotWorker:
 
         if self._service is None:
             raise RuntimeError("DesktopBotWorker service is not initialized")
-        if self._pipeline is None:
-            raise RuntimeError("DesktopBotWorker pipeline is not initialized")
 
         detection = self._service.handle_message(message)
         if detection.kind != "job_detected" or detection.job is None:
@@ -131,14 +146,43 @@ class DesktopBotWorker:
             return detection
 
         self._record_detection_result(detection)
-        execution = self._pipeline.execute(
-            detection.job,
-            should_continue=self._can_start_executor,
+        processor = self._ensure_automation_processor()
+        item = PendingRaidWorkItem(
+            normalized_url=detection.job.normalized_url,
+            trace_id=detection.job.trace_id,
         )
-        if execution.handed_off:
+        admitted = processor.admit(item)
+        if admitted:
             self._dedupe_store.mark_if_new(detection.job.normalized_url)
-        self._record_execution_result(detection, execution)
-        return execution
+            self._record_activity(
+                "auto_queued",
+                reason="auto_queued",
+                url=detection.job.normalized_url,
+            )
+            self._drain_automation_queue()
+        return detection
+
+    def resume_automation_queue(self) -> None:
+        processor = self._automation_processor
+        if processor is None or not processor.queue_length:
+            return
+        if not self.config.auto_run_enabled:
+            return
+        if processor.state == "paused":
+            processor._state = "queued"
+            self._sync_automation_status()
+        self._drain_automation_queue()
+
+    def clear_automation_queue(self) -> None:
+        processor = self._automation_processor
+        if processor is None:
+            return
+        if not processor.queue_length:
+            return
+        processor._pending.clear()
+        if processor.state == "queued":
+            processor._state = "idle"
+        self._sync_automation_status()
 
     def _handle_connection_state_change(self, state: str) -> None:
         connection_state = TelegramConnectionState(state)
@@ -161,6 +205,189 @@ class DesktopBotWorker:
             detection.kind,
             reason=detection.kind,
             url=detection.normalized_url,
+        )
+
+    def _ensure_automation_processor(self) -> AutoRunProcessor:
+        if self._automation_processor is not None:
+            return self._automation_processor
+
+        self._automation_runtime = self._build_automation_runtime()
+        self._automation_processor = AutoRunProcessor(
+            auto_run_enabled=lambda: self.config.auto_run_enabled,
+            default_sequence_id=lambda: (
+                self.config.default_auto_sequence_id
+                if self._find_default_automation_sequence() is not None
+                else None
+            ),
+            pre_open_check=lambda _item: self._find_existing_chrome_window(),
+            open_raid=self._open_automation_raid,
+            execute_raid=self._execute_automation_sequence,
+            close_raid=self._close_automation_tab,
+            on_success=self._record_automation_success,
+            on_failure=self._record_automation_failure,
+            on_status=self._update_automation_status,
+        )
+        return self._automation_processor
+
+    def _build_automation_runtime(self) -> Any:
+        if self.automation_runtime_factory is not None:
+            return self.automation_runtime_factory(self._receive_automation_runtime_event)
+        return AutomationRuntime(emit_event=self._receive_automation_runtime_event)
+
+    def _receive_automation_runtime_event(self, event: dict[str, Any]) -> None:
+        self._emit("automation_runtime_event", event=event)
+
+    def _find_existing_chrome_window(self):
+        runtime = self._automation_runtime
+        if runtime is None:
+            return None
+        window_manager = getattr(runtime, "window_manager", None)
+        if window_manager is None:
+            return None
+        return find_existing_chrome_window(window_manager)
+
+    def _find_default_automation_sequence(self):
+        sequence_id = self.config.default_auto_sequence_id
+        if not sequence_id:
+            return None
+        for sequence in self._automation_storage.load_sequences():
+            if getattr(sequence, "id", None) == sequence_id:
+                return sequence
+        return None
+
+    def _open_automation_raid(
+        self,
+        item: PendingRaidWorkItem,
+        window,
+    ):
+        opener = self._build_chrome_opener()
+        return opener.open(item.normalized_url, window_handle=getattr(window, "handle", None))
+
+    def _execute_automation_sequence(
+        self,
+        _item: PendingRaidWorkItem,
+        context,
+        sequence_id: str,
+    ) -> tuple[bool, str | None]:
+        runtime = self._automation_runtime
+        if runtime is None:
+            return False, "automation_runtime_unavailable"
+        sequence = self._find_default_automation_sequence()
+        if sequence is None or getattr(sequence, "id", None) != sequence_id:
+            return False, "default_sequence_missing"
+        self._record_activity(
+            "automation_started",
+            reason="automation_started",
+            url=context.normalized_url,
+        )
+        self._emit(
+            "automation_run_started",
+            sequence_id=sequence_id,
+            url=context.normalized_url,
+            window_handle=context.window_handle,
+        )
+        result = runtime.run_sequence(sequence, selected_window_handle=context.window_handle)
+        status = getattr(result, "status", None)
+        failure_reason = getattr(result, "failure_reason", None)
+        if status == "completed":
+            return True, None
+        return False, failure_reason or "automation_execution_failed"
+
+    def _close_automation_tab(self, context) -> None:
+        runtime = self._automation_runtime
+        if runtime is None:
+            return
+        runner = getattr(runtime, "_active_runner", None)
+        input_driver = getattr(runner, "input_driver", None)
+        if input_driver is None or not hasattr(input_driver, "close_active_tab"):
+            return
+        input_driver.close_active_tab()
+
+    def _record_automation_success(
+        self,
+        item: PendingRaidWorkItem,
+        _context,
+    ) -> None:
+        self._record_activity(
+            "automation_succeeded",
+            reason="automation_succeeded",
+            url=item.normalized_url,
+        )
+        self._record_activity(
+            "session_closed",
+            reason="automation_succeeded",
+            url=item.normalized_url,
+        )
+        self._emit(
+            "automation_run_succeeded",
+            sequence_id=self.config.default_auto_sequence_id,
+            url=item.normalized_url,
+        )
+
+    def _record_automation_failure(
+        self,
+        item: PendingRaidWorkItem,
+        reason: str,
+        _context,
+    ) -> None:
+        self._record_activity(
+            "automation_failed",
+            reason=reason,
+            url=item.normalized_url,
+            emit_error=True,
+        )
+        self._emit(
+            "automation_run_failed",
+            sequence_id=self.config.default_auto_sequence_id,
+            url=item.normalized_url,
+            reason=reason,
+        )
+
+    def _update_automation_status(
+        self,
+        state: str,
+        queue_length: int,
+        current_url: str | None,
+        last_error: str | None,
+    ) -> None:
+        previous_state = self.state.automation_queue_state
+        previous_length = self.state.automation_queue_length
+        previous_url = self.state.automation_current_url
+
+        self.state.automation_queue_state = state
+        self.state.automation_queue_length = queue_length
+        self.state.automation_current_url = current_url
+        self.state.automation_last_error = last_error
+        self.storage.save_state(self.state)
+        self._emit("stats_changed", state=self.state)
+
+        if previous_state != state:
+            self._emit("automation_queue_state_changed", state=state)
+        if previous_length != queue_length:
+            self._emit("automation_queue_length_changed", length=queue_length)
+        if previous_url != current_url:
+            self._emit("automation_current_url_changed", url=current_url)
+
+    def _drain_automation_queue(self) -> None:
+        processor = self._automation_processor
+        if processor is None:
+            return
+        while processor.queue_length and self.config.auto_run_enabled:
+            if processor.state == "paused":
+                break
+            progressed = processor.process_next()
+            if not progressed:
+                break
+
+    def _sync_automation_status(self) -> None:
+        processor = self._automation_processor
+        if processor is None:
+            return
+        self._update_automation_status(
+            processor.state,
+            processor.queue_length,
+            processor.current_url,
+            processor.last_error,
         )
 
     def _record_execution_result(
@@ -254,6 +481,9 @@ class DesktopBotWorker:
         if action == "browser_session_opened":
             self.state.raids_opened += 1
             self.state.last_successful_raid_open_at = timestamp.isoformat()
+        elif action == "automation_started":
+            self.state.raids_opened += 1
+            self.state.last_successful_raid_open_at = timestamp.isoformat()
         elif action == "duplicate":
             self.state.duplicates_skipped += 1
         elif action == "sender_rejected":
@@ -262,6 +492,10 @@ class DesktopBotWorker:
         elif action in {"not_a_raid", "chat_rejected"}:
             self.state.non_matching_skipped += 1
         elif action == "browser_session_failed":
+            self.state.browser_session_failed += 1
+            self.state.open_failures += 1
+            self.state.last_error = reason
+        elif action == "automation_failed":
             self.state.browser_session_failed += 1
             self.state.open_failures += 1
             self.state.last_error = reason
@@ -324,6 +558,26 @@ class DesktopBotWorker:
             LaunchOnlyBrowserBackend(opener),
             NoOpRaidExecutor(),
         )
+
+    def _build_chrome_opener(self) -> Any:
+        if self._chrome_opener is not None:
+            return self._chrome_opener
+        chrome_environment = self.chrome_environment_factory()
+        if chrome_environment is None:
+            raise RuntimeError("Chrome environment is unavailable")
+        if self.chrome_opener_factory is not None:
+            self._chrome_opener = self.chrome_opener_factory(
+                chrome_path=chrome_environment.chrome_path,
+                user_data_dir=chrome_environment.user_data_dir,
+                profile_directory=self.config.chrome_profile_directory,
+            )
+            return self._chrome_opener
+        self._chrome_opener = ChromeOpener(
+            chrome_path=chrome_environment.chrome_path,
+            user_data_dir=chrome_environment.user_data_dir,
+            profile_directory=self.config.chrome_profile_directory,
+        )
+        return self._chrome_opener
 
     def _build_listener(self, config: DesktopAppConfig) -> Any:
         listener = self.listener_factory(
