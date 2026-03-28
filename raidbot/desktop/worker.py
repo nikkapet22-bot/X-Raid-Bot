@@ -373,7 +373,7 @@ class DesktopBotWorker:
         self,
         item: PendingRaidWorkItem,
         reason: str,
-        _context,
+        context,
     ) -> None:
         self._automation_reserved_urls.discard(item.normalized_url)
         self._record_activity(
@@ -381,13 +381,17 @@ class DesktopBotWorker:
             reason=reason,
             url=item.normalized_url,
             emit_error=True,
+            count_open_failure=(
+                context is not None or reason in {"browser_startup_failure", "chrome_open_failed"}
+            ),
         )
-        self._emit(
-            "automation_run_failed",
-            sequence_id=self._active_auto_sequence_id,
-            url=item.normalized_url,
-            reason=reason,
-        )
+        if self._active_auto_sequence_id is not None:
+            self._emit(
+                "automation_run_failed",
+                sequence_id=self._active_auto_sequence_id,
+                url=item.normalized_url,
+                reason=reason,
+            )
         self._active_auto_sequence_id = None
 
     def _update_automation_status(
@@ -540,6 +544,7 @@ class DesktopBotWorker:
         reason: str | None = None,
         url: str | None = None,
         emit_error: bool = False,
+        count_open_failure: bool = True,
     ) -> None:
         timestamp = self.now()
         if action == "browser_session_opened":
@@ -560,8 +565,9 @@ class DesktopBotWorker:
             self.state.open_failures += 1
             self.state.last_error = reason
         elif action == "automation_failed":
-            self.state.browser_session_failed += 1
-            self.state.open_failures += 1
+            if count_open_failure:
+                self.state.browser_session_failed += 1
+                self.state.open_failures += 1
             self.state.last_error = reason
         elif action == "page_ready":
             self.state.page_ready += 1

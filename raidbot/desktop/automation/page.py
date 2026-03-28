@@ -306,8 +306,10 @@ class AutomationPage(QWidget):
         queue_active = self._queue_state in {"queued", "running", "paused"}
         can_resume = (
             self._auto_run_enabled
-            and self._queue_state in {"queued", "paused"}
-            and self._queue_length > 0
+            and (
+                (self._queue_state == "queued" and self._queue_length > 0)
+                or self._queue_state == "paused"
+            )
         )
         can_clear = queue_active or self._queue_length > 0
         self.resume_queue_button.setEnabled(can_resume)

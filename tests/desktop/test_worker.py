@@ -700,6 +700,9 @@ def test_worker_fails_safe_when_owned_chrome_window_cannot_be_proven(tmp_path) -
     assert opener.open_calls == []
     assert runtime is not None
     assert runtime.run_calls == []
+    assert [event for event in events if event["type"] == "automation_run_failed"] == []
+    assert worker.state.browser_session_failed == 0
+    assert worker.state.open_failures == 0
     assert worker.state.automation_queue_state == "paused"
     assert worker.state.automation_queue_length == 0
     assert worker.state.automation_last_error == "target_window_not_found"
@@ -1010,6 +1013,42 @@ def test_worker_records_browser_session_failed_result(tmp_path) -> None:
         event == {"type": "error", "message": "browser_startup_failure"}
         for event in events
     )
+
+
+def test_worker_missing_default_sequence_pauses_without_run_failed_event_or_open_failure(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 10, 30)
+    storage = FakeStorage(base_dir=tmp_path)
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-missing",
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/987")
+    )
+
+    assert outcome.kind == "job_detected"
+    assert [event for event in events if event["type"] == "automation_run_failed"] == []
+    assert [event for event in events if event["type"] == "automation_run_started"] == []
+    assert worker.state.browser_session_failed == 0
+    assert worker.state.open_failures == 0
+    assert worker.state.automation_queue_state == "paused"
+    assert worker.state.automation_queue_length == 0
+    assert worker.state.automation_last_error == "default_sequence_missing"
 
 
 @pytest.mark.parametrize("failure_reason", ["navigation_failure", "page_ready_timeout"])

@@ -517,6 +517,28 @@ def test_automation_page_rehydrates_stale_queue_state_as_idle_when_controller_is
     assert page.clear_queue_button.isEnabled() is False
 
 
+def test_automation_page_allows_resume_for_paused_empty_queue(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            auto_run_enabled=True,
+            default_auto_sequence_id="seq-1",
+        )
+    )
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+
+    page = window.automation_page
+    controller.automationQueueStateChanged.emit("paused")
+    controller.automationQueueLengthChanged.emit(0)
+
+    assert page.queue_state_label.text() == "paused"
+    assert page.queue_length_label.text() == "0"
+    assert page.resume_queue_button.isEnabled() is True
+    assert page.clear_queue_button.isEnabled() is True
+    assert page.start_button.isEnabled() is False
+    assert page.dry_run_button.isEnabled() is False
+
+
 def test_main_window_clears_deleted_default_sequence_from_automation_tab(qtbot) -> None:
     controller = FakeController(
         config=build_config(default_auto_sequence_id="seq-1")
