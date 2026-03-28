@@ -26,13 +26,13 @@ def test_automation_sequence_round_trip(tmp_path) -> None:
         AutomationSequence(
             id="sequence-1",
             name="Open raid",
-            target_window_rule={"title_contains": "RaidBot"},
+            target_window_rule="RaidBot",
             steps=[
                 AutomationStep(
                     name="find raid",
                     template_path=Path("templates/find.png"),
                     match_threshold=0.9,
-                    max_search_seconds=15,
+                    max_search_seconds=15.5,
                     max_scroll_attempts=2,
                     scroll_amount=600,
                     max_click_attempts=4,
@@ -65,7 +65,7 @@ def test_automation_storage_marks_missing_templates_for_legacy_payload(tmp_path)
                         "name": "find button",
                         "template_path": "templates/missing.png",
                         "match_threshold": 0.75,
-                        "max_search_seconds": 20,
+                        "max_search_seconds": 20.0,
                         "max_scroll_attempts": 1,
                         "scroll_amount": 400,
                         "max_click_attempts": 2,
@@ -96,7 +96,7 @@ def test_automation_storage_treats_schema_versioned_payload_as_current_schema(tm
                         "name": "find button",
                         "template_path": "templates/missing.png",
                         "match_threshold": 0.75,
-                        "max_search_seconds": 20,
+                        "max_search_seconds": 20.0,
                         "max_scroll_attempts": 1,
                         "scroll_amount": 400,
                         "max_click_attempts": 2,
@@ -113,3 +113,23 @@ def test_automation_storage_treats_schema_versioned_payload_as_current_schema(tm
 
     assert loaded[0].steps[0].template_missing is False
     assert loaded[0].steps[0].template_path == Path("templates/missing.png")
+
+
+def test_automation_storage_normalizes_structured_target_window_rule_to_title_substring(tmp_path) -> None:
+    storage = AutomationStorage(tmp_path)
+    payload = {
+        "schema_version": 1,
+        "sequences": [
+            {
+                "id": "structured-rule-sequence",
+                "name": "Structured rule",
+                "target_window_rule": {"title_contains": "RaidBot"},
+                "steps": [],
+            }
+        ],
+    }
+    storage.sequences_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = storage.load_sequences()
+
+    assert loaded[0].target_window_rule == "RaidBot"

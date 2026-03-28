@@ -10,7 +10,7 @@ class AutomationStep:
     name: str
     template_path: Path
     match_threshold: float
-    max_search_seconds: int
+    max_search_seconds: float
     max_scroll_attempts: int
     scroll_amount: int
     max_click_attempts: int
@@ -24,5 +24,5 @@ class AutomationStep:
 class AutomationSequence:
     id: str
     name: str
-    target_window_rule: dict[str, Any] | None = None
+    target_window_rule: str | None = None
     steps: list[AutomationStep] = field(default_factory=list)

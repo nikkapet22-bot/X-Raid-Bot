@@ -54,7 +54,7 @@ class AutomationStorage:
         return AutomationSequence(
             id=str(data["id"]),
             name=str(data["name"]),
-            target_window_rule=data.get("target_window_rule"),
+            target_window_rule=self._target_window_rule_from_data(data.get("target_window_rule")),
             steps=[
                 self._step_from_data(item, schema_version=schema_version)
                 for item in data.get("steps", [])
@@ -65,7 +65,7 @@ class AutomationStorage:
         return AutomationSequence(
             id=str(data["id"]),
             name=str(data["name"]),
-            target_window_rule=data.get("target_window_rule"),
+            target_window_rule=self._target_window_rule_from_data(data.get("target_window_rule")),
             steps=[self._legacy_step_from_data(item) for item in data.get("steps", [])],
         )
 
@@ -91,7 +91,7 @@ class AutomationStorage:
             name=str(data["name"]),
             template_path=template_path,
             match_threshold=float(data["match_threshold"]),
-            max_search_seconds=int(data["max_search_seconds"]),
+            max_search_seconds=float(data["max_search_seconds"]),
             max_scroll_attempts=int(data["max_scroll_attempts"]),
             scroll_amount=int(data["scroll_amount"]),
             max_click_attempts=int(data["max_click_attempts"]),
@@ -107,7 +107,7 @@ class AutomationStorage:
             name=str(data["name"]),
             template_path=template_path,
             match_threshold=float(data["match_threshold"]),
-            max_search_seconds=int(data["max_search_seconds"]),
+            max_search_seconds=float(data["max_search_seconds"]),
             max_scroll_attempts=int(data["max_scroll_attempts"]),
             scroll_amount=int(data["scroll_amount"]),
             max_click_attempts=int(data["max_click_attempts"]),
@@ -116,3 +116,15 @@ class AutomationStorage:
             click_offset_y=int(data.get("click_offset_y", 0)),
             template_missing=not template_path.exists(),
         )
+
+    def _target_window_rule_from_data(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            title_contains = value.get("title_contains")
+            if title_contains is None:
+                return None
+            return str(title_contains)
+        return str(value)

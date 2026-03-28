@@ -10,7 +10,7 @@ def test_automation_step_keeps_search_and_click_settings() -> None:
         name="open raid",
         template_path=Path("templates/open.png"),
         match_threshold=0.87,
-        max_search_seconds=12,
+        max_search_seconds=12.5,
         max_scroll_attempts=3,
         scroll_amount=640,
         max_click_attempts=5,
@@ -22,7 +22,7 @@ def test_automation_step_keeps_search_and_click_settings() -> None:
     assert step.name == "open raid"
     assert step.template_path == Path("templates/open.png")
     assert step.match_threshold == 0.87
-    assert step.max_search_seconds == 12
+    assert step.max_search_seconds == 12.5
     assert step.max_scroll_attempts == 3
     assert step.scroll_amount == 640
     assert step.max_click_attempts == 5
@@ -36,13 +36,13 @@ def test_automation_sequence_preserves_ordered_steps_and_target_window_rule() ->
     sequence = AutomationSequence(
         id="raid-open",
         name="Open raid",
-        target_window_rule={"title_contains": "RaidBot"},
+        target_window_rule="RaidBot",
         steps=[
             AutomationStep(
                 name="find button",
                 template_path=Path("templates/find.png"),
                 match_threshold=0.8,
-                max_search_seconds=10,
+                max_search_seconds=10.0,
                 max_scroll_attempts=2,
                 scroll_amount=500,
                 max_click_attempts=4,
@@ -52,7 +52,7 @@ def test_automation_sequence_preserves_ordered_steps_and_target_window_rule() ->
                 name="confirm",
                 template_path=Path("templates/confirm.png"),
                 match_threshold=0.85,
-                max_search_seconds=8,
+                max_search_seconds=8.0,
                 max_scroll_attempts=1,
                 scroll_amount=300,
                 max_click_attempts=3,
@@ -63,5 +63,5 @@ def test_automation_sequence_preserves_ordered_steps_and_target_window_rule() ->
 
     assert sequence.id == "raid-open"
     assert sequence.name == "Open raid"
-    assert sequence.target_window_rule == {"title_contains": "RaidBot"}
+    assert sequence.target_window_rule == "RaidBot"
     assert [step.name for step in sequence.steps] == ["find button", "confirm"]
