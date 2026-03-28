@@ -180,6 +180,10 @@ class DesktopStorage:
             state,
             bot_state=self._normalize_bot_state(state.bot_state),
             connection_state=self._normalize_connection_state(state.connection_state),
+            automation_queue_state="idle",
+            automation_queue_length=0,
+            automation_current_url=None,
+            automation_last_error=None,
         )
 
     def _activity_to_data(self, entry: ActivityEntry) -> dict[str, Any]:

@@ -91,10 +91,6 @@ def test_state_round_trip_includes_activity_entries(tmp_path) -> None:
             )
         ],
         last_error="boom",
-        automation_queue_state="running",
-        automation_queue_length=3,
-        automation_current_url="https://example.com/current",
-        automation_last_error="queue boom",
     )
 
     storage.save_state(state)
@@ -106,10 +102,6 @@ def test_state_round_trip_includes_activity_entries(tmp_path) -> None:
     assert loaded.activity[0].action == "opened_raid"
     assert loaded.activity[0].url == "https://x.com/i/status/123"
     assert loaded.activity[0].reason == "matched active raid"
-    assert loaded.automation_queue_state == "running"
-    assert loaded.automation_queue_length == 3
-    assert loaded.automation_current_url == "https://example.com/current"
-    assert loaded.automation_last_error == "queue boom"
     assert storage.state_path.exists()
 
 
@@ -182,6 +174,44 @@ def test_storage_load_state_defaults_new_pipeline_counters_to_zero(tmp_path) -> 
     assert loaded.automation_queue_length == 0
     assert loaded.automation_current_url is None
     assert loaded.automation_last_error is None
+
+
+def test_load_state_resets_stale_automation_queue_runtime_fields(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.state_path.write_text(
+        json.dumps(
+            {
+                "bot_state": "stopped",
+                "connection_state": "disconnected",
+                "automation_queue_state": "running",
+                "automation_queue_length": 4,
+                "automation_current_url": "https://example.com/current",
+                "automation_last_error": "queue boom",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_state()
+
+    assert loaded.automation_queue_state == "idle"
+    assert loaded.automation_queue_length == 0
+    assert loaded.automation_current_url is None
+    assert loaded.automation_last_error is None
+    assert json.loads(storage.state_path.read_text(encoding="utf-8"))[
+        "automation_queue_state"
+    ] == "idle"
+    assert json.loads(storage.state_path.read_text(encoding="utf-8"))[
+        "automation_queue_length"
+    ] == 0
+    assert json.loads(storage.state_path.read_text(encoding="utf-8"))[
+        "automation_current_url"
+    ] is None
+    assert json.loads(storage.state_path.read_text(encoding="utf-8"))[
+        "automation_last_error"
+    ] is None
 
 
 def test_load_state_normalizes_stale_live_runtime_states(tmp_path) -> None:
