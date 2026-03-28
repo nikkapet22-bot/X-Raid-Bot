@@ -26,3 +26,20 @@ class AutomationSequence:
     name: str
     target_window_rule: str | None = None
     steps: list[AutomationStep] = field(default_factory=list)
+
+
+@dataclass
+class MatchResult:
+    score: float
+    top_left_x: int
+    top_left_y: int
+    width: int
+    height: int
+
+    @property
+    def center_x(self) -> int:
+        return self.top_left_x + (self.width // 2)
+
+    @property
+    def center_y(self) -> int:
+        return self.top_left_y + (self.height // 2)
