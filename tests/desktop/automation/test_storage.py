@@ -22,6 +22,9 @@ def test_automation_storage_returns_empty_list_when_missing(tmp_path) -> None:
 
 def test_automation_sequence_round_trip(tmp_path) -> None:
     storage = AutomationStorage(tmp_path)
+    template_path = tmp_path / "templates" / "find.png"
+    template_path.parent.mkdir(parents=True)
+    template_path.write_bytes(b"template")
     sequences = [
         AutomationSequence(
             id="sequence-1",
@@ -30,7 +33,7 @@ def test_automation_sequence_round_trip(tmp_path) -> None:
             steps=[
                 AutomationStep(
                     name="find raid",
-                    template_path=Path("templates/find.png"),
+                    template_path=template_path,
                     match_threshold=0.9,
                     max_search_seconds=15.5,
                     max_scroll_attempts=2,
@@ -85,6 +88,9 @@ def test_automation_storage_marks_missing_templates_for_legacy_payload(tmp_path)
 
 def test_automation_storage_treats_schema_versioned_payload_as_current_schema(tmp_path) -> None:
     storage = AutomationStorage(tmp_path)
+    template_path = tmp_path / "templates" / "present.png"
+    template_path.parent.mkdir(parents=True)
+    template_path.write_bytes(b"template")
     current_payload = {
         "schema_version": 1,
         "sequences": [
@@ -94,14 +100,14 @@ def test_automation_storage_treats_schema_versioned_payload_as_current_schema(tm
                 "steps": [
                     {
                         "name": "find button",
-                        "template_path": "templates/missing.png",
+                        "template_path": str(template_path),
                         "match_threshold": 0.75,
                         "max_search_seconds": 20.0,
                         "max_scroll_attempts": 1,
                         "scroll_amount": 400,
                         "max_click_attempts": 2,
                         "post_click_settle_ms": 100,
-                        "template_missing": False,
+                        "template_missing": True,
                     }
                 ],
             }
@@ -111,8 +117,41 @@ def test_automation_storage_treats_schema_versioned_payload_as_current_schema(tm
 
     loaded = storage.load_sequences()
 
-    assert loaded[0].steps[0].template_missing is False
-    assert loaded[0].steps[0].template_path == Path("templates/missing.png")
+    assert loaded[0].steps[0].template_missing is True
+    assert loaded[0].steps[0].template_path == template_path
+
+
+def test_automation_storage_marks_deleted_templates_as_missing_for_current_schema(tmp_path) -> None:
+    storage = AutomationStorage(tmp_path)
+    template_path = tmp_path / "templates" / "ephemeral.png"
+    template_path.parent.mkdir(parents=True)
+    template_path.write_bytes(b"template")
+    sequences = [
+        AutomationSequence(
+            id="sequence-1",
+            name="Open raid",
+            steps=[
+                AutomationStep(
+                    name="find raid",
+                    template_path=template_path,
+                    match_threshold=0.9,
+                    max_search_seconds=15.5,
+                    max_scroll_attempts=2,
+                    scroll_amount=600,
+                    max_click_attempts=4,
+                    post_click_settle_ms=300,
+                )
+            ],
+        )
+    ]
+
+    storage.save_sequences(sequences)
+    template_path.unlink()
+
+    loaded = storage.load_sequences()
+
+    assert loaded[0].steps[0].template_missing is True
+    assert loaded[0].steps[0].template_path == template_path
 
 
 def test_automation_storage_normalizes_structured_target_window_rule_to_title_substring(tmp_path) -> None:

@@ -86,7 +86,9 @@ class AutomationStorage:
 
     def _step_from_data(self, data: dict[str, Any], schema_version: Any) -> AutomationStep:
         template_path = Path(data["template_path"])
-        template_missing = bool(data.get("template_missing", False))
+        # Persisted state may already know the template is invalid, but a file
+        # can also disappear after the sequence was saved.
+        template_missing = bool(data.get("template_missing", False)) or not template_path.exists()
         return AutomationStep(
             name=str(data["name"]),
             template_path=template_path,
