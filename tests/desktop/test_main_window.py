@@ -564,6 +564,35 @@ def test_main_window_bot_actions_failure_keeps_current_slot_when_step_index_is_a
     )
 
 
+def test_main_window_bot_actions_failure_keeps_current_slot_across_followup_run_failed_event(
+    qtbot,
+) -> None:
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], enabled=True),
+            replace(build_config().bot_action_slots[1], enabled=True),
+            replace(build_config().bot_action_slots[2], enabled=False),
+            replace(build_config().bot_action_slots[3], enabled=False),
+        )
+    )
+    window = build_window(FakeController(config=config), FakeStorage(config=config))
+    qtbot.addWidget(window)
+
+    window.controller.botActionRunEvent.emit(
+        {"type": "automation_run_started", "sequence_id": "seq-1"}
+    )
+    window.controller.botActionRunEvent.emit(
+        {"type": "step_failed", "step_index": 1, "reason": "ui_did_not_change"}
+    )
+    window.controller.botActionRunEvent.emit(
+        {"type": "automation_run_failed", "reason": "ui_did_not_change"}
+    )
+
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Idle\nCurrent slot: Slot 2 (L)\nLast error: ui_did_not_change"
+    )
+
+
 def test_main_window_current_slot_uses_enabled_slot_order(qtbot) -> None:
     config = build_config(
         bot_action_slots=(

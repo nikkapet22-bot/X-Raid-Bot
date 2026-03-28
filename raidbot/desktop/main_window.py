@@ -495,9 +495,9 @@ class MainWindow(QMainWindow):
             self._bot_actions_last_error_text = None
         elif event_type in {"automation_run_failed", "step_failed", "target_window_lost"}:
             self._bot_actions_status_text = "Idle"
-            self._bot_actions_current_slot_text = self._bot_actions_slot_text(
-                event.get("step_index")
-            )
+            slot_text = self._bot_actions_slot_text(event.get("step_index"))
+            if slot_text is not None:
+                self._bot_actions_current_slot_text = slot_text
             self._clear_bot_actions_run_snapshot(clear_current_slot=False)
             reason = event.get("reason")
             if reason:
