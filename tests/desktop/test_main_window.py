@@ -512,7 +512,15 @@ def test_main_window_bot_actions_runtime_failure_keeps_simple_status(qtbot) -> N
 
 
 def test_main_window_bot_actions_step_event_shows_and_clears_current_slot(qtbot) -> None:
-    window = build_window(FakeController(), FakeStorage())
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], enabled=True),
+            replace(build_config().bot_action_slots[1], enabled=True),
+            replace(build_config().bot_action_slots[2], enabled=False),
+            replace(build_config().bot_action_slots[3], enabled=False),
+        )
+    )
+    window = build_window(FakeController(config=config), FakeStorage(config=config))
     qtbot.addWidget(window)
 
     window.controller.automationRunStateChanged.emit("running")
@@ -527,6 +535,28 @@ def test_main_window_bot_actions_step_event_shows_and_clears_current_slot(qtbot)
     window.controller.automationRunEvent.emit({"type": "automation_run_succeeded"})
 
     assert window.bot_actions_page.status_label.text() == "Status: Idle"
+
+
+def test_main_window_current_slot_uses_enabled_slot_order(qtbot) -> None:
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], enabled=False),
+            replace(build_config().bot_action_slots[1], enabled=True),
+            replace(build_config().bot_action_slots[2], enabled=False),
+            replace(build_config().bot_action_slots[3], enabled=False),
+        )
+    )
+    window = build_window(FakeController(config=config), FakeStorage(config=config))
+    qtbot.addWidget(window)
+
+    window.controller.automationRunStateChanged.emit("running")
+    window.controller.automationRunEvent.emit(
+        {"type": "step_search_started", "step_index": 0}
+    )
+
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Running\nCurrent slot: Slot 2 (L)"
+    )
 
 
 def test_main_window_capture_updates_bot_action_slot_via_controller(qtbot) -> None:

@@ -515,10 +515,15 @@ class MainWindow(QMainWindow):
         if not isinstance(step_index, int) or step_index < 0:
             return None
         slots = getattr(self.controller.config, "bot_action_slots", ())
-        if step_index >= len(slots):
+        enabled_slots = [
+            (slot_index, slot)
+            for slot_index, slot in enumerate(slots)
+            if getattr(slot, "enabled", False)
+        ]
+        if step_index >= len(enabled_slots):
             return None
-        slot = slots[step_index]
-        return f"Slot {step_index + 1} ({slot.label})"
+        slot_index, slot = enabled_slots[step_index]
+        return f"Slot {slot_index + 1} ({slot.label})"
 
     def _render_bot_actions_status(self) -> None:
         lines = [f"Status: {self._bot_actions_status_text}"]
