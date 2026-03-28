@@ -33,6 +33,28 @@ Only new incoming raid messages received after the bot starts are handled.
 
 The selected Chrome profile must already be logged into X.
 
+## Automation
+
+The desktop app also includes an `Automation` tab for Windows. It can target a Chrome window, scan that window for user-provided template images, and run a fixed ordered sequence of find, scroll, and click steps.
+
+Automation prerequisites:
+
+- Windows only
+- install dependencies with `python -m pip install -e .[dev]`
+- use a visible Chrome window
+- provide template image files for each step in the sequence
+
+Automation workflow:
+
+1. Open the desktop app and go to `Automation`.
+2. Create or edit a sequence.
+3. Add the ordered steps with template path, threshold, search time, scroll attempts, click attempts, settle delay, and optional click offsets.
+4. Choose `Auto select from rule` or a specific Chrome window.
+5. Use `Dry run step` to verify matching without clicking.
+6. Start the run when the sequence looks correct.
+
+The automation runtime captures only the selected Chrome window, picks the highest-confidence match for each step, waits `0.5` seconds before clicking, and moves to the next step only after the UI changes. If a step cannot be found within its search and scroll budget, the run stops and the failure is shown in the activity area.
+
 ## CLI daemon
 
 The original headless daemon is still available.
