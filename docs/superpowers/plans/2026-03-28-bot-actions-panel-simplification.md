@@ -333,6 +333,7 @@ git commit -m "feat: add bot action slot capture flow"
 - Create: `tests/desktop/bot_actions/test_sequence.py`
 - Modify: `tests/desktop/test_worker.py`
 - Modify: `tests/desktop/automation/test_runtime.py`
+- Modify: `tests/desktop/automation/test_runner.py`
 
 - [ ] **Step 1: Write the failing sequence-builder and worker tests**
 
@@ -358,6 +359,11 @@ def test_runtime_returns_ui_did_not_change_when_clicked_template_stays_in_place(
     assert result.reason == "ui_did_not_change"
 
 
+def test_runner_reports_ui_did_not_change_for_stable_post_click_match(...):
+    outcome = runner.run_step(...)
+    assert outcome.reason == "ui_did_not_change"
+
+
 def test_worker_pauses_remaining_queue_after_first_bot_action_failure(...):
     worker.enqueue(opened_raid_context("first"))
     worker.enqueue(opened_raid_context("second"))
@@ -371,7 +377,7 @@ def test_worker_pauses_remaining_queue_after_first_bot_action_failure(...):
 Run:
 
 ```bash
-python -m pytest -q tests/desktop/bot_actions/test_sequence.py tests/desktop/automation/test_runtime.py tests/desktop/test_worker.py -k "bot_action or captured_image or ui_did_not_change or queue"
+python -m pytest -q tests/desktop/bot_actions/test_sequence.py tests/desktop/automation/test_runtime.py tests/desktop/automation/test_runner.py tests/desktop/test_worker.py -k "bot_action or captured_image or ui_did_not_change or queue"
 ```
 
 Expected:
@@ -422,7 +428,7 @@ If needed:
 Run:
 
 ```bash
-python -m pytest -q tests/desktop/bot_actions/test_sequence.py tests/desktop/automation/test_runtime.py tests/desktop/test_worker.py -k "bot_action or captured_image or ui_did_not_change or queue"
+python -m pytest -q tests/desktop/bot_actions/test_sequence.py tests/desktop/automation/test_runtime.py tests/desktop/automation/test_runner.py tests/desktop/test_worker.py -k "bot_action or captured_image or ui_did_not_change or queue"
 ```
 
 Expected:
@@ -431,7 +437,7 @@ Expected:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add raidbot/desktop/bot_actions/sequence.py raidbot/desktop/worker.py raidbot/desktop/automation/runtime.py raidbot/desktop/automation/runner.py tests/desktop/bot_actions/test_sequence.py tests/desktop/automation/test_runtime.py tests/desktop/test_worker.py
+git add raidbot/desktop/bot_actions/sequence.py raidbot/desktop/worker.py raidbot/desktop/automation/runtime.py raidbot/desktop/automation/runner.py tests/desktop/bot_actions/test_sequence.py tests/desktop/automation/test_runtime.py tests/desktop/automation/test_runner.py tests/desktop/test_worker.py
 git commit -m "feat: run fixed bot action slots after telegram opens"
 ```
 
@@ -527,7 +533,7 @@ git commit -m "refactor: simplify visible bot actions status and controls"
 Run:
 
 ```bash
-python -m pytest -q tests/desktop/test_models.py tests/desktop/test_storage.py tests/desktop/test_controller.py tests/desktop/test_main_window.py tests/desktop/test_worker.py tests/desktop/test_app.py tests/desktop/automation/test_runtime.py tests/desktop/bot_actions
+python -m pytest -q tests/desktop/test_models.py tests/desktop/test_storage.py tests/desktop/test_controller.py tests/desktop/test_main_window.py tests/desktop/test_worker.py tests/desktop/test_app.py tests/desktop/automation/test_runtime.py tests/desktop/automation/test_runner.py tests/desktop/bot_actions
 ```
 
 Expected:
