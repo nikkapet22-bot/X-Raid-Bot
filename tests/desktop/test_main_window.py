@@ -130,6 +130,8 @@ class FakeController(QObject):
         self.automation_run_calls = []
         self.automation_dry_run_calls = []
         self.bot_action_slot_template_updates = []
+        self.bot_action_slot_enabled_updates = []
+        self.auto_run_settle_ms_updates = []
         self.available_windows = [build_window_info()]
         self.active = False
         self.botStateChanged.connect(self._sync_active_state)
@@ -228,6 +230,7 @@ class FakeController(QObject):
         )
 
     def set_auto_run_settle_ms(self, settle_ms: int) -> None:
+        self.auto_run_settle_ms_updates.append(settle_ms)
         self.apply_config(
             build_config(
                 **{
@@ -247,6 +250,17 @@ class FakeController(QObject):
         updated_slots[slot_index] = replace(
             updated_slots[slot_index],
             template_path=template_path,
+        )
+        self.apply_config(replace(self.config, bot_action_slots=tuple(updated_slots)))
+
+    def set_bot_action_slot_enabled(self, slot_index: int, enabled: bool) -> None:
+        self.bot_action_slot_enabled_updates.append((slot_index, enabled))
+        if self.config.bot_action_slots[slot_index].enabled == enabled:
+            return
+        updated_slots = list(self.config.bot_action_slots)
+        updated_slots[slot_index] = replace(
+            updated_slots[slot_index],
+            enabled=enabled,
         )
         self.apply_config(replace(self.config, bot_action_slots=tuple(updated_slots)))
 
@@ -471,13 +485,30 @@ def test_main_window_dashboard_exposes_metric_cards_and_panels(qtbot) -> None:
     assert window.error_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
 
 
-def test_main_window_uses_bot_actions_page_instead_of_generic_automation_page(qtbot) -> None:
+def test_main_window_removed_generic_automation_controls_are_not_visible(qtbot) -> None:
     window = build_window(FakeController(), FakeStorage())
     qtbot.addWidget(window)
 
     assert window.tabs.tabText(2) == "Bot Actions"
     assert hasattr(window, "bot_actions_page")
     assert not hasattr(window, "automation_page")
+    assert not hasattr(window.bot_actions_page, "sequence_list")
+    assert not hasattr(window.bot_actions_page, "window_combo")
+    assert not hasattr(window.bot_actions_page, "start_button")
+    assert not hasattr(window.bot_actions_page, "dry_run_button")
+    assert not hasattr(window.bot_actions_page, "resume_queue_button")
+    assert not hasattr(window.bot_actions_page, "clear_queue_button")
+
+
+def test_main_window_bot_actions_runtime_failure_keeps_simple_status(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    window.controller.errorRaised.emit("runtime boom")
+
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Idle\nLast error: runtime boom"
+    )
 
 
 def test_main_window_capture_updates_bot_action_slot_via_controller(qtbot) -> None:
@@ -541,7 +572,9 @@ def test_main_window_capture_save_failure_surfaces_error_without_persisting(qtbo
     qtbot.mouseClick(window.bot_actions_page.slot_boxes[0].capture_button, Qt.MouseButton.LeftButton)
 
     assert controller.bot_action_slot_template_updates == []
-    assert window.bot_actions_page.status_label.text() == "Could not save bot_actions/slot_1_r.png"
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Idle\nLast error: Could not save bot_actions/slot_1_r.png"
+    )
 
 
 def test_main_window_wraps_long_tabs_in_scroll_areas(qtbot) -> None:
@@ -556,6 +589,28 @@ def test_main_window_wraps_long_tabs_in_scroll_areas(qtbot) -> None:
     assert dashboard_tab.widgetResizable() is True
     assert settings_tab.widget() is window.settings_page
     assert bot_actions_tab.widget() is window.bot_actions_page
+
+
+def test_main_window_slot_enabled_changes_persist_through_controller(qtbot) -> None:
+    controller = FakeController()
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+
+    window.bot_actions_page.slot_boxes[1].enabled_checkbox.setChecked(True)
+
+    assert controller.bot_action_slot_enabled_updates == [(1, True)]
+    assert controller.config.bot_action_slots[1].enabled is True
+
+
+def test_main_window_settle_delay_changes_persist_through_controller(qtbot) -> None:
+    controller = FakeController()
+    window = build_window(controller, FakeStorage())
+    qtbot.addWidget(window)
+
+    window.bot_actions_page.settle_delay_input.setValue(2750)
+
+    assert controller.auto_run_settle_ms_updates == [2750]
+    assert controller.config.auto_run_settle_ms == 2750
 
 
 def test_automation_page_emits_start_and_save_requests(qtbot) -> None:

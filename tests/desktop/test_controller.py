@@ -447,6 +447,71 @@ def test_controller_ignores_noop_slot_template_updates(qtbot) -> None:
     assert runner.submitted_coroutines == []
 
 
+def test_controller_slot_enabled_updates_bot_action_slot_and_saves(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    config = build_config(
+        allowed_sender_ids=[42],
+        allowed_sender_entries=("raidar",),
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=config,
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: FailIfResolveCalled(),
+    )
+    updated_configs = []
+    controller.configChanged.connect(updated_configs.append)
+
+    controller.set_bot_action_slot_enabled(1, True)
+
+    assert storage.saved_configs[-1].bot_action_slots[1].enabled is True
+    assert controller.config.bot_action_slots[1].enabled is True
+    assert updated_configs[-1].bot_action_slots[1].enabled is True
+    assert storage.saved_configs[-1].bot_action_slots[0] == config.bot_action_slots[0]
+    assert storage.saved_configs[-1].bot_action_slots[2:] == config.bot_action_slots[2:]
+
+
+def test_controller_ignores_noop_slot_enabled_updates(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    initial_config = build_config(
+        bot_action_slots=(
+            build_config().bot_action_slots[0],
+            replace(build_config().bot_action_slots[1], enabled=True),
+            *build_config().bot_action_slots[2:],
+        )
+    )
+    storage = FakeStorage()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    runner = FakeRunner()
+    controller = DesktopController(
+        storage=storage,
+        config=initial_config,
+        worker_factory=worker_factory,
+        runner_factory=lambda: runner,
+        telegram_setup_service_factory=lambda _config: FailIfResolveCalled(),
+    )
+    controller.start_bot()
+    changed_configs = []
+    controller.configChanged.connect(changed_configs.append)
+
+    controller.set_bot_action_slot_enabled(1, True)
+
+    assert storage.saved_configs == []
+    assert changed_configs == []
+    assert created["worker"].apply_calls == []
+    assert runner.submitted_coroutines == []
+
+
 def test_controller_stop_bot_submits_stop_when_running(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 

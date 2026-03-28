@@ -124,6 +124,33 @@ def test_create_startup_window_uses_main_window_for_configured_app() -> None:
     assert created["controller_storage"] is created["window_storage"]
 
 
+def test_create_startup_window_main_window_path_can_expose_bot_actions_surface() -> None:
+    from raidbot.desktop.app import create_startup_window
+
+    class FakeStorage:
+        def is_first_run(self) -> bool:
+            return False
+
+    class FakeController:
+        pass
+
+    class FakeMainWindow:
+        def __init__(self) -> None:
+            self.bot_actions_page = object()
+
+    window = create_startup_window(
+        storage=FakeStorage(),
+        wizard_factory=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("wizard should not be created for configured app")
+        ),
+        controller_factory=lambda **_kwargs: FakeController(),
+        main_window_factory=lambda **_kwargs: FakeMainWindow(),
+    )
+
+    assert hasattr(window, "bot_actions_page")
+    assert not hasattr(window, "automation_page")
+
+
 def test_show_startup_window_opens_main_window_after_wizard_finish() -> None:
     from raidbot.desktop.app import show_startup_window
 

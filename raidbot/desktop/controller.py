@@ -203,6 +203,23 @@ class DesktopController(QObject):
             resolve_sender_entries=False,
         )
 
+    def set_bot_action_slot_enabled(self, slot_index: int, enabled: bool) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        normalized_enabled = bool(enabled)
+        current_slot = self.config.bot_action_slots[slot_index]
+        if current_slot.enabled == normalized_enabled:
+            return
+        updated_slots = list(self.config.bot_action_slots)
+        updated_slots[slot_index] = replace(
+            current_slot,
+            enabled=normalized_enabled,
+        )
+        self._persist_config(
+            replace(self.config, bot_action_slots=tuple(updated_slots)),
+            resolve_sender_entries=False,
+        )
+
     def list_automation_sequences(self) -> list[Any]:
         return list(self._automation_sequences)
 

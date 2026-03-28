@@ -57,6 +57,9 @@ class MainWindow(QMainWindow):
         )
         self.bot_state = "stopped"
         self.connection_state = "disconnected"
+        self._bot_actions_status_text = "Idle"
+        self._bot_actions_current_slot_text: str | None = None
+        self._bot_actions_last_error_text: str | None = None
 
         self.setWindowTitle("Raid Bot")
 
@@ -107,6 +110,9 @@ class MainWindow(QMainWindow):
             config=self.controller.config,
         )
         self.bot_actions_page.slotCaptureRequested.connect(self._capture_bot_action_slot)
+        self.bot_actions_page.slotEnabledChanged.connect(
+            self.controller.set_bot_action_slot_enabled
+        )
         self.bot_actions_page.settleDelayChanged.connect(
             self.controller.set_auto_run_settle_ms
         )
@@ -119,6 +125,7 @@ class MainWindow(QMainWindow):
         state = self.storage.load_state()
         self._apply_state(state, include_activity=True)
         self._sync_bot_actions_config(self.controller.config)
+        self._render_bot_actions_status()
         self._ensure_window_icon()
         self.tray_controller = tray_controller_factory(
             window=self,
@@ -292,8 +299,11 @@ class MainWindow(QMainWindow):
         self.controller.statsChanged.connect(self._apply_stats_state)
         self.controller.activityAdded.connect(self._append_activity_entry)
         self.controller.errorRaised.connect(self.last_error_label.setText)
-        self.controller.errorRaised.connect(self.bot_actions_page.show_error)
+        self.controller.errorRaised.connect(self._show_bot_actions_error)
         self.controller.configChanged.connect(self._sync_bot_actions_config)
+        self.controller.automationQueueStateChanged.connect(self._update_bot_actions_queue_state)
+        self.controller.automationRunStateChanged.connect(self._update_bot_actions_run_state)
+        self.controller.automationRunEvent.connect(self._handle_bot_actions_run_event)
 
     def _update_bot_state(self, state: str) -> None:
         self.bot_state = state
@@ -449,11 +459,55 @@ class MainWindow(QMainWindow):
             )
             self.controller.set_bot_action_slot_template_path(slot_index, template_path)
         except Exception as exc:
-            self.bot_actions_page.show_error(str(exc))
+            self._show_bot_actions_error(str(exc))
 
     def _sync_bot_actions_config(self, config) -> None:
         self.bot_actions_page.set_slots(config.bot_action_slots)
         self.bot_actions_page.set_settle_delay(config.auto_run_settle_ms)
+
+    def _show_bot_actions_error(self, message: str) -> None:
+        self._bot_actions_last_error_text = str(message)
+        self._render_bot_actions_status()
+
+    def _update_bot_actions_queue_state(self, state: str) -> None:
+        queue_status_map = {
+            "queued": "Queued",
+            "running": "Queued",
+            "paused": "Paused",
+            "idle": "Idle",
+        }
+        self._bot_actions_status_text = queue_status_map.get(str(state), "Idle")
+        self._render_bot_actions_status()
+
+    def _update_bot_actions_run_state(self, state: str) -> None:
+        if state == "running":
+            self._bot_actions_status_text = "Running"
+        elif state == "idle":
+            self._bot_actions_status_text = "Idle"
+        self._render_bot_actions_status()
+
+    def _handle_bot_actions_run_event(self, event: dict[str, object]) -> None:
+        event_type = str(event.get("type", ""))
+        if event_type == "automation_run_started":
+            self._bot_actions_status_text = "Running"
+            self._bot_actions_last_error_text = None
+        elif event_type == "automation_run_succeeded":
+            self._bot_actions_status_text = "Idle"
+            self._bot_actions_last_error_text = None
+        elif event_type in {"automation_run_failed", "step_failed", "target_window_lost"}:
+            self._bot_actions_status_text = "Idle"
+            reason = event.get("reason")
+            if reason:
+                self._bot_actions_last_error_text = str(reason)
+        self._render_bot_actions_status()
+
+    def _render_bot_actions_status(self) -> None:
+        lines = [f"Status: {self._bot_actions_status_text}"]
+        if self._bot_actions_current_slot_text:
+            lines.append(f"Current slot: {self._bot_actions_current_slot_text}")
+        if self._bot_actions_last_error_text:
+            lines.append(f"Last error: {self._bot_actions_last_error_text}")
+        self.bot_actions_page.status_label.setText("\n".join(lines))
 
     def _bot_state_is_active(self, state: str) -> bool:
         return state in {"starting", "running", "stopping"}
