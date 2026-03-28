@@ -381,6 +381,34 @@ def test_controller_updates_auto_run_config_through_apply_config(qtbot) -> None:
     assert configs[-1] == controller.config
 
 
+def test_controller_settle_delay_persists_without_resolving_sender_entries(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    config = build_config(
+        allowed_sender_ids=[42],
+        allowed_sender_entries=("raidar",),
+        auto_run_settle_ms=1500,
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=config,
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: FailIfResolveCalled(),
+    )
+    changed_configs = []
+    controller.configChanged.connect(changed_configs.append)
+
+    controller.set_auto_run_settle_ms(2750)
+
+    assert storage.saved_configs[-1].auto_run_settle_ms == 2750
+    assert storage.saved_configs[-1].allowed_sender_entries == ("raidar",)
+    assert storage.saved_configs[-1].allowed_sender_ids == [42]
+    assert controller.config.auto_run_settle_ms == 2750
+    assert changed_configs[-1] == controller.config
+
+
 def test_controller_capture_updates_bot_action_slot_template_and_saves(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 

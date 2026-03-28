@@ -540,6 +540,30 @@ def test_main_window_bot_actions_step_event_shows_and_clears_current_slot(qtbot)
     assert window.bot_actions_page.status_label.text() == "Status: Idle"
 
 
+def test_main_window_bot_actions_failure_keeps_current_slot_when_step_index_is_available(qtbot) -> None:
+    config = build_config(
+        bot_action_slots=(
+            replace(build_config().bot_action_slots[0], enabled=True),
+            replace(build_config().bot_action_slots[1], enabled=True),
+            replace(build_config().bot_action_slots[2], enabled=False),
+            replace(build_config().bot_action_slots[3], enabled=False),
+        )
+    )
+    window = build_window(FakeController(config=config), FakeStorage(config=config))
+    qtbot.addWidget(window)
+
+    window.controller.botActionRunEvent.emit(
+        {"type": "automation_run_started", "sequence_id": "seq-1"}
+    )
+    window.controller.botActionRunEvent.emit(
+        {"type": "step_failed", "step_index": 1, "reason": "click_failed"}
+    )
+
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Idle\nCurrent slot: Slot 2 (L)\nLast error: click_failed"
+    )
+
+
 def test_main_window_current_slot_uses_enabled_slot_order(qtbot) -> None:
     config = build_config(
         bot_action_slots=(
@@ -750,6 +774,15 @@ def test_main_window_settle_delay_changes_persist_through_controller(qtbot) -> N
 
     assert controller.auto_run_settle_ms_updates == [2750]
     assert controller.config.auto_run_settle_ms == 2750
+
+
+def test_main_window_running_queue_state_renders_running_status(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    window.controller.automationQueueStateChanged.emit("running")
+
+    assert window.bot_actions_page.status_label.text() == "Status: Running"
 
 
 def test_automation_page_emits_start_and_save_requests(qtbot) -> None:

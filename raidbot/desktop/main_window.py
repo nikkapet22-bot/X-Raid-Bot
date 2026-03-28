@@ -125,7 +125,7 @@ class MainWindow(QMainWindow):
         self._connect_controller_signals()
         state = self.storage.load_state()
         self._apply_state(state, include_activity=True)
-        self._sync_bot_actions_config(self.controller.config)
+        self._sync_config(self.controller.config)
         self._render_bot_actions_status()
         self._ensure_window_icon()
         self.tray_controller = tray_controller_factory(
@@ -301,7 +301,7 @@ class MainWindow(QMainWindow):
         self.controller.activityAdded.connect(self._append_activity_entry)
         self.controller.errorRaised.connect(self.last_error_label.setText)
         self.controller.errorRaised.connect(self._show_bot_actions_error)
-        self.controller.configChanged.connect(self._sync_bot_actions_config)
+        self.controller.configChanged.connect(self._sync_config)
         self.controller.automationQueueStateChanged.connect(self._update_bot_actions_queue_state)
         self.controller.botActionRunEvent.connect(self._handle_bot_actions_run_event)
 
@@ -461,7 +461,8 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_bot_actions_error(str(exc))
 
-    def _sync_bot_actions_config(self, config) -> None:
+    def _sync_config(self, config) -> None:
+        self.settings_page.set_config(config)
         self.bot_actions_page.set_slots(config.bot_action_slots)
         self.bot_actions_page.set_settle_delay(config.auto_run_settle_ms)
 
@@ -472,7 +473,7 @@ class MainWindow(QMainWindow):
     def _update_bot_actions_queue_state(self, state: str) -> None:
         queue_status_map = {
             "queued": "Queued",
-            "running": "Queued",
+            "running": "Running",
             "paused": "Paused",
             "idle": "Idle",
         }
@@ -494,7 +495,10 @@ class MainWindow(QMainWindow):
             self._bot_actions_last_error_text = None
         elif event_type in {"automation_run_failed", "step_failed", "target_window_lost"}:
             self._bot_actions_status_text = "Idle"
-            self._clear_bot_actions_run_snapshot()
+            self._bot_actions_current_slot_text = self._bot_actions_slot_text(
+                event.get("step_index")
+            )
+            self._clear_bot_actions_run_snapshot(clear_current_slot=False)
             reason = event.get("reason")
             if reason:
                 self._bot_actions_last_error_text = str(reason)
@@ -512,9 +516,10 @@ class MainWindow(QMainWindow):
             if getattr(slot, "enabled", False)
         )
 
-    def _clear_bot_actions_run_snapshot(self) -> None:
+    def _clear_bot_actions_run_snapshot(self, *, clear_current_slot: bool = True) -> None:
         self._bot_actions_run_slots_snapshot = ()
-        self._bot_actions_current_slot_text = None
+        if clear_current_slot:
+            self._bot_actions_current_slot_text = None
 
     def _bot_actions_slot_text(self, step_index: object) -> str | None:
         if not isinstance(step_index, int) or step_index < 0:

@@ -179,7 +179,10 @@ class DesktopController(QObject):
         self.apply_config(replace(self.config, default_auto_sequence_id=sequence_id))
 
     def set_auto_run_settle_ms(self, settle_ms: int) -> None:
-        self.apply_config(replace(self.config, auto_run_settle_ms=int(settle_ms)))
+        self._persist_config(
+            replace(self.config, auto_run_settle_ms=int(settle_ms)),
+            resolve_sender_entries=False,
+        )
 
     def set_bot_action_slot_template_path(
         self,
