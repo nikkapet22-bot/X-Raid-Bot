@@ -62,6 +62,43 @@ class AutomationRuntime:
             selected_window=selected_window,
         )
 
+    def wait_for_step_match(
+        self,
+        step,
+        selected_window_handle: int | None,
+        *,
+        require_interactable_window: bool = True,
+    ):
+        from raidbot.desktop.automation.models import AutomationSequence
+        from raidbot.desktop.automation.runner import RunResult
+
+        selected_window = self._selected_window(selected_window_handle)
+        if selected_window is _MISSING_SELECTED_WINDOW:
+            return self._run_result(status="failed", failure_reason="target_window_not_found")
+        runner = self._build_runner(
+            require_interactable_window=require_interactable_window
+        )
+        self._active_runner = runner
+        probe_sequence = AutomationSequence(
+            id="page-ready-probe",
+            name="Page Ready Probe",
+            steps=[step],
+        )
+        window = runner._resolve_window(probe_sequence, selected_window)
+        if isinstance(window, RunResult):
+            return window
+        template = runner.template_loader(step.template_path)
+        match_result = runner._find_match_for_template(window, step, 0, template)
+        if isinstance(match_result, RunResult):
+            return match_result
+        matched_window, _frame, match = match_result
+        return RunResult(
+            status="dry_run_match_found",
+            window_handle=matched_window.handle,
+            step_index=0,
+            match=match,
+        )
+
     def request_stop(self) -> None:
         if self._active_runner is not None and hasattr(self._active_runner, "request_stop"):
             self._active_runner.request_stop()

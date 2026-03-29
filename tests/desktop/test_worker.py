@@ -133,13 +133,16 @@ class FakeAutomationRuntime:
         *,
         windows: list[object] | None = None,
         run_sequence_results: list[RunResult] | None = None,
+        wait_for_step_result: RunResult | None = None,
         on_run_sequence=None,
     ) -> None:
         self.window_manager = FakeWindowManager(windows or [])
         self.run_sequence_results = list(run_sequence_results or [])
+        self.wait_for_step_result = wait_for_step_result
         self.on_run_sequence = on_run_sequence
         self.run_calls: list[tuple[str, int | None]] = []
         self.run_sequences: list[AutomationSequence] = []
+        self.wait_for_step_calls: list[tuple[Path, int | None]] = []
         self.request_stop_calls = 0
 
         def _input_init(instance) -> None:
@@ -167,6 +170,23 @@ class FakeAutomationRuntime:
 
     def list_target_windows(self) -> list[object]:
         return self.window_manager.list_chrome_windows()
+
+    def wait_for_step_match(
+        self,
+        step: AutomationStep,
+        selected_window_handle: int | None,
+        *,
+        require_interactable_window: bool = True,
+    ):
+        _ = require_interactable_window
+        self.wait_for_step_calls.append((step.template_path, selected_window_handle))
+        if self.wait_for_step_result is not None:
+            return self.wait_for_step_result
+        return RunResult(
+            status="dry_run_match_found",
+            window_handle=selected_window_handle,
+            step_index=0,
+        )
 
     def run_sequence(self, sequence: AutomationSequence, selected_window_handle: int | None):
         self.run_calls.append((sequence.id, selected_window_handle))
@@ -837,6 +857,83 @@ def test_worker_continues_after_profile_failure_and_marks_profile_red(tmp_path) 
         "Default",
         "Profile 9",
     ]
+
+
+def test_worker_distributes_slot_1_presets_across_profiles_before_reusing() -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 29, 15, 0, 0)
+    storage = FakeStorage()
+    runtime = MultiProfileRuntime(run_results=[])
+    runtime.run_sequences = []
+    original_run_sequence = runtime.run_sequence
+
+    def recording_run_sequence(sequence, selected_window_handle):
+        runtime.run_sequences.append(sequence)
+        return original_run_sequence(sequence, selected_window_handle)
+
+    runtime.run_sequence = recording_run_sequence
+    created_openers: list[WindowSpawningChromeOpener] = []
+    handle_by_profile = {
+        "Default": 61,
+        "Profile 3": 63,
+        "Profile 9": 65,
+        "Profile 12": 67,
+    }
+
+    def chrome_opener_factory(**kwargs):
+        opener = WindowSpawningChromeOpener(
+            runtime=runtime,
+            handle_by_profile=handle_by_profile,
+            **kwargs,
+        )
+        created_openers.append(opener)
+        return opener
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            chrome_profile_directory="Default",
+            auto_run_enabled=True,
+            raid_profiles=(
+                RaidProfileConfig("Default", "George", True),
+                RaidProfileConfig("Profile 3", "Maria", True),
+                RaidProfileConfig("Profile 9", "Pasok", True),
+                RaidProfileConfig("Profile 12", "Elena", True),
+            ),
+            bot_action_slots=build_bot_action_slots(
+                slot_1_presets=(
+                    BotActionPreset(id="preset-1", text="gm"),
+                    BotActionPreset(id="preset-2", text="wagmi"),
+                    BotActionPreset(id="preset-3", text="lfggg"),
+                ),
+            ),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=lambda _emit_event: runtime,
+        chrome_opener_factory=chrome_opener_factory,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/999"))
+
+    assert outcome.kind == "job_detected"
+    assert [opener.profile_directory for opener in created_openers] == [
+        "Default",
+        "Profile 3",
+        "Profile 9",
+        "Profile 12",
+    ]
+    slot_1_texts = [sequence.steps[0].preset_text for sequence in runtime.run_sequences]
+
+    assert len(slot_1_texts) == 4
+    assert len(set(slot_1_texts[:3])) == 3
+    assert slot_1_texts[3] in set(slot_1_texts[:3])
+    assert len(set(slot_1_texts)) == 3
 
 
 def test_worker_reacquires_target_window_after_open_when_focus_moves(tmp_path) -> None:
@@ -1603,6 +1700,165 @@ def test_worker_leaves_failed_window_open_and_marks_profile_red(
         "automation_failed",
     ]
     assert any(event == {"type": "error", "message": failure_reason} for event in events)
+
+
+def test_worker_waits_for_page_ready_before_running_sequence(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 12, 30)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    page_ready_path = tmp_path / "page_ready.png"
+    page_ready_path.write_bytes(b"capture")
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=15,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            page_ready_template_path=page_ready_path,
+            bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/222")
+    )
+
+    assert outcome.kind == "job_detected"
+    assert runtime is not None
+    assert runtime.wait_for_step_calls == [(page_ready_path, 15)]
+    assert runtime.run_calls == [("bot-actions", 15)]
+
+
+def test_worker_marks_profile_failed_when_page_ready_never_appears(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 12, 45)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    page_ready_path = tmp_path / "page_ready.png"
+    page_ready_path.write_bytes(b"capture")
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=18,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+            wait_for_step_result=RunResult(
+                status="failed",
+                failure_reason="match_not_found",
+                window_handle=18,
+                step_index=0,
+            ),
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            page_ready_template_path=page_ready_path,
+            bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/333")
+    )
+
+    assert outcome.kind == "job_detected"
+    assert runtime is not None
+    assert runtime.wait_for_step_calls == [(page_ready_path, 18)]
+    assert runtime.run_calls == []
+    assert worker.state.raid_profile_states == (
+        RaidProfileState("Profile 3", "Profile 3", "red", "page_ready_not_found"),
+    )
+
+
+def test_worker_skips_page_ready_probe_when_template_not_configured(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 3, 27, 10, 13, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=21,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/444")
+    )
+
+    assert outcome.kind == "job_detected"
+    assert runtime is not None
+    assert runtime.wait_for_step_calls == []
+    assert runtime.run_calls == [("bot-actions", 21)]
 
 
 def test_worker_skips_failed_profile_until_restarted(tmp_path) -> None:

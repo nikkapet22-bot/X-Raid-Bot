@@ -11,9 +11,13 @@ from raidbot.browser.executors.noop import NoOpRaidExecutor
 from raidbot.browser.pipeline import BrowserPipeline
 from raidbot.chrome import ChromeOpener, OpenedRaidContext
 from raidbot.dedupe import InMemoryOpenedUrlStore
-from raidbot.desktop.bot_actions.sequence import build_bot_action_sequence
+from raidbot.desktop.bot_actions.sequence import (
+    build_bot_action_sequence,
+    build_slot_1_preset_chooser,
+)
 from raidbot.desktop.chrome_profiles import detect_chrome_environment
 from raidbot.desktop.automation.autorun import AutoRunProcessor, PendingRaidWorkItem
+from raidbot.desktop.automation.models import AutomationStep
 from raidbot.desktop.automation.runtime import AutomationRuntime
 from raidbot.desktop.automation.windowing import find_opened_raid_window
 from raidbot.desktop.models import (
@@ -284,7 +288,11 @@ class DesktopBotWorker:
             return None
         return build_result.sequence.id
 
-    def _build_active_bot_action_sequence_result(self):
+    def _build_active_bot_action_sequence_result(
+        self,
+        *,
+        choose_preset=None,
+    ):
         enabled_slots = tuple(slot for slot in self.config.bot_action_slots if slot.enabled)
         if not enabled_slots:
             self._bot_action_sequence_error = "bot_action_not_configured"
@@ -293,7 +301,12 @@ class DesktopBotWorker:
             self._bot_action_sequence_error = "captured_image_missing"
             return None
         self._bot_action_sequence_error = None
-        return build_bot_action_sequence(enabled_slots)
+        if choose_preset is None:
+            return build_bot_action_sequence(enabled_slots)
+        return build_bot_action_sequence(
+            enabled_slots,
+            choose_preset=choose_preset,
+        )
 
     def _build_active_bot_action_sequence(self):
         build_result = self._build_active_bot_action_sequence_result()
@@ -335,7 +348,10 @@ class DesktopBotWorker:
         runtime = self._automation_runtime
         if runtime is None:
             return False, "automation_runtime_unavailable"
-        build_result = self._build_active_bot_action_sequence_result()
+        preset_chooser = build_slot_1_preset_chooser()
+        build_result = self._build_active_bot_action_sequence_result(
+            choose_preset=preset_chooser,
+        )
         if build_result is None or build_result.sequence.id != sequence_id:
             return False, self._translate_automation_reason("default_sequence_missing")
         for warning in build_result.warnings:
@@ -347,12 +363,18 @@ class DesktopBotWorker:
                     "reason": warning.reason,
                 },
             )
-        sequence = build_result.sequence
         eligible_profiles = self._eligible_raid_profiles()
         if not eligible_profiles:
             return True, None
 
-        for profile in eligible_profiles:
+        for profile_index, profile in enumerate(eligible_profiles):
+            sequence = (
+                build_result.sequence
+                if profile_index == 0
+                else self._build_active_bot_action_sequence_result(
+                    choose_preset=preset_chooser,
+                ).sequence
+            )
             previous_windows = tuple(runtime.list_target_windows())
             profile_context, opened_window, open_failure_reason = self._open_raid_for_profile(
                 item,
@@ -364,6 +386,19 @@ class DesktopBotWorker:
                     item,
                     profile,
                     open_failure_reason or "target_window_not_found",
+                    sequence_id=sequence_id,
+                )
+                continue
+
+            page_ready_failure_reason = self._wait_for_page_ready(
+                runtime,
+                opened_window.handle,
+            )
+            if page_ready_failure_reason is not None:
+                self._record_raid_profile_failure(
+                    item,
+                    profile,
+                    page_ready_failure_reason,
                     sequence_id=sequence_id,
                 )
                 continue
@@ -509,6 +544,40 @@ class DesktopBotWorker:
         if opened_window is None:
             return context, None, "target_window_not_found"
         return replace(context, window_handle=opened_window.handle), opened_window, None
+
+    def _wait_for_page_ready(
+        self,
+        runtime: Any,
+        selected_window_handle: int | None,
+    ) -> str | None:
+        template_path = self.config.page_ready_template_path
+        if template_path is None:
+            return None
+        if not hasattr(runtime, "wait_for_step_match"):
+            return "automation_runtime_unavailable"
+        if not template_path.exists():
+            return "page_ready_not_found"
+        result = runtime.wait_for_step_match(
+            AutomationStep(
+                name="page_ready",
+                template_path=template_path,
+                match_threshold=0.9,
+                max_search_seconds=8.0,
+                max_scroll_attempts=0,
+                scroll_amount=-120,
+                max_click_attempts=1,
+                post_click_settle_ms=0,
+            ),
+            selected_window_handle,
+            require_interactable_window=False,
+        )
+        status = getattr(result, "status", None)
+        if status == "dry_run_match_found":
+            return None
+        failure_reason = getattr(result, "failure_reason", None)
+        if failure_reason in {None, "match_not_found"}:
+            return "page_ready_not_found"
+        return failure_reason
 
     def _close_automation_window_for_profile(self, runtime: Any) -> str | None:
         runner = getattr(runtime, "_active_runner", None)
