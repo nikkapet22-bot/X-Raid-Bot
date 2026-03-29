@@ -288,6 +288,16 @@ class DesktopController(QObject):
                 )
             )
             return
+        if slot_index == 0 and not slot.presets:
+            self.botActionRunEvent.emit(
+                self._build_slot_test_event(
+                    "slot_test_failed",
+                    slot_index=slot_index,
+                    reason="no_presets_configured",
+                    message=f"{self._format_bot_action_slot(slot_index, slot.label)}: no presets configured",
+                )
+            )
+            return
 
         runtime = self._load_automation_runtime()
         if runtime is None:
@@ -748,6 +758,8 @@ class DesktopController(QObject):
             "target_window_not_found": "no Chrome window found",
             "window_not_focusable": "Chrome window not focusable",
             "invalid_click_target": "invalid click target",
+            "no_presets_configured": "no presets configured",
+            "finish_template_missing": "finish image missing",
             "runtime_error": "runtime error",
             "stopped": "stopped",
         }

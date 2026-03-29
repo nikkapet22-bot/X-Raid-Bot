@@ -18,6 +18,11 @@ class AutomationStep:
     click_offset_x: int = 0
     click_offset_y: int = 0
     template_missing: bool = False
+    pre_confirm_clicks: int = 1
+    inter_click_delay_ms: int = 500
+    preset_text: str | None = None
+    preset_image_path: Path | None = None
+    finish_template_path: Path | None = None
 
 
 @dataclass

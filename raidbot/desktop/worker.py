@@ -270,12 +270,12 @@ class DesktopBotWorker:
         return tuple(runtime.list_target_windows())
 
     def _bot_action_sequence_id(self) -> str | None:
-        sequence = self._build_active_bot_action_sequence()
-        if sequence is None:
+        build_result = self._build_active_bot_action_sequence_result()
+        if build_result is None:
             return None
-        return sequence.id
+        return build_result.sequence.id
 
-    def _build_active_bot_action_sequence(self):
+    def _build_active_bot_action_sequence_result(self):
         enabled_slots = tuple(slot for slot in self.config.bot_action_slots if slot.enabled)
         if not enabled_slots:
             self._bot_action_sequence_error = "bot_action_not_configured"
@@ -285,6 +285,12 @@ class DesktopBotWorker:
             return None
         self._bot_action_sequence_error = None
         return build_bot_action_sequence(enabled_slots)
+
+    def _build_active_bot_action_sequence(self):
+        build_result = self._build_active_bot_action_sequence_result()
+        if build_result is None:
+            return None
+        return build_result.sequence
 
     def _auto_run_requested(self) -> bool:
         return bool(
@@ -309,10 +315,13 @@ class DesktopBotWorker:
         context = opener.open_raid_window(item.normalized_url)
         if self.config.auto_run_settle_ms > 0:
             self.auto_run_wait(self.config.auto_run_settle_ms / 1000.0)
+        current_windows = runtime.list_target_windows()
         opened_window = find_opened_raid_window(
             list(previous_windows or ()),
-            runtime.list_target_windows(),
+            current_windows,
         )
+        if opened_window is None and len(current_windows) == 1:
+            opened_window = current_windows[0]
         if opened_window is None:
             raise RuntimeError("target_window_not_found")
         self._dedupe_store.mark_if_new(item.normalized_url)
@@ -328,9 +337,19 @@ class DesktopBotWorker:
         runtime = self._automation_runtime
         if runtime is None:
             return False, "automation_runtime_unavailable"
-        sequence = self._build_active_bot_action_sequence()
-        if sequence is None or sequence.id != sequence_id:
+        build_result = self._build_active_bot_action_sequence_result()
+        if build_result is None or build_result.sequence.id != sequence_id:
             return False, self._translate_automation_reason("default_sequence_missing")
+        for warning in build_result.warnings:
+            self._emit(
+                "automation_runtime_event",
+                event={
+                    "type": "slot_skipped",
+                    "step_index": warning.slot_index,
+                    "reason": warning.reason,
+                },
+            )
+        sequence = build_result.sequence
         if context.window_handle is None:
             return False, "target_window_not_found"
         self._record_activity(
