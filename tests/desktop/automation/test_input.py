@@ -23,3 +23,14 @@ def test_input_driver_can_close_active_tab_without_affecting_click_or_scroll() -
         ("scroll", -120),
         ("ctrl", "w"),
     ]
+
+
+def test_input_driver_can_close_active_window() -> None:
+    events: list[tuple[object, ...]] = []
+    driver = InputDriver(send_hotkey=events.append)
+
+    driver.close_active_window()
+
+    assert events == [
+        ("ctrl", "shift", "w"),
+    ]

@@ -46,3 +46,20 @@ class ChromeOpener:
             window_handle=window_handle,
             profile_directory=self.profile_directory,
         )
+
+    def open_raid_window(self, url: str) -> OpenedRaidContext:
+        self.launcher(
+            [
+                str(self.chrome_path),
+                "--new-window",
+                f"--user-data-dir={self.user_data_dir}",
+                f"--profile-directory={self.profile_directory}",
+                url,
+            ]
+        )
+        return OpenedRaidContext(
+            normalized_url=url,
+            opened_at=self.clock(),
+            window_handle=None,
+            profile_directory=self.profile_directory,
+        )

@@ -42,6 +42,9 @@ class InputDriver:
     def close_active_tab(self) -> None:
         self._send_hotkey(("ctrl", "w"))
 
+    def close_active_window(self) -> None:
+        self._send_hotkey(("ctrl", "shift", "w"))
+
     def _set_cursor_pos_win32(self, point: Point) -> None:
         win32api = importlib.import_module("win32api")
         win32api.SetCursorPos(point)
@@ -58,11 +61,15 @@ class InputDriver:
         win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, amount, 0)
 
     def _send_hotkey_win32(self, hotkey: tuple[str, ...]) -> None:
-        if hotkey != ("ctrl", "w"):
+        if hotkey not in {("ctrl", "w"), ("ctrl", "shift", "w")}:
             raise ValueError(f"Unsupported hotkey: {hotkey}")
         win32api = importlib.import_module("win32api")
         win32con = importlib.import_module("win32con")
         win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+        if hotkey == ("ctrl", "shift", "w"):
+            win32api.keybd_event(win32con.VK_SHIFT, 0, 0, 0)
         win32api.keybd_event(ord("W"), 0, 0, 0)
         win32api.keybd_event(ord("W"), 0, win32con.KEYEVENTF_KEYUP, 0)
+        if hotkey == ("ctrl", "shift", "w"):
+            win32api.keybd_event(win32con.VK_SHIFT, 0, win32con.KEYEVENTF_KEYUP, 0)
         win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
