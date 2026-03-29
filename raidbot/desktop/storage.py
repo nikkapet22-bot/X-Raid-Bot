@@ -9,6 +9,7 @@ from typing import Any
 
 from .models import (
     ActivityEntry,
+    BotActionPreset,
     BotActionSlotConfig,
     BotRuntimeState,
     DesktopAppConfig,
@@ -237,16 +238,49 @@ class DesktopStorage:
             "enabled": slot.enabled,
             "template_path": str(slot.template_path) if slot.template_path is not None else None,
             "updated_at": slot.updated_at,
+            "presets": [
+                {
+                    "id": preset.id,
+                    "text": preset.text,
+                    "image_path": (
+                        str(preset.image_path) if preset.image_path is not None else None
+                    ),
+                }
+                for preset in slot.presets
+            ],
+            "finish_template_path": (
+                str(slot.finish_template_path)
+                if slot.finish_template_path is not None
+                else None
+            ),
         }
 
     def _bot_action_slot_from_data(self, data: dict[str, Any]) -> BotActionSlotConfig:
         template_path = data.get("template_path")
+        finish_template_path = data.get("finish_template_path")
+        presets = tuple(
+            BotActionPreset(
+                id=str(preset.get("id") or ""),
+                text=str(preset.get("text") or ""),
+                image_path=(
+                    Path(preset.get("image_path"))
+                    if preset.get("image_path") is not None
+                    else None
+                ),
+            )
+            for preset in data.get("presets", ())
+            if isinstance(preset, dict)
+        )
         return BotActionSlotConfig(
             key=str(data.get("key") or ""),
             label=str(data.get("label") or ""),
             enabled=self._maybe_bool(data.get("enabled"), default=False),
             template_path=Path(template_path) if template_path is not None else None,
             updated_at=data.get("updated_at"),
+            presets=presets,
+            finish_template_path=(
+                Path(finish_template_path) if finish_template_path is not None else None
+            ),
         )
 
     def _normalize_bot_state(self, state: BotRuntimeState) -> BotRuntimeState:

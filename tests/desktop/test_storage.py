@@ -6,6 +6,7 @@ from pathlib import Path
 
 from raidbot.desktop.models import (
     BotActionSlotConfig,
+    BotActionPreset,
     ActivityEntry,
     BotRuntimeState,
     DesktopAppConfig,
@@ -87,6 +88,52 @@ def test_config_round_trip(tmp_path) -> None:
         ),
         BotActionSlotConfig(key="slot_3_r", label="R", enabled=False),
         BotActionSlotConfig(key="slot_4_b", label="B", enabled=True),
+    )
+
+
+def test_storage_round_trips_slot_1_presets_and_finish_template(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    config = DesktopAppConfig(
+        telegram_api_id=123456,
+        telegram_api_hash="api-hash",
+        telegram_session_path=Path("sessions/raid.session"),
+        telegram_phone_number="+15555550123",
+        whitelisted_chat_ids=[1001],
+        allowed_sender_ids=[424242],
+        allowed_sender_entries=("@raidar",),
+        chrome_profile_directory="Profile 1",
+        bot_action_slots=(
+            BotActionSlotConfig(
+                key="slot_1_r",
+                label="R",
+                enabled=True,
+                template_path=Path("bot_actions/slot_1_r.png"),
+                finish_template_path=Path("bot_actions/slot_1_r_finish.png"),
+                presets=(
+                    BotActionPreset(
+                        id="preset-1",
+                        text="gm",
+                        image_path=Path("bot_actions/presets/gm.png"),
+                    ),
+                    BotActionPreset(
+                        id="preset-2",
+                        text="wagmi",
+                    ),
+                ),
+            ),
+            *default_bot_action_slots()[1:],
+        ),
+    )
+
+    storage.save_config(config)
+
+    loaded = storage.load_config()
+
+    assert loaded.bot_action_slots[0].presets == config.bot_action_slots[0].presets
+    assert loaded.bot_action_slots[0].finish_template_path == Path(
+        "bot_actions/slot_1_r_finish.png"
     )
 
 

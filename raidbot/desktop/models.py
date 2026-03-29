@@ -25,12 +25,21 @@ class TelegramConnectionState(str, Enum):
 
 
 @dataclass(eq=True)
+class BotActionPreset:
+    id: str
+    text: str
+    image_path: Path | None = None
+
+
+@dataclass(eq=True)
 class BotActionSlotConfig:
     key: str
     label: str
     enabled: bool = False
     template_path: Path | None = None
     updated_at: str | None = None
+    presets: tuple[BotActionPreset, ...] = ()
+    finish_template_path: Path | None = None
 
 
 _DEFAULT_BOT_ACTION_SLOT_LAYOUT: tuple[tuple[str, str], ...] = (
@@ -155,6 +164,8 @@ class DesktopAppConfig:
         provided_slots = tuple(bot_action_slots or ())
         for index, default_slot in enumerate(default_bot_action_slots()):
             provided_slot = provided_slots[index] if index < len(provided_slots) else None
+            is_slot_1 = default_slot.key == "slot_1_r"
+            provided_presets = tuple(getattr(provided_slot, "presets", ()) or ())
             normalized_slots.append(
                 BotActionSlotConfig(
                     key=default_slot.key,
@@ -168,6 +179,31 @@ class DesktopAppConfig:
                     updated_at=(
                         str(provided_slot.updated_at)
                         if provided_slot is not None and provided_slot.updated_at is not None
+                        else None
+                    ),
+                    presets=(
+                        tuple(
+                            BotActionPreset(
+                                id=str(preset.id),
+                                text=str(preset.text),
+                                image_path=(
+                                    Path(preset.image_path)
+                                    if getattr(preset, "image_path", None) is not None
+                                    else None
+                                ),
+                            )
+                            for preset in provided_presets
+                        )
+                        if is_slot_1
+                        else ()
+                    ),
+                    finish_template_path=(
+                        Path(provided_slot.finish_template_path)
+                        if (
+                            is_slot_1
+                            and provided_slot is not None
+                            and getattr(provided_slot, "finish_template_path", None) is not None
+                        )
                         else None
                     ),
                 )

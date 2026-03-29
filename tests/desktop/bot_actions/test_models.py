@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from raidbot.desktop.models import (
+    BotActionPreset,
     BotActionSlotConfig,
     DesktopAppConfig,
     default_bot_action_slots,
@@ -23,6 +24,13 @@ def test_default_bot_action_slots_are_fixed_labels_and_disabled() -> None:
     assert all(slot.updated_at is None for slot in slots)
 
 
+def test_default_bot_action_slots_include_empty_slot_1_preset_state() -> None:
+    slot_1 = default_bot_action_slots()[0]
+
+    assert slot_1.presets == ()
+    assert slot_1.finish_template_path is None
+
+
 def test_desktop_app_config_normalizes_partial_bot_action_slots_to_fixed_layout() -> None:
     config = DesktopAppConfig(
         telegram_api_id=123,
@@ -39,6 +47,14 @@ def test_desktop_app_config_normalizes_partial_bot_action_slots_to_fixed_layout(
                 enabled=True,
                 template_path=Path("templates/custom-1.png"),
                 updated_at="2026-03-28T12:00:00",
+                presets=(
+                    BotActionPreset(
+                        id="preset-1",
+                        text="gm",
+                        image_path=Path("bot_actions/presets/gm.png"),
+                    ),
+                ),
+                finish_template_path=Path("bot_actions/slot_1_r_finish.png"),
             ),
             BotActionSlotConfig(
                 key="unexpected-slot-2",
@@ -62,6 +78,14 @@ def test_desktop_app_config_normalizes_partial_bot_action_slots_to_fixed_layout(
             enabled=True,
             template_path=Path("templates/custom-1.png"),
             updated_at="2026-03-28T12:00:00",
+            presets=(
+                BotActionPreset(
+                    id="preset-1",
+                    text="gm",
+                    image_path=Path("bot_actions/presets/gm.png"),
+                ),
+            ),
+            finish_template_path=Path("bot_actions/slot_1_r_finish.png"),
         ),
         BotActionSlotConfig(
             key="slot_2_l",
