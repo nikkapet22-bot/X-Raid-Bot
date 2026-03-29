@@ -85,6 +85,7 @@ class FakeInputDriver:
         self.scrolls: list[int] = []
         self.pasted_text: list[str] = []
         self.pasted_images: list[Path] = []
+        self.file_pasted_images: list[Path] = []
 
     def move_click(self, point: tuple[int, int], *, delay_seconds: float = 0.5) -> None:
         self.clicks.append(point)
@@ -97,6 +98,9 @@ class FakeInputDriver:
 
     def paste_image(self, image_path: Path) -> None:
         self.pasted_images.append(image_path)
+
+    def paste_image_file(self, image_path: Path) -> None:
+        self.file_pasted_images.append(image_path)
 
 
 def _step(**overrides) -> AutomationStep:
@@ -504,7 +508,8 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
 
     assert result.status == "completed"
     assert input_driver.pasted_text == ["gm"]
-    assert input_driver.pasted_images == [reply_image_path]
+    assert input_driver.file_pasted_images == [reply_image_path]
+    assert input_driver.pasted_images == []
     assert input_driver.clicks == [(25, 15), (45, 15), (65, 15)]
 
 
@@ -526,6 +531,10 @@ def test_runner_slot_1_waits_between_text_paste_and_image_paste(
         def paste_image(self, image_path: Path) -> None:
             super().paste_image(image_path)
             self.events.append((f"image:{image_path}", self._current_time()))
+
+        def paste_image_file(self, image_path: Path) -> None:
+            super().paste_image_file(image_path)
+            self.events.append((f"file_image:{image_path}", self._current_time()))
 
     input_driver = TimedInputDriver(clock.now)
     reply_image_path = tmp_path / "reply.png"
@@ -561,7 +570,7 @@ def test_runner_slot_1_waits_between_text_paste_and_image_paste(
     assert result.status == "completed"
     assert input_driver.events == [
         ("text:gm", 100.5),
-        (f"image:{reply_image_path}", 101.0),
+        (f"file_image:{reply_image_path}", 101.0),
     ]
 
 

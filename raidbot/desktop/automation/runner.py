@@ -376,7 +376,7 @@ class SequenceRunner:
             and Path(step.preset_image_path).exists()
         ):
             self.sleep(0.5)
-            self.input_driver.paste_image(Path(step.preset_image_path))
+            self.input_driver.paste_image_file(Path(step.preset_image_path))
         finish_template_path = step.finish_template_path
         if finish_template_path is None or not Path(finish_template_path).exists():
             return RunResult(
