@@ -92,6 +92,7 @@ class DesktopAppConfig:
     auto_run_enabled: bool
     default_auto_sequence_id: str | None
     auto_run_settle_ms: int
+    page_ready_template_path: Path | None
     bot_action_slots: tuple[BotActionSlotConfig, ...]
     raid_profiles: tuple[RaidProfileConfig, ...]
 
@@ -117,6 +118,7 @@ class DesktopAppConfig:
         auto_run_enabled: bool = False,
         default_auto_sequence_id: str | None = None,
         auto_run_settle_ms: int = 1500,
+        page_ready_template_path: Path | None = None,
         bot_action_slots: Sequence[BotActionSlotConfig] | None = None,
         raid_profiles: Sequence[RaidProfileConfig] | None = None,
     ) -> None:
@@ -144,6 +146,9 @@ class DesktopAppConfig:
         self.auto_run_enabled = auto_run_enabled
         self.default_auto_sequence_id = default_auto_sequence_id
         self.auto_run_settle_ms = auto_run_settle_ms
+        self.page_ready_template_path = (
+            Path(page_ready_template_path) if page_ready_template_path is not None else None
+        )
         self.bot_action_slots = self._coerce_bot_action_slots(bot_action_slots)
         self.raid_profiles = self._coerce_raid_profiles(
             raid_profiles,

@@ -92,6 +92,21 @@ def test_desktop_app_config_uses_default_bot_action_slots_when_unspecified() -> 
     assert config.bot_action_slots == default_bot_action_slots()
 
 
+def test_desktop_app_config_preserves_page_ready_template_path() -> None:
+    config = DesktopAppConfig(
+        telegram_api_id=123,
+        telegram_api_hash="hash",
+        telegram_session_path=Path("session.session"),
+        telegram_phone_number=None,
+        whitelisted_chat_ids=[111],
+        allowed_sender_ids=[333],
+        chrome_profile_directory="Default",
+        page_ready_template_path=Path("bot_actions/page_ready.png"),
+    )
+
+    assert config.page_ready_template_path == Path("bot_actions/page_ready.png")
+
+
 def test_desktop_model_enums_expose_expected_values() -> None:
     assert {member.value for member in BotRuntimeState} == {
         "setup_required",

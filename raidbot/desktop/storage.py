@@ -87,6 +87,11 @@ class DesktopStorage:
             "auto_run_enabled": config.auto_run_enabled,
             "default_auto_sequence_id": config.default_auto_sequence_id,
             "auto_run_settle_ms": config.auto_run_settle_ms,
+            "page_ready_template_path": (
+                str(config.page_ready_template_path)
+                if config.page_ready_template_path is not None
+                else None
+            ),
             "bot_action_slots": [
                 self._bot_action_slot_to_data(slot) for slot in config.bot_action_slots
             ],
@@ -133,6 +138,11 @@ class DesktopStorage:
                 int(data["auto_run_settle_ms"])
                 if data.get("auto_run_settle_ms") is not None
                 else 1500
+            ),
+            page_ready_template_path=(
+                Path(data["page_ready_template_path"])
+                if data.get("page_ready_template_path") is not None
+                else None
             ),
             bot_action_slots=tuple(
                 self._bot_action_slot_from_data(slot_data)
