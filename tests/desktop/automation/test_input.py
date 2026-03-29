@@ -1,6 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from raidbot.desktop.automation.input import InputDriver
+
+
+class FakeClipboard:
+    def __init__(self) -> None:
+        self.text = None
+        self.image_path = None
+
+    def set_text(self, text: str) -> None:
+        self.text = text
+
+    def set_image(self, image_path: Path) -> None:
+        self.image_path = image_path
 
 
 def test_input_driver_can_close_active_tab_without_affecting_click_or_scroll() -> None:
@@ -33,4 +47,32 @@ def test_input_driver_can_close_active_window() -> None:
 
     assert events == [
         ("ctrl", "shift", "w"),
+    ]
+
+
+def test_input_driver_pastes_text_then_ctrl_v() -> None:
+    events: list[tuple[object, ...]] = []
+    clipboard = FakeClipboard()
+    driver = InputDriver(send_hotkey=events.append, clipboard=clipboard)
+
+    driver.paste_text("gm")
+
+    assert clipboard.text == "gm"
+    assert events == [
+        ("ctrl", "v"),
+    ]
+
+
+def test_input_driver_pastes_image_then_ctrl_v(tmp_path: Path) -> None:
+    image_path = tmp_path / "reply.png"
+    image_path.write_bytes(b"fake image")
+    events: list[tuple[object, ...]] = []
+    clipboard = FakeClipboard()
+    driver = InputDriver(send_hotkey=events.append, clipboard=clipboard)
+
+    driver.paste_image(image_path)
+
+    assert clipboard.image_path == image_path
+    assert events == [
+        ("ctrl", "v"),
     ]
