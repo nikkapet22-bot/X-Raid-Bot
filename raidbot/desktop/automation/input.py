@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+import struct
+import os
 import time
 from pathlib import Path
 from typing import Callable
@@ -31,7 +33,7 @@ class InputDriver:
         self._click_left = click_left or self._click_left_win32
         self._scroll_wheel = scroll_wheel or self._scroll_wheel_win32
         self._send_hotkey = send_hotkey or self._send_hotkey_win32
-        self._clipboard = clipboard or _QtClipboard()
+        self._clipboard = clipboard or _default_clipboard()
         self._wait = wait
 
     def move_click(self, point: Point, *, delay_seconds: float = 0.5) -> None:
@@ -56,6 +58,12 @@ class InputDriver:
         if not Path(image_path).exists():
             raise FileNotFoundError(str(image_path))
         self._clipboard.set_image(Path(image_path))
+        self._send_hotkey(("ctrl", "v"))
+
+    def paste_image_file(self, image_path: Path) -> None:
+        if not Path(image_path).exists():
+            raise FileNotFoundError(str(image_path))
+        self._clipboard.set_file_image(Path(image_path))
         self._send_hotkey(("ctrl", "v"))
 
     def _set_cursor_pos_win32(self, point: Point) -> None:
@@ -102,3 +110,67 @@ class _QtClipboard:
             raise OSError(f"Could not load {image_path}")
         clipboard = qt_gui.QGuiApplication.clipboard()
         clipboard.setImage(image)
+
+    def set_file_image(self, image_path: Path) -> None:
+        raise NotImplementedError("File-reference image clipboard paste is Windows-only")
+
+
+class _WindowsClipboard:
+    def set_text(self, text: str) -> None:
+        win32clipboard = importlib.import_module("win32clipboard")
+        win32con = importlib.import_module("win32con")
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
+        finally:
+            win32clipboard.CloseClipboard()
+
+    def set_image(self, image_path: Path) -> None:
+        qt_core = importlib.import_module("PySide6.QtCore")
+        qt_gui = importlib.import_module("PySide6.QtGui")
+        win32clipboard = importlib.import_module("win32clipboard")
+        win32con = importlib.import_module("win32con")
+
+        image = qt_gui.QImage(str(image_path))
+        if image.isNull():
+            raise OSError(f"Could not load {image_path}")
+
+        buffer = qt_core.QBuffer()
+        open_mode_owner = getattr(qt_core, "QIODeviceBase", qt_core.QIODevice)
+        buffer.open(open_mode_owner.OpenModeFlag.WriteOnly)
+        image.save(buffer, "BMP")
+        dib_bytes = bytes(buffer.data())[14:]
+
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32con.CF_DIB, dib_bytes)
+        finally:
+            win32clipboard.CloseClipboard()
+
+    def set_file_image(self, image_path: Path) -> None:
+        win32clipboard = importlib.import_module("win32clipboard")
+        dropfiles_payload = _build_dropfiles_payload(Path(image_path))
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32clipboard.CF_HDROP, dropfiles_payload)
+        finally:
+            win32clipboard.CloseClipboard()
+
+
+def _default_clipboard():
+    if os.name == "nt":
+        return _WindowsClipboard()
+    return _QtClipboard()
+
+
+def _build_dropfiles_payload(image_path: Path) -> bytes:
+    encoded_path = str(image_path).replace("/", "\\").encode("utf-16le") + b"\x00\x00"
+    files_block = encoded_path + b"\x00\x00"
+    p_files_offset = 20
+    return (
+        struct.pack("<IiiII", p_files_offset, 0, 0, 0, 1)
+        + files_block
+    )
