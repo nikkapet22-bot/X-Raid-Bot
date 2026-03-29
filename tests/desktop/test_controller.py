@@ -708,15 +708,16 @@ def test_controller_rejects_slot_1_test_when_no_presets_configured(
 def test_controller_rejects_slot_test_when_no_chrome_window_exists(qtbot, tmp_path: Path) -> None:
     from raidbot.desktop.controller import DesktopController
 
-    template_path = tmp_path / "slot_1_r.png"
+    template_path = tmp_path / "slot_2_l.png"
     template_path.write_bytes(b"capture")
     runtime = FakeSlotTestRuntime(windows=[])
     controller = DesktopController(
         storage=FakeStorage(),
         config=build_config(
             bot_action_slots=(
-                replace(build_config().bot_action_slots[0], template_path=template_path),
-                *build_config().bot_action_slots[1:],
+                build_config().bot_action_slots[0],
+                replace(build_config().bot_action_slots[1], template_path=template_path),
+                *build_config().bot_action_slots[2:],
             )
         ),
         runner_factory=ImmediateRunner,
@@ -726,14 +727,14 @@ def test_controller_rejects_slot_test_when_no_chrome_window_exists(qtbot, tmp_pa
     events = []
     controller.botActionRunEvent.connect(events.append)
 
-    controller.test_bot_action_slot(0)
+    controller.test_bot_action_slot(1)
 
     assert events == [
         {
             "type": "slot_test_failed",
-            "slot_index": 0,
+            "slot_index": 1,
             "reason": "target_window_not_found",
-            "message": "Slot 1 (R): no Chrome window found",
+            "message": "Slot 2 (L): no Chrome window found",
         }
     ]
     assert runtime.run_calls == []
@@ -742,7 +743,7 @@ def test_controller_rejects_slot_test_when_no_chrome_window_exists(qtbot, tmp_pa
 def test_controller_runs_slot_test_against_most_recent_chrome_window(qtbot, tmp_path: Path) -> None:
     from raidbot.desktop.controller import DesktopController
 
-    template_path = tmp_path / "slot_1_r.png"
+    template_path = tmp_path / "slot_2_l.png"
     template_path.write_bytes(b"capture")
     runtime = FakeSlotTestRuntime(
         windows=[
@@ -754,8 +755,9 @@ def test_controller_runs_slot_test_against_most_recent_chrome_window(qtbot, tmp_
         storage=FakeStorage(),
         config=build_config(
             bot_action_slots=(
-                replace(build_config().bot_action_slots[0], template_path=template_path),
-                *build_config().bot_action_slots[1:],
+                build_config().bot_action_slots[0],
+                replace(build_config().bot_action_slots[1], template_path=template_path),
+                *build_config().bot_action_slots[2:],
             )
         ),
         runner_factory=ImmediateRunner,
@@ -765,13 +767,13 @@ def test_controller_runs_slot_test_against_most_recent_chrome_window(qtbot, tmp_
     events = []
     controller.botActionRunEvent.connect(events.append)
 
-    controller.test_bot_action_slot(0)
+    controller.test_bot_action_slot(1)
 
     assert [event["type"] for event in events] == [
         "slot_test_started",
         "slot_test_succeeded",
     ]
-    assert events[-1]["message"] == "Slot 1 (R): success"
+    assert events[-1]["message"] == "Slot 2 (L): success"
     assert runtime.run_calls[0][1] == 9
     assert runtime.run_calls[0][2] is False
     assert runtime.run_calls[0][0].steps[0].template_path == template_path
