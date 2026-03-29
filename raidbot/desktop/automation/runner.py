@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -10,6 +10,9 @@ from .matching import TemplateMatcher
 from .models import AutomationSequence, AutomationStep, MatchResult
 from .templates import load_template_image
 from .windowing import WindowInfo, WindowManager, choose_window_for_rule
+
+_SLOT_1_FINISH_SCROLL_ATTEMPTS = 4
+_SCROLL_SETTLE_SECONDS = 1.0
 
 
 @dataclass(eq=True)
@@ -307,6 +310,7 @@ class SequenceRunner:
                         "amount": step.scroll_amount,
                     }
                 )
+                self.sleep(_SCROLL_SETTLE_SECONDS)
 
         return RunResult(
             status="failed",
@@ -360,7 +364,7 @@ class SequenceRunner:
         point = self._resolve_click_point(window, step, step_index, match)
         if isinstance(point, RunResult):
             return point
-        self.input_driver.move_click(point, delay_seconds=0.5)
+        self.input_driver.move_click(point, delay_seconds=1.0)
         self.emit_event(
             {
                 "type": "step_clicked",
@@ -368,15 +372,16 @@ class SequenceRunner:
                 "point": point,
             }
         )
-        self.sleep(0.5)
+        self.sleep(1.0)
         if step.preset_text is not None:
             self.input_driver.paste_text(step.preset_text)
         if (
             step.preset_image_path is not None
             and Path(step.preset_image_path).exists()
         ):
-            self.sleep(0.5)
+            self.sleep(1.0)
             self.input_driver.paste_image_file(Path(step.preset_image_path))
+            self.sleep(1.0)
         finish_template_path = step.finish_template_path
         if finish_template_path is None or not Path(finish_template_path).exists():
             return RunResult(
@@ -386,9 +391,17 @@ class SequenceRunner:
                 step_index=step_index,
             )
         finish_template = self.template_loader(finish_template_path)
+        finish_search_step = replace(
+            step,
+            max_search_seconds=0.0,
+            max_scroll_attempts=max(
+                step.max_scroll_attempts,
+                _SLOT_1_FINISH_SCROLL_ATTEMPTS,
+            ),
+        )
         finish_location = self._find_match_for_template(
             window,
-            step,
+            finish_search_step,
             step_index,
             finish_template,
         )
@@ -406,7 +419,7 @@ class SequenceRunner:
         )
         if isinstance(finish_point, RunResult):
             return finish_point
-        self.input_driver.move_click(finish_point, delay_seconds=0.5)
+        self.input_driver.move_click(finish_point, delay_seconds=1.0)
         self.emit_event(
             {
                 "type": "step_clicked",
@@ -414,51 +427,13 @@ class SequenceRunner:
                 "point": finish_point,
             }
         )
-        finish_template_path_2 = step.finish_template_path_2
-        if finish_template_path_2 is None or not Path(finish_template_path_2).exists():
-            return RunResult(
-                status="failed",
-                failure_reason="finish_template_2_missing",
-                window_handle=finish_window.handle,
-                step_index=step_index,
-            )
-        self.sleep(0.5)
-        finish_template_2 = self.template_loader(finish_template_path_2)
-        finish_location_2 = self._find_match_for_template(
+        confirmation = self._confirm_ui_changed_after_click(
             finish_window,
             step,
             step_index,
-            finish_template_2,
-        )
-        if isinstance(finish_location_2, RunResult):
-            return finish_location_2
-        finish_window_2, finish_frame_2, finish_match_2 = finish_location_2
-        finish_window_2 = self._refresh_active_window(finish_window_2, step_index)
-        if isinstance(finish_window_2, RunResult):
-            return finish_window_2
-        finish_point_2 = self._resolve_click_point(
-            finish_window_2,
-            step,
-            step_index,
-            finish_match_2,
-        )
-        if isinstance(finish_point_2, RunResult):
-            return finish_point_2
-        self.input_driver.move_click(finish_point_2, delay_seconds=0.5)
-        self.emit_event(
-            {
-                "type": "step_clicked",
-                "step_index": step_index,
-                "point": finish_point_2,
-            }
-        )
-        confirmation = self._confirm_ui_changed_after_click(
-            finish_window_2,
-            step,
-            step_index,
-            finish_template_2,
-            finish_match_2,
-            finish_frame_2,
+            finish_template,
+            finish_match,
+            finish_frame,
         )
         if isinstance(confirmation, RunResult):
             if confirmation.status == "completed":
@@ -466,24 +441,24 @@ class SequenceRunner:
                     {
                         "type": "step_succeeded",
                         "step_index": step_index,
-                        "window_handle": finish_window_2.handle,
+                        "window_handle": finish_window.handle,
                     }
                 )
                 return None
             return confirmation
-        if self._step_succeeded(finish_match_2, confirmation):
+        if self._step_succeeded(finish_match, confirmation):
             self.emit_event(
                 {
                     "type": "step_succeeded",
                     "step_index": step_index,
-                    "window_handle": finish_window_2.handle,
+                    "window_handle": finish_window.handle,
                 }
             )
             return None
         return RunResult(
             status="failed",
             failure_reason="ui_did_not_change",
-            window_handle=finish_window_2.handle,
+            window_handle=finish_window.handle,
             step_index=step_index,
         )
 

@@ -492,25 +492,20 @@ def test_controller_persists_slot_1_presets_and_both_finish_templates(qtbot) -> 
         ),
     )
     finish_template_path = Path("bot_actions/slot_1_r_finish.png")
-    finish_template_path_2 = Path("bot_actions/slot_1_r_finish_2.png")
-
     controller.set_bot_action_slot_1_presets(
         presets=presets,
         finish_template_path=finish_template_path,
-        finish_template_path_2=finish_template_path_2,
     )
 
     saved_slot = storage.saved_configs[-1].bot_action_slots[0]
     assert saved_slot.presets == presets
     assert saved_slot.finish_template_path == finish_template_path
-    assert saved_slot.finish_template_path_2 == finish_template_path_2
     assert controller.config.bot_action_slots[0].presets == presets
     assert controller.config.bot_action_slots[0].finish_template_path == finish_template_path
-    assert controller.config.bot_action_slots[0].finish_template_path_2 == finish_template_path_2
     assert updated_configs[-1].bot_action_slots[0].presets == presets
 
 
-def test_controller_maps_slot_test_second_finish_image_missing(qtbot, tmp_path: Path) -> None:
+def test_controller_maps_slot_test_finish_image_missing(qtbot, tmp_path: Path) -> None:
     from raidbot.desktop.controller import DesktopController
     from raidbot.desktop.automation.runner import RunResult
 
@@ -518,7 +513,7 @@ def test_controller_maps_slot_test_second_finish_image_missing(qtbot, tmp_path: 
     template_path.write_bytes(b"capture")
     runtime = FakeSlotTestRuntime(
         windows=[SimpleNamespace(handle=9, last_focused_at=1.0, title="Chrome 1")],
-        result=RunResult(status="failed", failure_reason="finish_template_2_missing"),
+        result=RunResult(status="failed", failure_reason="finish_template_missing"),
     )
     controller = DesktopController(
         storage=FakeStorage(),
@@ -545,8 +540,8 @@ def test_controller_maps_slot_test_second_finish_image_missing(qtbot, tmp_path: 
     assert events[-1] == {
         "type": "slot_test_failed",
         "slot_index": 0,
-        "reason": "finish_template_2_missing",
-        "message": "Slot 1 (R): finish image 2 missing",
+        "reason": "finish_template_missing",
+        "message": "Slot 1 (R): finish image missing",
     }
 
 

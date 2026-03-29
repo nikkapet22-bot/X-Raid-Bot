@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import struct
 import os
 import time
 from pathlib import Path
@@ -64,6 +63,7 @@ class InputDriver:
         if not Path(image_path).exists():
             raise FileNotFoundError(str(image_path))
         self._clipboard.set_file_image(Path(image_path))
+        self._wait(1.0)
         self._send_hotkey(("ctrl", "v"))
 
     def _set_cursor_pos_win32(self, point: Point) -> None:
@@ -150,14 +150,7 @@ class _WindowsClipboard:
             win32clipboard.CloseClipboard()
 
     def set_file_image(self, image_path: Path) -> None:
-        win32clipboard = importlib.import_module("win32clipboard")
-        dropfiles_payload = _build_dropfiles_payload(Path(image_path))
-        win32clipboard.OpenClipboard()
-        try:
-            win32clipboard.EmptyClipboard()
-            win32clipboard.SetClipboardData(win32clipboard.CF_HDROP, dropfiles_payload)
-        finally:
-            win32clipboard.CloseClipboard()
+        _set_windows_shell_file_clipboard(Path(image_path))
 
 
 def _default_clipboard():
@@ -166,11 +159,41 @@ def _default_clipboard():
     return _QtClipboard()
 
 
-def _build_dropfiles_payload(image_path: Path) -> bytes:
-    encoded_path = str(image_path).replace("/", "\\").encode("utf-16le") + b"\x00\x00"
-    files_block = encoded_path + b"\x00\x00"
-    p_files_offset = 20
-    return (
-        struct.pack("<IiiII", p_files_offset, 0, 0, 0, 1)
-        + files_block
+def _set_windows_shell_file_clipboard(image_path: Path) -> None:
+    pythoncom = importlib.import_module("pythoncom")
+    shell = importlib.import_module("win32com.shell.shell")
+    folder_pidl, relative_pidl = _resolve_shell_folder_item_pidls(Path(image_path))
+    data_object = shell.SHCreateDataObject(
+        folder_pidl,
+        [relative_pidl],
+        None,
+        pythoncom.IID_IDataObject,
     )
+    pythoncom.OleInitialize()
+    try:
+        pythoncom.OleSetClipboard(data_object)
+        pythoncom.OleFlushClipboard()
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def _resolve_shell_folder_item_pidls(image_path: Path) -> tuple[object, object]:
+    shell = importlib.import_module("win32com.shell.shell")
+    normalized_image_path = Path(image_path).resolve()
+    desktop = shell.SHGetDesktopFolder()
+    _eaten, folder_pidl, _attributes = desktop.ParseDisplayName(
+        0,
+        None,
+        str(normalized_image_path.parent),
+    )
+    _eaten, item_pidl, _attributes = desktop.ParseDisplayName(
+        0,
+        None,
+        str(normalized_image_path),
+    )
+    relative_pidl = list(item_pidl)
+    while len(relative_pidl) > 1:
+        relative_pidl.pop(0)
+    if not relative_pidl:
+        raise OSError(f"Could not resolve shell item PIDL for {normalized_image_path}")
+    return folder_pidl, relative_pidl

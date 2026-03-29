@@ -74,17 +74,17 @@ def test_slot_1_presets_dialog_uploads_image_to_selected_preset(
     assert dialog.preset_image_status_label.text() == str(image_path)
 
 
-def test_slot_1_presets_dialog_tracks_second_finish_image(qtbot, tmp_path: Path) -> None:
+def test_slot_1_presets_dialog_tracks_finish_image(qtbot, tmp_path: Path) -> None:
     from raidbot.desktop.bot_actions.presets_dialog import Slot1PresetsDialog
 
-    finish_path_2 = tmp_path / "finish-2.png"
-    finish_path_2.write_bytes(b"fake image")
+    finish_path = tmp_path / "finish.png"
+    finish_path.write_bytes(b"fake image")
     dialog = Slot1PresetsDialog(slot=_slot_1_config())
     qtbot.addWidget(dialog)
 
-    dialog.finish_template_path_2 = finish_path_2
-    dialog.finish_image_2_status_label.setText(str(finish_path_2))
+    dialog.finish_template_path = finish_path
+    dialog.finish_image_status_label.setText(str(finish_path))
 
     updated_slot = dialog.build_updated_slot()
 
-    assert updated_slot.finish_template_path_2 == finish_path_2
+    assert updated_slot.finish_template_path == finish_path

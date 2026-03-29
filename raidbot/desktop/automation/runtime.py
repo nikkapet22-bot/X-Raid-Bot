@@ -34,11 +34,19 @@ class AutomationRuntime:
     def list_target_windows(self) -> list[Any]:
         return self.window_manager.list_chrome_windows()
 
-    def run_sequence(self, sequence, selected_window_handle: int | None):
+    def run_sequence(
+        self,
+        sequence,
+        selected_window_handle: int | None,
+        *,
+        require_interactable_window: bool = True,
+    ):
         selected_window = self._selected_window(selected_window_handle)
         if selected_window is _MISSING_SELECTED_WINDOW:
             return self._run_result(status="failed", failure_reason="target_window_not_found")
-        runner = self._build_runner()
+        runner = self._build_runner(
+            require_interactable_window=require_interactable_window
+        )
         self._active_runner = runner
         return runner.run_sequence(sequence, selected_window=selected_window)
 
@@ -58,13 +66,14 @@ class AutomationRuntime:
         if self._active_runner is not None and hasattr(self._active_runner, "request_stop"):
             self._active_runner.request_stop()
 
-    def _build_runner(self):
+    def _build_runner(self, *, require_interactable_window: bool = True):
         return self.sequence_runner_factory(
             window_manager=self.window_manager,
             capture=self.capture_factory(),
             matcher=self.matcher_factory(),
             input_driver=self.input_driver_factory(),
             emit_event=self.emit_event,
+            require_interactable_window=require_interactable_window,
         )
 
     def _selected_window(self, selected_window_handle: int | None):

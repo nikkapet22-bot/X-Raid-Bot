@@ -5,14 +5,12 @@ from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFrame,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -55,17 +53,6 @@ def _require_text(text: str, *, field_name: str) -> str:
     if not value:
         raise ValueError(f"{field_name} is required.")
     return value
-
-
-def _parse_reply_pool(text: str) -> tuple[str, ...]:
-    replies = []
-    for line in text.splitlines():
-        value = line.strip()
-        if value:
-            replies.append(value)
-    return tuple(replies)
-
-
 class SettingsPage(QWidget):
     applyRequested = Signal(object)
     reauthorizeRequested = Signal()
@@ -200,49 +187,11 @@ class SettingsPage(QWidget):
         )
         layout.addWidget(self.routing_section)
 
-        automation_layout = QFormLayout()
-        automation_layout.setContentsMargins(0, 0, 0, 0)
-        self.browser_mode_combo = QComboBox()
-        for mode in ["launch-only", config.browser_mode]:
-            if self.browser_mode_combo.findText(mode) < 0:
-                self.browser_mode_combo.addItem(mode)
-        browser_mode_index = self.browser_mode_combo.findText(config.browser_mode)
-        if browser_mode_index >= 0:
-            self.browser_mode_combo.setCurrentIndex(browser_mode_index)
-        self.executor_name_label = QLabel(config.executor_name)
-        self.reply_pool_input = QPlainTextEdit("\n".join(config.preset_replies))
-        self.reply_pool_input.setPlaceholderText("One preset reply per line")
-        self.like_toggle = QCheckBox("Like")
-        self.like_toggle.setChecked(config.default_action_like)
-        self.repost_toggle = QCheckBox("Repost")
-        self.repost_toggle.setChecked(config.default_action_repost)
-        self.bookmark_toggle = QCheckBox("Bookmark")
-        self.bookmark_toggle.setChecked(config.default_action_bookmark)
-        self.reply_toggle = QCheckBox("Reply")
-        self.reply_toggle.setChecked(config.default_action_reply)
-        action_toggle_row = QHBoxLayout()
-        action_toggle_row.setContentsMargins(0, 0, 0, 0)
-        action_toggle_row.addWidget(self.like_toggle)
-        action_toggle_row.addWidget(self.repost_toggle)
-        action_toggle_row.addWidget(self.bookmark_toggle)
-        action_toggle_row.addWidget(self.reply_toggle)
-        action_toggle_row.addStretch(1)
-        automation_layout.addRow("Browser mode", self.browser_mode_combo)
-        automation_layout.addRow("Executor", self.executor_name_label)
-        automation_layout.addRow("Preset replies", self.reply_pool_input)
-        automation_layout.addRow("Default actions", action_toggle_row)
-        automation_layout.addRow(self.status_label)
-        self.automation_section, self.automation_surface = self._build_section(
-            title="Automation",
-            description="Manage browser handoff mode, shared reply pool, and default actions.",
-            content_layout=automation_layout,
-        )
-        layout.addWidget(self.automation_section)
-
         self.save_button = QPushButton("Save")
         self.save_button.setProperty("variant", "primary")
         self.save_button.clicked.connect(self._emit_apply_request)
         layout.addWidget(self.save_button)
+        layout.addWidget(self.status_label)
         layout.addStretch()
 
     def set_session_status(self, status: str) -> None:
@@ -329,13 +278,6 @@ class SettingsPage(QWidget):
             allowed_sender_ids=allowed_sender_ids,
             allowed_sender_entries=allowed_sender_entries,
             chrome_profile_directory=self.profile_combo.currentText(),
-            browser_mode=self.browser_mode_combo.currentText(),
-            executor_name=self.executor_name_label.text(),
-            preset_replies=_parse_reply_pool(self.reply_pool_input.toPlainText()),
-            default_action_like=self.like_toggle.isChecked(),
-            default_action_repost=self.repost_toggle.isChecked(),
-            default_action_bookmark=self.bookmark_toggle.isChecked(),
-            default_action_reply=self.reply_toggle.isChecked(),
         )
 
     def _parse_required_sender_entries(self) -> tuple[str, ...]:

@@ -51,11 +51,6 @@ def test_settings_save_emits_sender_entries_and_numeric_sender_ids(qtbot) -> Non
     page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.add_sender_button, Qt.MouseButton.LeftButton)
     page.sender_entry_inputs[1].setText("@delugeraidbot")
-    page.reply_pool_input.setPlainText("gm\nlfggg")
-    page.like_toggle.setChecked(False)
-    page.repost_toggle.setChecked(False)
-    page.bookmark_toggle.setChecked(True)
-    page.reply_toggle.setChecked(False)
     page.profile_combo.setCurrentText("Profile 9")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
@@ -66,11 +61,6 @@ def test_settings_save_emits_sender_entries_and_numeric_sender_ids(qtbot) -> Non
             allowed_sender_ids=[99],
             allowed_sender_entries=("99", "@delugeraidbot"),
             chrome_profile_directory="Profile 9",
-            preset_replies=("gm", "lfggg"),
-            default_action_like=False,
-            default_action_repost=False,
-            default_action_bookmark=True,
-            default_action_reply=False,
         )
     ]
 
@@ -357,7 +347,7 @@ def test_settings_page_uses_grouped_sections_and_primary_save(qtbot) -> None:
     assert page.reauthorize_button.property("variant") == "secondary"
 
 
-def test_settings_page_exposes_browser_pipeline_controls(qtbot) -> None:
+def test_settings_page_hides_legacy_automation_controls(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
@@ -367,13 +357,14 @@ def test_settings_page_exposes_browser_pipeline_controls(qtbot) -> None:
     )
     qtbot.addWidget(page)
 
-    assert page.browser_mode_combo.currentText() == "launch-only"
-    assert page.executor_name_label.text() == "noop"
-    assert page.reply_pool_input.toPlainText() == "gm"
-    assert page.like_toggle.isChecked() is True
-    assert page.repost_toggle.isChecked() is True
-    assert page.bookmark_toggle.isChecked() is False
-    assert page.reply_toggle.isChecked() is True
+    assert not hasattr(page, "automation_section")
+    assert not hasattr(page, "browser_mode_combo")
+    assert not hasattr(page, "executor_name_label")
+    assert not hasattr(page, "reply_pool_input")
+    assert not hasattr(page, "like_toggle")
+    assert not hasattr(page, "repost_toggle")
+    assert not hasattr(page, "bookmark_toggle")
+    assert not hasattr(page, "reply_toggle")
 
 
 def test_settings_page_preserves_apply_and_reauthorize_signals(qtbot) -> None:

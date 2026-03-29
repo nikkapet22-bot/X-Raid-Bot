@@ -480,12 +480,10 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
     reply_image_path.write_bytes(b"reply image")
     finish_template_path = tmp_path / "finish.png"
     finish_template_path.write_bytes(b"finish image")
-    finish_template_path_2 = tmp_path / "finish-2.png"
-    finish_template_path_2.write_bytes(b"finish image 2")
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
-        matcher=FakeMatcher([_match(), _match(40, 10), _match(60, 10), None]),
+        matcher=FakeMatcher([_match(), _match(40, 10), None]),
         input_driver=input_driver,
         template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
         now=clock.now,
@@ -499,7 +497,6 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
                     preset_text="gm",
                     preset_image_path=reply_image_path,
                     finish_template_path=finish_template_path,
-                    finish_template_path_2=finish_template_path_2,
                     max_click_attempts=1,
                 )
             ),
@@ -510,7 +507,7 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
     assert input_driver.pasted_text == ["gm"]
     assert input_driver.file_pasted_images == [reply_image_path]
     assert input_driver.pasted_images == []
-    assert input_driver.clicks == [(25, 15), (45, 15), (65, 15)]
+    assert input_driver.clicks == [(25, 15), (45, 15)]
 
 
 def test_runner_slot_1_waits_between_text_paste_and_image_paste(
@@ -541,12 +538,10 @@ def test_runner_slot_1_waits_between_text_paste_and_image_paste(
     reply_image_path.write_bytes(b"reply image")
     finish_template_path = tmp_path / "finish.png"
     finish_template_path.write_bytes(b"finish image")
-    finish_template_path_2 = tmp_path / "finish-2.png"
-    finish_template_path_2.write_bytes(b"finish image 2")
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
-        matcher=FakeMatcher([_match(), _match(40, 10), _match(60, 10), None]),
+        matcher=FakeMatcher([_match(), _match(40, 10), None]),
         input_driver=input_driver,
         template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
         now=clock.now,
@@ -560,7 +555,6 @@ def test_runner_slot_1_waits_between_text_paste_and_image_paste(
                 preset_text="gm",
                 preset_image_path=reply_image_path,
                 finish_template_path=finish_template_path,
-                finish_template_path_2=finish_template_path_2,
                 max_click_attempts=1,
             )
         ),
@@ -569,24 +563,22 @@ def test_runner_slot_1_waits_between_text_paste_and_image_paste(
 
     assert result.status == "completed"
     assert input_driver.events == [
-        ("text:gm", 100.5),
-        (f"file_image:{reply_image_path}", 101.0),
+        ("text:gm", 101.0),
+        (f"file_image:{reply_image_path}", 102.0),
     ]
 
 
-def test_runner_slot_1_clicks_finish_image_1_then_finish_image_2(
+def test_runner_slot_1_clicks_main_image_then_single_finish_image(
     tmp_path: Path,
 ) -> None:
     clock = FakeClock()
     input_driver = FakeInputDriver()
     finish_template_path = tmp_path / "finish.png"
     finish_template_path.write_bytes(b"finish image")
-    finish_template_path_2 = tmp_path / "finish-2.png"
-    finish_template_path_2.write_bytes(b"finish image 2")
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
-        matcher=FakeMatcher([_match(), _match(40, 10), _match(60, 10), None]),
+        matcher=FakeMatcher([_match(), _match(40, 10), None]),
         input_driver=input_driver,
         template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
         now=clock.now,
@@ -599,7 +591,6 @@ def test_runner_slot_1_clicks_finish_image_1_then_finish_image_2(
                 name="slot_1_r",
                 preset_text="gm",
                 finish_template_path=finish_template_path,
-                finish_template_path_2=finish_template_path_2,
                 max_click_attempts=1,
             )
         ),
@@ -607,21 +598,20 @@ def test_runner_slot_1_clicks_finish_image_1_then_finish_image_2(
     )
 
     assert result.status == "completed"
-    assert input_driver.clicks == [(25, 15), (45, 15), (65, 15)]
+    assert input_driver.clicks == [(25, 15), (45, 15)]
 
 
-def test_runner_slot_1_fails_when_second_finish_image_is_missing(
+def test_runner_slot_1_scrolls_down_when_finish_image_is_not_initially_visible(
     tmp_path: Path,
 ) -> None:
     clock = FakeClock()
     input_driver = FakeInputDriver()
     finish_template_path = tmp_path / "finish.png"
     finish_template_path.write_bytes(b"finish image")
-    missing_finish_path_2 = tmp_path / "missing-finish-2.png"
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
-        matcher=FakeMatcher([_match(), _match(40, 10)]),
+        matcher=FakeMatcher([_match(), None, _match(40, 10), None]),
         input_driver=input_driver,
         template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
         now=clock.now,
@@ -634,7 +624,44 @@ def test_runner_slot_1_fails_when_second_finish_image_is_missing(
                 name="slot_1_r",
                 preset_text="gm",
                 finish_template_path=finish_template_path,
-                finish_template_path_2=missing_finish_path_2,
+                max_search_seconds=0.0,
+                max_scroll_attempts=0,
+                scroll_amount=-120,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.scrolls == [-120]
+    assert input_driver.clicks == [(25, 15), (45, 15)]
+    assert clock.value >= 102.1
+
+
+def test_runner_slot_1_fails_when_finish_image_is_missing(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match()]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                finish_template_path=tmp_path / "missing-finish.png",
                 max_click_attempts=1,
             )
         ),
@@ -642,4 +669,4 @@ def test_runner_slot_1_fails_when_second_finish_image_is_missing(
     )
 
     assert result.status == "failed"
-    assert result.failure_reason == "finish_template_2_missing"
+    assert result.failure_reason == "finish_template_missing"

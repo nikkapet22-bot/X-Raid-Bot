@@ -76,7 +76,10 @@ class AutoRunProcessor:
             self._reject(item, "auto_run_paused")
             return False
         if not self._default_sequence_id():
-            self._pause_failed_item(item, "default_sequence_missing", None)
+            if self._state == "running":
+                self._reject(item, "default_sequence_missing")
+            else:
+                self._pause_failed_item(item, "default_sequence_missing", None)
             return False
 
         self._pending.append(item)
@@ -159,6 +162,8 @@ class AutoRunProcessor:
         opened_context = context
         if opened_context is None:
             snapshot = self._pre_open_check(item)
+            if snapshot is None:
+                return self._pause_failed_item(item, "target_window_not_found")
             try:
                 opened_context = self._open_raid(item, snapshot)
             except Exception as exc:

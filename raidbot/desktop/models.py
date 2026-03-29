@@ -40,7 +40,6 @@ class BotActionSlotConfig:
     updated_at: str | None = None
     presets: tuple[BotActionPreset, ...] = ()
     finish_template_path: Path | None = None
-    finish_template_path_2: Path | None = None
 
 
 _DEFAULT_BOT_ACTION_SLOT_LAYOUT: tuple[tuple[str, str], ...] = (
@@ -204,15 +203,6 @@ class DesktopAppConfig:
                             is_slot_1
                             and provided_slot is not None
                             and getattr(provided_slot, "finish_template_path", None) is not None
-                        )
-                        else None
-                    ),
-                    finish_template_path_2=(
-                        Path(provided_slot.finish_template_path_2)
-                        if (
-                            is_slot_1
-                            and provided_slot is not None
-                            and getattr(provided_slot, "finish_template_path_2", None) is not None
                         )
                         else None
                     ),

@@ -137,7 +137,7 @@ def test_storage_round_trips_slot_1_presets_and_finish_template(tmp_path) -> Non
     )
 
 
-def test_storage_round_trips_slot_1_second_finish_template(tmp_path) -> None:
+def test_storage_round_trips_slot_1_finish_template(tmp_path) -> None:
     from raidbot.desktop.storage import DesktopStorage
 
     storage = DesktopStorage(tmp_path)
@@ -157,7 +157,6 @@ def test_storage_round_trips_slot_1_second_finish_template(tmp_path) -> None:
                 enabled=True,
                 template_path=Path("bot_actions/slot_1_r.png"),
                 finish_template_path=Path("bot_actions/slot_1_r_finish.png"),
-                finish_template_path_2=Path("bot_actions/slot_1_r_finish_2.png"),
                 presets=(
                     BotActionPreset(
                         id="preset-1",
@@ -173,8 +172,8 @@ def test_storage_round_trips_slot_1_second_finish_template(tmp_path) -> None:
 
     loaded = storage.load_config()
 
-    assert loaded.bot_action_slots[0].finish_template_path_2 == Path(
-        "bot_actions/slot_1_r_finish_2.png"
+    assert loaded.bot_action_slots[0].finish_template_path == Path(
+        "bot_actions/slot_1_r_finish.png"
     )
 
 

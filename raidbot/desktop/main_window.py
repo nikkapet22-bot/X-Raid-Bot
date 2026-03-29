@@ -482,7 +482,6 @@ class MainWindow(QMainWindow):
         slot = self.controller.config.bot_action_slots[0]
         dialog = Slot1PresetsDialog(slot=slot, parent=self)
         dialog.capture_finish_button.clicked.connect(self._capture_slot_1_finish_template)
-        dialog.capture_finish_button_2.clicked.connect(self._capture_slot_1_finish_template_2)
         try:
             dialog.button_box.accepted.disconnect(dialog.accept)
         except (RuntimeError, TypeError):
@@ -513,39 +512,9 @@ class MainWindow(QMainWindow):
             self.controller.set_bot_action_slot_1_presets(
                 presets=updated_slot.presets,
                 finish_template_path=updated_slot.finish_template_path,
-                finish_template_path_2=updated_slot.finish_template_path_2,
             )
             if finish_template_path is not None:
                 self._bot_actions_status_text = "Slot 1 (R): finish image saved"
-                self._bot_actions_last_error_text = None
-                self._bot_actions_current_slot_text = None
-                self._render_bot_actions_status()
-        except Exception as exc:
-            self._show_bot_actions_error(str(exc))
-
-    def _capture_slot_1_finish_template_2(self) -> None:
-        dialog = self._slot_1_presets_dialog
-        if dialog is None:
-            return
-        try:
-            finish_template_path_2 = self.slot_capture_service.capture_to_path(
-                Path("bot_actions/slot_1_r_finish_2.png"),
-                existing_path=dialog.finish_template_path_2,
-            )
-            dialog.finish_template_path_2 = finish_template_path_2
-            dialog.finish_image_2_status_label.setText(
-                str(finish_template_path_2)
-                if finish_template_path_2 is not None
-                else "No finish image 2"
-            )
-            updated_slot = dialog.build_updated_slot()
-            self.controller.set_bot_action_slot_1_presets(
-                presets=updated_slot.presets,
-                finish_template_path=updated_slot.finish_template_path,
-                finish_template_path_2=updated_slot.finish_template_path_2,
-            )
-            if finish_template_path_2 is not None:
-                self._bot_actions_status_text = "Slot 1 (R): finish image 2 saved"
                 self._bot_actions_last_error_text = None
                 self._bot_actions_current_slot_text = None
                 self._render_bot_actions_status()
@@ -561,7 +530,6 @@ class MainWindow(QMainWindow):
             self.controller.set_bot_action_slot_1_presets(
                 presets=updated_slot.presets,
                 finish_template_path=updated_slot.finish_template_path,
-                finish_template_path_2=updated_slot.finish_template_path_2,
             )
             self._bot_actions_status_text = "Slot 1 (R): presets saved"
             self._bot_actions_last_error_text = None

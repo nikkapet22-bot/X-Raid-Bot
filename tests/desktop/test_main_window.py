@@ -274,17 +274,15 @@ class FakeController(QObject):
         *,
         presets: tuple[BotActionPreset, ...],
         finish_template_path: Path | None,
-        finish_template_path_2: Path | None = None,
     ) -> None:
         self.bot_action_slot_1_presets_updates.append(
-            (presets, finish_template_path, finish_template_path_2)
+            (presets, finish_template_path)
         )
         updated_slots = list(self.config.bot_action_slots)
         updated_slots[0] = replace(
             updated_slots[0],
             presets=presets,
             finish_template_path=finish_template_path,
-            finish_template_path_2=finish_template_path_2,
         )
         self.apply_config(replace(self.config, bot_action_slots=tuple(updated_slots)))
 
@@ -782,16 +780,16 @@ def test_main_window_slot_1_presets_dialog_capture_updates_finish_preview(qtbot)
     assert capture_service.capture_to_path_calls == [
         (Path("bot_actions/slot_1_r_finish.png"), None)
     ]
-    assert controller.bot_action_slot_1_presets_updates[-1] == ((), finish_path, None)
+    assert controller.bot_action_slot_1_presets_updates[-1] == ((), finish_path)
     assert dialog.finish_template_path == finish_path
     assert dialog.finish_image_status_label.text() == str(finish_path)
 
 
-def test_main_window_slot_1_presets_dialog_capture_updates_second_finish_preview(
+def test_main_window_slot_1_presets_dialog_capture_updates_finish_preview(
     qtbot,
 ) -> None:
-    finish_path_2 = Path("bot_actions/slot_1_r_finish_2.png")
-    capture_service = FakeSlotCaptureService(finish_path_2)
+    finish_path = Path("bot_actions/slot_1_r_finish.png")
+    capture_service = FakeSlotCaptureService(finish_path)
     controller = FakeController()
     window = build_window(
         controller,
@@ -805,14 +803,14 @@ def test_main_window_slot_1_presets_dialog_capture_updates_second_finish_preview
     dialog = window._slot_1_presets_dialog
     assert dialog is not None
 
-    qtbot.mouseClick(dialog.capture_finish_button_2, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(dialog.capture_finish_button, Qt.MouseButton.LeftButton)
 
     assert capture_service.capture_to_path_calls == [
-        (Path("bot_actions/slot_1_r_finish_2.png"), None)
+        (Path("bot_actions/slot_1_r_finish.png"), None)
     ]
-    assert controller.bot_action_slot_1_presets_updates[-1] == ((), None, finish_path_2)
-    assert dialog.finish_template_path_2 == finish_path_2
-    assert dialog.finish_image_2_status_label.text() == str(finish_path_2)
+    assert controller.bot_action_slot_1_presets_updates[-1] == ((), finish_path)
+    assert dialog.finish_template_path == finish_path
+    assert dialog.finish_image_status_label.text() == str(finish_path)
 
 
 def test_main_window_slot_1_presets_dialog_save_persists_multiple_presets_and_image(

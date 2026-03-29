@@ -53,11 +53,6 @@ class Slot1PresetsDialog(QDialog):
             if slot.finish_template_path is not None
             else None
         )
-        self.finish_template_path_2 = (
-            Path(slot.finish_template_path_2)
-            if slot.finish_template_path_2 is not None
-            else None
-        )
         self._current_row = -1
 
         self.preset_list = QListWidget()
@@ -85,14 +80,6 @@ class Slot1PresetsDialog(QDialog):
         self.finish_image_status_label.setWordWrap(True)
         self.finish_image_status_label.setProperty("muted", "true")
         self.capture_finish_button = QPushButton("Capture finish image")
-        self.finish_image_2_status_label = QLabel(
-            str(self.finish_template_path_2)
-            if self.finish_template_path_2 is not None
-            else "No finish image 2"
-        )
-        self.finish_image_2_status_label.setWordWrap(True)
-        self.finish_image_2_status_label.setProperty("muted", "true")
-        self.capture_finish_button_2 = QPushButton("Capture finish image 2")
 
         self.button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -122,7 +109,6 @@ class Slot1PresetsDialog(QDialog):
             self._slot,
             presets=tuple(self._presets),
             finish_template_path=self.finish_template_path,
-            finish_template_path_2=self.finish_template_path_2,
         )
 
     def _build_layout(self) -> None:
@@ -149,8 +135,6 @@ class Slot1PresetsDialog(QDialog):
         editor_form.addRow("", image_buttons)
         editor_form.addRow("Finish image", self.finish_image_status_label)
         editor_form.addRow("", self.capture_finish_button)
-        editor_form.addRow("Finish image 2", self.finish_image_2_status_label)
-        editor_form.addRow("", self.capture_finish_button_2)
 
         top_row.addLayout(list_column, 1)
         top_row.addWidget(editor_widget, 2)

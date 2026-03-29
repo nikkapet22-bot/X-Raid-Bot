@@ -253,17 +253,11 @@ class DesktopStorage:
                 if slot.finish_template_path is not None
                 else None
             ),
-            "finish_template_path_2": (
-                str(slot.finish_template_path_2)
-                if slot.finish_template_path_2 is not None
-                else None
-            ),
         }
 
     def _bot_action_slot_from_data(self, data: dict[str, Any]) -> BotActionSlotConfig:
         template_path = data.get("template_path")
         finish_template_path = data.get("finish_template_path")
-        finish_template_path_2 = data.get("finish_template_path_2")
         presets = tuple(
             BotActionPreset(
                 id=str(preset.get("id") or ""),
@@ -286,9 +280,6 @@ class DesktopStorage:
             presets=presets,
             finish_template_path=(
                 Path(finish_template_path) if finish_template_path is not None else None
-            ),
-            finish_template_path_2=(
-                Path(finish_template_path_2) if finish_template_path_2 is not None else None
             ),
         )
 
