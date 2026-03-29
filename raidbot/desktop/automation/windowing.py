@@ -39,8 +39,36 @@ def find_existing_chrome_window(
         return None
     finder = getattr(window_manager, "find_owned_chrome_window", None)
     if callable(finder):
-        return finder(profile_directory)
-    return None
+        chosen = finder(profile_directory)
+        if chosen is not None:
+            return chosen
+    chrome_windows = window_manager.list_chrome_windows()
+    return max(chrome_windows, key=lambda window: window.last_focused_at, default=None)
+
+
+def find_opened_raid_window(
+    before_windows: list[WindowInfo],
+    after_windows: list[WindowInfo],
+) -> WindowInfo | None:
+    before_by_handle = {window.handle: window for window in before_windows}
+    new_handles = [
+        window for window in after_windows if window.handle not in before_by_handle
+    ]
+    if new_handles:
+        return max(new_handles, key=lambda item: item.last_focused_at, default=None)
+
+    changed_candidates: list[WindowInfo] = []
+    for window in after_windows:
+        previous = before_by_handle.get(window.handle)
+        if previous is None:
+            continue
+        if (
+            window.title != previous.title
+            or window.last_focused_at > previous.last_focused_at
+            or window.bounds != previous.bounds
+        ):
+            changed_candidates.append(window)
+    return max(changed_candidates, key=lambda item: item.last_focused_at, default=None)
 
 
 class WindowManager:
@@ -95,9 +123,7 @@ class WindowManager:
     def find_owned_chrome_window(self, profile_directory: str) -> WindowInfo | None:
         _ = profile_directory
         chrome_windows = self.list_chrome_windows()
-        if len(chrome_windows) == 1:
-            return chrome_windows[0]
-        return None
+        return max(chrome_windows, key=lambda window: window.last_focused_at, default=None)
 
     def _list_windows_win32(self) -> list[WindowInfo]:
         win32gui = importlib.import_module("win32gui")

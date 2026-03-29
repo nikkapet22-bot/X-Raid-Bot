@@ -6,6 +6,7 @@ from raidbot.desktop.automation.windowing import (
     WindowManager,
     choose_window_for_rule,
     find_existing_chrome_window,
+    find_opened_raid_window,
 )
 
 
@@ -115,7 +116,7 @@ def test_find_existing_chrome_window_accepts_single_candidate_when_profile_canno
     assert chosen.handle == 7
 
 
-def test_find_existing_chrome_window_fails_closed_for_ambiguous_candidates() -> None:
+def test_find_existing_chrome_window_prefers_most_recent_candidate_when_multiple_exist() -> None:
     manager = WindowManager(
         list_windows=lambda: [
             WindowInfo(
@@ -135,7 +136,59 @@ def test_find_existing_chrome_window_fails_closed_for_ambiguous_candidates() -> 
         focus_window=lambda _handle: True,
     )
 
-    assert find_existing_chrome_window(manager, "Profile 3") is None
+    chosen = find_existing_chrome_window(manager, "Profile 3")
+
+    assert chosen is not None
+    assert chosen.handle == 7
+
+
+def test_find_opened_raid_window_prefers_new_handle() -> None:
+    before = [
+        WindowInfo(
+            handle=7,
+            title="RaidBot - Chrome",
+            bounds=(0, 0, 100, 100),
+            last_focused_at=1.0,
+        )
+    ]
+    after = [
+        *before,
+        WindowInfo(
+            handle=9,
+            title="Raid Window - Chrome",
+            bounds=(100, 100, 300, 300),
+            last_focused_at=2.0,
+        ),
+    ]
+
+    chosen = find_opened_raid_window(before, after)
+
+    assert chosen is not None
+    assert chosen.handle == 9
+
+
+def test_find_opened_raid_window_falls_back_to_most_recent_changed_candidate() -> None:
+    before = [
+        WindowInfo(
+            handle=7,
+            title="Old title - Chrome",
+            bounds=(0, 0, 100, 100),
+            last_focused_at=1.0,
+        )
+    ]
+    after = [
+        WindowInfo(
+            handle=7,
+            title="New raid title - Chrome",
+            bounds=(0, 0, 100, 100),
+            last_focused_at=3.0,
+        )
+    ]
+
+    chosen = find_opened_raid_window(before, after)
+
+    assert chosen is not None
+    assert chosen.handle == 7
 
 
 def test_input_driver_moves_waits_and_clicks() -> None:
