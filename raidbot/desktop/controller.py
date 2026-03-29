@@ -231,6 +231,7 @@ class DesktopController(QObject):
         *,
         presets: tuple[BotActionPreset, ...],
         finish_template_path: Path | None,
+        finish_template_path_2: Path | None,
     ) -> None:
         if self.config is None:
             raise ValueError("No desktop configuration is available")
@@ -250,9 +251,13 @@ class DesktopController(QObject):
         normalized_finish_template_path = (
             Path(finish_template_path) if finish_template_path is not None else None
         )
+        normalized_finish_template_path_2 = (
+            Path(finish_template_path_2) if finish_template_path_2 is not None else None
+        )
         if (
             current_slot.presets == normalized_presets
             and current_slot.finish_template_path == normalized_finish_template_path
+            and current_slot.finish_template_path_2 == normalized_finish_template_path_2
         ):
             return
         updated_slots = list(self.config.bot_action_slots)
@@ -260,6 +265,7 @@ class DesktopController(QObject):
             current_slot,
             presets=normalized_presets,
             finish_template_path=normalized_finish_template_path,
+            finish_template_path_2=normalized_finish_template_path_2,
         )
         self._persist_config(
             replace(self.config, bot_action_slots=tuple(updated_slots)),

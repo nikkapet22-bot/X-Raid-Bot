@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Callable
 from uuid import uuid4
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -27,11 +29,13 @@ class Slot1PresetsDialog(QDialog):
         self,
         *,
         slot: BotActionSlotConfig,
+        choose_image_file: Callable[[], Path | None] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Slot 1 Presets")
         self._slot = slot
+        self._choose_image_file = choose_image_file or self._default_choose_image_file
         self._presets: list[BotActionPreset] = [
             BotActionPreset(
                 id=str(preset.id),
@@ -47,6 +51,11 @@ class Slot1PresetsDialog(QDialog):
         self.finish_template_path = (
             Path(slot.finish_template_path)
             if slot.finish_template_path is not None
+            else None
+        )
+        self.finish_template_path_2 = (
+            Path(slot.finish_template_path_2)
+            if slot.finish_template_path_2 is not None
             else None
         )
         self._current_row = -1
@@ -66,7 +75,9 @@ class Slot1PresetsDialog(QDialog):
         self.preset_image_status_label.setWordWrap(True)
         self.preset_image_status_label.setProperty("muted", "true")
         self.upload_image_button = QPushButton("Upload image")
+        self.upload_image_button.clicked.connect(self.upload_image_for_selected_preset)
         self.clear_image_button = QPushButton("Clear image")
+        self.clear_image_button.clicked.connect(self.clear_image_for_selected_preset)
 
         self.finish_image_status_label = QLabel(
             str(self.finish_template_path) if self.finish_template_path is not None else "No finish image"
@@ -74,6 +85,14 @@ class Slot1PresetsDialog(QDialog):
         self.finish_image_status_label.setWordWrap(True)
         self.finish_image_status_label.setProperty("muted", "true")
         self.capture_finish_button = QPushButton("Capture finish image")
+        self.finish_image_2_status_label = QLabel(
+            str(self.finish_template_path_2)
+            if self.finish_template_path_2 is not None
+            else "No finish image 2"
+        )
+        self.finish_image_2_status_label.setWordWrap(True)
+        self.finish_image_2_status_label.setProperty("muted", "true")
+        self.capture_finish_button_2 = QPushButton("Capture finish image 2")
 
         self.button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -103,6 +122,7 @@ class Slot1PresetsDialog(QDialog):
             self._slot,
             presets=tuple(self._presets),
             finish_template_path=self.finish_template_path,
+            finish_template_path_2=self.finish_template_path_2,
         )
 
     def _build_layout(self) -> None:
@@ -129,6 +149,8 @@ class Slot1PresetsDialog(QDialog):
         editor_form.addRow("", image_buttons)
         editor_form.addRow("Finish image", self.finish_image_status_label)
         editor_form.addRow("", self.capture_finish_button)
+        editor_form.addRow("Finish image 2", self.finish_image_2_status_label)
+        editor_form.addRow("", self.capture_finish_button_2)
 
         top_row.addLayout(list_column, 1)
         top_row.addWidget(editor_widget, 2)
@@ -175,3 +197,34 @@ class Slot1PresetsDialog(QDialog):
         if item is not None:
             label = updated.text.strip().splitlines()[0] if updated.text.strip() else f"Preset {row + 1}"
             item.setText(label)
+
+    def upload_image_for_selected_preset(self) -> None:
+        row = self._current_row
+        if row < 0 or row >= len(self._presets):
+            return
+        image_path = self._choose_image_file()
+        if image_path is None:
+            return
+        current = self._presets[row]
+        updated = replace(current, image_path=Path(image_path))
+        self._presets[row] = updated
+        self.preset_image_status_label.setText(str(updated.image_path))
+
+    def clear_image_for_selected_preset(self) -> None:
+        row = self._current_row
+        if row < 0 or row >= len(self._presets):
+            return
+        current = self._presets[row]
+        self._presets[row] = replace(current, image_path=None)
+        self.preset_image_status_label.setText("No preset image")
+
+    def _default_choose_image_file(self) -> Path | None:
+        selected_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Choose preset image",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)",
+        )
+        if not selected_path:
+            return None
+        return Path(selected_path)
