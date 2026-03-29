@@ -550,6 +550,33 @@ def test_controller_capture_updates_bot_action_slot_template_and_saves(qtbot) ->
     ).bot_action_slots[1:]
 
 
+def test_controller_updates_page_ready_template_and_saves(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    config = build_config(
+        allowed_sender_ids=[42],
+        allowed_sender_entries=("raidar",),
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=config,
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: FailIfResolveCalled(),
+    )
+    updated_configs = []
+    controller.configChanged.connect(updated_configs.append)
+    captured_path = Path("bot_actions/page_ready.png")
+
+    controller.set_page_ready_template_path(captured_path)
+
+    assert storage.saved_configs[-1].page_ready_template_path == captured_path
+    assert controller.config.page_ready_template_path == captured_path
+    assert updated_configs[-1].page_ready_template_path == captured_path
+    assert storage.saved_configs[-1].bot_action_slots == config.bot_action_slots
+
+
 def test_controller_persists_slot_1_presets_and_both_finish_templates(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 

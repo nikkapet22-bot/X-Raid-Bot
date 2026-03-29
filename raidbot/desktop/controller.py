@@ -301,6 +301,22 @@ class DesktopController(QObject):
             resolve_sender_entries=False,
         )
 
+    def set_page_ready_template_path(self, template_path: Path | None) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        normalized_template_path = (
+            Path(template_path) if template_path is not None else None
+        )
+        if self.config.page_ready_template_path == normalized_template_path:
+            return
+        self._persist_config(
+            replace(
+                self.config,
+                page_ready_template_path=normalized_template_path,
+            ),
+            resolve_sender_entries=False,
+        )
+
     def set_bot_action_slot_1_presets(
         self,
         *,

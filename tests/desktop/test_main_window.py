@@ -4,10 +4,11 @@ import os
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, QRect, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import QApplication, QScrollArea, QSystemTrayIcon
 
@@ -134,6 +135,7 @@ class FakeController(QObject):
         self.deleted_sequence_ids = []
         self.automation_run_calls = []
         self.automation_dry_run_calls = []
+        self.page_ready_template_updates = []
         self.bot_action_slot_template_updates = []
         self.bot_action_slot_1_presets_updates = []
         self.bot_action_slot_test_calls = []
@@ -250,6 +252,12 @@ class FakeController(QObject):
                 }
             )
         )
+
+    def set_page_ready_template_path(self, template_path: Path | None) -> None:
+        self.page_ready_template_updates.append(template_path)
+        if self.config.page_ready_template_path == template_path:
+            return
+        self.apply_config(replace(self.config, page_ready_template_path=template_path))
 
     def set_bot_action_slot_template_path(
         self, slot_index: int, template_path: Path | None
@@ -819,6 +827,28 @@ def test_main_window_capture_updates_bot_action_slot_via_controller(qtbot) -> No
         == str(captured_path)
     )
     assert window.bot_actions_page.status_label.text() == "Status: Slot 1 (R): image saved"
+
+
+def test_main_window_capture_updates_page_ready_template_via_controller(qtbot) -> None:
+    captured_path = Path("bot_actions/page_ready.png")
+    capture_service = FakeSlotCaptureService(captured_path)
+    controller = FakeController()
+    window = build_window(
+        controller,
+        FakeStorage(),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.bot_actions_page.page_ready_capture_button, Qt.MouseButton.LeftButton)
+
+    assert capture_service.capture_to_path_calls == [
+        (Path("bot_actions/page_ready.png"), None)
+    ]
+    assert controller.page_ready_template_updates == [captured_path]
+    assert controller.config.page_ready_template_path == captured_path
+    assert window.bot_actions_page.page_ready_status_label.text() == str(captured_path)
+    assert window.bot_actions_page.status_label.text() == "Status: Page Ready: image saved"
 
 
 def test_main_window_slot_1_presets_dialog_capture_updates_finish_preview(qtbot) -> None:
@@ -1598,6 +1628,43 @@ def test_tray_click_restores_main_window(qtbot) -> None:
     tray._handle_activated(QSystemTrayIcon.ActivationReason.Trigger)
 
     assert window.isVisible() is True
+
+
+def test_tray_restore_prefers_window_restore_from_tray(qtbot) -> None:
+    from raidbot.desktop.tray import TrayController
+
+    tray = TrayController(
+        window=SimpleNamespace(
+            restore_from_tray=lambda: restore_calls.append("restore_from_tray"),
+            showNormal=lambda: restore_calls.append("showNormal"),
+            raise_=lambda: restore_calls.append("raise"),
+            activateWindow=lambda: restore_calls.append("activate"),
+        ),
+        controller=FakeController(),
+        icon=QIcon(),
+        tray_icon_factory=FakeTrayIcon,
+        menu_factory=FakeMenu,
+        initial_bot_state="stopped",
+    )
+    restore_calls: list[str] = []
+
+    tray.restore_window()
+
+    assert restore_calls == ["restore_from_tray"]
+
+
+def test_main_window_restore_from_tray_uses_last_known_geometry(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    expected_geometry = QRect(120, 140, 960, 720)
+    window.setGeometry(expected_geometry)
+    window._remember_restore_geometry()
+    window.setGeometry(0, 0, 320, 240)
+
+    window.restore_from_tray()
+
+    assert window.geometry() == expected_geometry
 
 
 def test_main_window_feeds_settings_page_real_profiles_and_session_status(qtbot) -> None:

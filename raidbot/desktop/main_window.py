@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QFormLayout,
@@ -119,6 +119,8 @@ class MainWindow(QMainWindow):
         self._slot_1_presets_dialog: Slot1PresetsDialog | None = None
         self._latest_state = DesktopAppState()
         self.raid_profile_cards: dict[str, RaidProfileCard] = {}
+        self._restore_geometry: QRect | None = None
+        self._restore_was_maximized = False
 
         self.setWindowTitle("Raid Bot")
 
@@ -172,6 +174,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._wrap_tab_content(self.settings_page), "Settings")
         self.bot_actions_page = BotActionsPage(
             config=self.controller.config,
+        )
+        self.bot_actions_page.pageReadyCaptureRequested.connect(
+            self._capture_page_ready_template
         )
         self.bot_actions_page.slotCaptureRequested.connect(self._capture_bot_action_slot)
         self.bot_actions_page.slotTestRequested.connect(
@@ -470,9 +475,52 @@ class MainWindow(QMainWindow):
     def handle_minimize_requested(self) -> None:
         self.hide()
 
+    def restore_from_tray(self) -> None:
+        restore_was_maximized = self._restore_was_maximized
+        restore_geometry = (
+            QRect(self._restore_geometry)
+            if self._restore_geometry is not None and not self._restore_geometry.isNull()
+            else None
+        )
+        if restore_was_maximized:
+            self.show()
+            self.showMaximized()
+        else:
+            self.show()
+            self.showNormal()
+            if restore_geometry is not None:
+                self.setGeometry(restore_geometry)
+        self.raise_()
+        self.activateWindow()
+
+    def _remember_restore_geometry(self) -> None:
+        normal_geometry = self.normalGeometry()
+        if not normal_geometry.isNull():
+            self._restore_geometry = QRect(normal_geometry)
+        else:
+            geometry = self.geometry()
+            if not geometry.isNull():
+                self._restore_geometry = QRect(geometry)
+        self._restore_was_maximized = self.isMaximized()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._remember_restore_geometry()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if not self.isMinimized():
+            self._remember_restore_geometry()
+
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        if not self.isMinimized():
+            self._remember_restore_geometry()
+
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
         if self.isMinimized():
+            self._remember_restore_geometry()
             self.handle_minimize_requested()
             self.setWindowState(Qt.WindowState.WindowNoState)
 
@@ -571,6 +619,21 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_bot_actions_error(str(exc))
 
+    def _capture_page_ready_template(self) -> None:
+        try:
+            template_path = self.slot_capture_service.capture_to_path(
+                Path("bot_actions/page_ready.png"),
+                existing_path=self.controller.config.page_ready_template_path,
+            )
+            self.controller.set_page_ready_template_path(template_path)
+            if template_path is not None:
+                self._bot_actions_status_text = "Page Ready: image saved"
+                self._bot_actions_last_error_text = None
+                self._bot_actions_current_slot_text = None
+                self._render_bot_actions_status()
+        except Exception as exc:
+            self._show_bot_actions_error(str(exc))
+
     def _open_bot_action_slot_presets(self, slot_index: int) -> None:
         if slot_index != 0:
             return
@@ -639,6 +702,7 @@ class MainWindow(QMainWindow):
 
     def _sync_config(self, config) -> None:
         self.settings_page.set_config(config)
+        self.bot_actions_page.set_page_ready_template_path(config.page_ready_template_path)
         self.bot_actions_page.set_slots(config.bot_action_slots)
         self.bot_actions_page.set_settle_delay(config.auto_run_settle_ms)
         self._sync_raid_profile_cards(config, self._latest_state)

@@ -44,6 +44,17 @@ def test_bot_actions_page_renders_four_fixed_slots(qtbot) -> None:
     assert page.settle_delay_input.value() == 1500
 
 
+def test_bot_actions_page_renders_shared_page_ready_capture(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+
+    assert page.page_ready_capture_button.text() == "Capture"
+    assert page.page_ready_preview_label.text() == "No image"
+    assert page.page_ready_status_label.text() == "No template captured."
+
+
 def test_bot_actions_page_show_error_updates_status_label(qtbot) -> None:
     from raidbot.desktop.bot_actions.page import BotActionsPage
 
@@ -106,6 +117,21 @@ def test_bot_actions_page_test_button_emits_slot_test_signal_with_index(
 
     assert captured == [1]
     assert page.status_label.text() == "Slot 2 (L): testing"
+
+
+def test_bot_actions_page_page_ready_capture_emits_signal(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+    page.show()
+    captured = []
+    page.pageReadyCaptureRequested.connect(lambda: captured.append("capture"))
+
+    qtbot.mouseClick(page.page_ready_capture_button, Qt.MouseButton.LeftButton)
+
+    assert captured == ["capture"]
+    assert page.status_label.text() == "Page Ready: capturing"
 
 
 def test_bot_actions_page_shows_presets_button_only_for_slot_1(qtbot) -> None:
