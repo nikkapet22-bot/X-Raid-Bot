@@ -476,10 +476,12 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
     reply_image_path.write_bytes(b"reply image")
     finish_template_path = tmp_path / "finish.png"
     finish_template_path.write_bytes(b"finish image")
+    finish_template_path_2 = tmp_path / "finish-2.png"
+    finish_template_path_2.write_bytes(b"finish image 2")
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
-        matcher=FakeMatcher([_match(), _match(40, 10), None]),
+        matcher=FakeMatcher([_match(), _match(40, 10), _match(60, 10), None]),
         input_driver=input_driver,
         template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
         now=clock.now,
@@ -493,6 +495,7 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
                     preset_text="gm",
                     preset_image_path=reply_image_path,
                     finish_template_path=finish_template_path,
+                    finish_template_path_2=finish_template_path_2,
                     max_click_attempts=1,
                 )
             ),
@@ -502,7 +505,7 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
     assert result.status == "completed"
     assert input_driver.pasted_text == ["gm"]
     assert input_driver.pasted_images == [reply_image_path]
-    assert input_driver.clicks == [(25, 15), (45, 15)]
+    assert input_driver.clicks == [(25, 15), (45, 15), (65, 15)]
 
 
 def test_runner_slot_1_waits_between_text_paste_and_image_paste(
@@ -529,10 +532,12 @@ def test_runner_slot_1_waits_between_text_paste_and_image_paste(
     reply_image_path.write_bytes(b"reply image")
     finish_template_path = tmp_path / "finish.png"
     finish_template_path.write_bytes(b"finish image")
+    finish_template_path_2 = tmp_path / "finish-2.png"
+    finish_template_path_2.write_bytes(b"finish image 2")
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
-        matcher=FakeMatcher([_match(), _match(40, 10), None]),
+        matcher=FakeMatcher([_match(), _match(40, 10), _match(60, 10), None]),
         input_driver=input_driver,
         template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
         now=clock.now,
@@ -546,6 +551,7 @@ def test_runner_slot_1_waits_between_text_paste_and_image_paste(
                 preset_text="gm",
                 preset_image_path=reply_image_path,
                 finish_template_path=finish_template_path,
+                finish_template_path_2=finish_template_path_2,
                 max_click_attempts=1,
             )
         ),
