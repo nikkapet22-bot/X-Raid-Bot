@@ -10,7 +10,7 @@ from typing import Any
 from PySide6.QtCore import QObject, Signal, Slot
 
 from raidbot.desktop.automation import runtime as automation_runtime
-from raidbot.desktop.models import BotActionPreset
+from raidbot.desktop.models import BotActionPreset, RaidProfileConfig
 from raidbot.desktop.storage import DesktopStorage
 from raidbot.desktop.worker import DesktopBotWorker
 
@@ -185,6 +185,81 @@ class DesktopController(QObject):
             replace(self.config, auto_run_settle_ms=int(settle_ms)),
             resolve_sender_entries=False,
         )
+
+    def add_raid_profile(self, profile_directory: str, label: str) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        normalized_directory = str(profile_directory).strip()
+        if not normalized_directory:
+            raise ValueError("Profile directory is required")
+        if any(
+            profile.profile_directory == normalized_directory
+            for profile in self.config.raid_profiles
+        ):
+            return
+        normalized_label = str(label).strip() or normalized_directory
+        updated_profiles = (
+            *self.config.raid_profiles,
+            RaidProfileConfig(
+                profile_directory=normalized_directory,
+                label=normalized_label,
+                enabled=True,
+            ),
+        )
+        self._persist_raid_profiles(updated_profiles)
+
+    def remove_raid_profile(self, profile_directory: str) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        normalized_directory = str(profile_directory).strip()
+        updated_profiles = tuple(
+            profile
+            for profile in self.config.raid_profiles
+            if profile.profile_directory != normalized_directory
+        )
+        if len(updated_profiles) == len(self.config.raid_profiles) or not updated_profiles:
+            return
+        self._persist_raid_profiles(updated_profiles)
+
+    def move_raid_profile(self, profile_directory: str, direction: str) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        normalized_direction = str(direction).strip().lower()
+        if normalized_direction not in {"up", "down"}:
+            raise ValueError("direction must be 'up' or 'down'")
+        profiles = list(self.config.raid_profiles)
+        current_index = next(
+            (
+                index
+                for index, profile in enumerate(profiles)
+                if profile.profile_directory == profile_directory
+            ),
+            None,
+        )
+        if current_index is None:
+            return
+        target_index = (
+            current_index - 1
+            if normalized_direction == "up"
+            else current_index + 1
+        )
+        if target_index < 0 or target_index >= len(profiles):
+            return
+        profiles[current_index], profiles[target_index] = (
+            profiles[target_index],
+            profiles[current_index],
+        )
+        self._persist_raid_profiles(tuple(profiles))
+
+    def restart_raid_profile(self, profile_directory: str) -> None:
+        if (
+            self._worker is None
+            or self._runner is None
+            or not self._runner.is_running()
+            or not hasattr(self._worker, "restart_raid_profile")
+        ):
+            return
+        self._submit_to_runner(lambda: self._worker.restart_raid_profile(profile_directory))
 
     def set_bot_action_slot_template_path(
         self,
@@ -452,6 +527,23 @@ class DesktopController(QObject):
         if self._worker is None or self._runner is None or not self._runner.is_running():
             return
         self._submit_to_runner(lambda: self._worker.apply_config(persisted_config))
+
+    def _persist_raid_profiles(self, raid_profiles: tuple[RaidProfileConfig, ...]) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        primary_profile_directory = (
+            raid_profiles[0].profile_directory
+            if raid_profiles
+            else self.config.chrome_profile_directory
+        )
+        self._persist_config(
+            replace(
+                self.config,
+                chrome_profile_directory=primary_profile_directory,
+                raid_profiles=raid_profiles,
+            ),
+            resolve_sender_entries=False,
+        )
 
     def _receive_worker_event(self, event: dict[str, Any]) -> None:
         self._workerEventReceived.emit(event)

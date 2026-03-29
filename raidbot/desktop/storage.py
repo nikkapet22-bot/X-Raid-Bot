@@ -14,6 +14,8 @@ from .models import (
     BotRuntimeState,
     DesktopAppConfig,
     DesktopAppState,
+    RaidProfileConfig,
+    RaidProfileState,
     TelegramConnectionState,
 )
 
@@ -57,7 +59,7 @@ class DesktopStorage:
 
     def load_state(self) -> DesktopAppState:
         if not self.state_path.exists():
-            return DesktopAppState()
+            return self._normalize_loaded_state(DesktopAppState())
         data = json.loads(self.state_path.read_text(encoding="utf-8"))
         state = self._state_from_data(data)
         normalized_state = self._normalize_loaded_state(state)
@@ -88,6 +90,9 @@ class DesktopStorage:
             "bot_action_slots": [
                 self._bot_action_slot_to_data(slot) for slot in config.bot_action_slots
             ],
+            "raid_profiles": [
+                self._raid_profile_config_to_data(profile) for profile in config.raid_profiles
+            ],
         }
 
     def _config_from_data(self, data: dict[str, Any]) -> DesktopAppConfig:
@@ -99,6 +104,7 @@ class DesktopStorage:
         if allowed_sender_entries is None:
             allowed_sender_entries = [str(sender_id) for sender_id in allowed_sender_ids]
         bot_action_slots_data = data.get("bot_action_slots") or ()
+        raid_profiles_data = data.get("raid_profiles") or ()
         return DesktopAppConfig(
             telegram_api_id=int(data["telegram_api_id"]),
             telegram_api_hash=str(data["telegram_api_hash"]),
@@ -133,6 +139,11 @@ class DesktopStorage:
                 for slot_data in bot_action_slots_data
                 if isinstance(slot_data, dict)
             ),
+            raid_profiles=tuple(
+                self._raid_profile_config_from_data(profile_data)
+                for profile_data in raid_profiles_data
+                if isinstance(profile_data, dict)
+            ),
         )
 
     def _state_to_data(self, state: DesktopAppState) -> dict[str, Any]:
@@ -158,6 +169,10 @@ class DesktopStorage:
             "automation_queue_length": state.automation_queue_length,
             "automation_current_url": state.automation_current_url,
             "automation_last_error": state.automation_last_error,
+            "raid_profile_states": [
+                self._raid_profile_state_to_data(profile_state)
+                for profile_state in state.raid_profile_states
+            ],
         }
 
     def _state_from_data(self, data: dict[str, Any]) -> DesktopAppState:
@@ -189,9 +204,15 @@ class DesktopStorage:
             ),
             automation_current_url=data.get("automation_current_url"),
             automation_last_error=data.get("automation_last_error"),
+            raid_profile_states=tuple(
+                self._raid_profile_state_from_data(profile_state)
+                for profile_state in data.get("raid_profile_states", ())
+                if isinstance(profile_state, dict)
+            ),
         )
 
     def _normalize_loaded_state(self, state: DesktopAppState) -> DesktopAppState:
+        config = self.load_config() if self.config_path.exists() else None
         return replace(
             state,
             bot_state=self._normalize_bot_state(state.bot_state),
@@ -200,6 +221,10 @@ class DesktopStorage:
             automation_queue_length=0,
             automation_current_url=None,
             automation_last_error=None,
+            raid_profile_states=self._normalize_raid_profile_states(
+                state.raid_profile_states,
+                config=config,
+            ),
         )
 
     def _activity_to_data(self, entry: ActivityEntry) -> dict[str, Any]:
@@ -282,6 +307,72 @@ class DesktopStorage:
                 Path(finish_template_path) if finish_template_path is not None else None
             ),
         )
+
+    def _raid_profile_config_to_data(self, profile: RaidProfileConfig) -> dict[str, Any]:
+        return {
+            "profile_directory": profile.profile_directory,
+            "label": profile.label,
+            "enabled": profile.enabled,
+        }
+
+    def _raid_profile_config_from_data(self, data: dict[str, Any]) -> RaidProfileConfig:
+        profile_directory = str(data.get("profile_directory") or "").strip()
+        return RaidProfileConfig(
+            profile_directory=profile_directory,
+            label=str(data.get("label") or profile_directory).strip() or profile_directory,
+            enabled=self._maybe_bool(data.get("enabled"), default=True),
+        )
+
+    def _raid_profile_state_to_data(self, profile_state: RaidProfileState) -> dict[str, Any]:
+        return {
+            "profile_directory": profile_state.profile_directory,
+            "label": profile_state.label,
+            "status": profile_state.status,
+            "last_error": profile_state.last_error,
+        }
+
+    def _raid_profile_state_from_data(self, data: dict[str, Any]) -> RaidProfileState:
+        profile_directory = str(data.get("profile_directory") or "").strip()
+        return RaidProfileState(
+            profile_directory=profile_directory,
+            label=str(data.get("label") or profile_directory).strip() or profile_directory,
+            status=str(data.get("status") or "green"),
+            last_error=data.get("last_error"),
+        )
+
+    def _normalize_raid_profile_states(
+        self,
+        raid_profile_states: tuple[RaidProfileState, ...],
+        *,
+        config: DesktopAppConfig | None,
+    ) -> tuple[RaidProfileState, ...]:
+        provided_states: dict[str, RaidProfileState] = {}
+        for profile_state in raid_profile_states:
+            profile_directory = str(profile_state.profile_directory).strip()
+            if not profile_directory:
+                continue
+            provided_states[profile_directory] = RaidProfileState(
+                profile_directory=profile_directory,
+                label=str(profile_state.label).strip() or profile_directory,
+                status=str(profile_state.status or "green"),
+                last_error=profile_state.last_error,
+            )
+        if config is None:
+            return tuple(provided_states.values())
+        normalized_states: list[RaidProfileState] = []
+        for profile in config.raid_profiles:
+            existing_state = provided_states.get(profile.profile_directory)
+            normalized_states.append(
+                RaidProfileState(
+                    profile_directory=profile.profile_directory,
+                    label=profile.label,
+                    status=existing_state.status if existing_state is not None else "green",
+                    last_error=(
+                        existing_state.last_error if existing_state is not None else None
+                    ),
+                )
+            )
+        return tuple(normalized_states)
 
     def _normalize_bot_state(self, state: BotRuntimeState) -> BotRuntimeState:
         if state in {

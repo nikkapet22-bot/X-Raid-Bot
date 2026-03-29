@@ -51,7 +51,6 @@ def test_settings_save_emits_sender_entries_and_numeric_sender_ids(qtbot) -> Non
     page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.add_sender_button, Qt.MouseButton.LeftButton)
     page.sender_entry_inputs[1].setText("@delugeraidbot")
-    page.profile_combo.setCurrentText("Profile 9")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == [
@@ -60,7 +59,7 @@ def test_settings_save_emits_sender_entries_and_numeric_sender_ids(qtbot) -> Non
             whitelisted_chat_ids=[-1001, -2002],
             allowed_sender_ids=[99],
             allowed_sender_entries=("99", "@delugeraidbot"),
-            chrome_profile_directory="Profile 9",
+            chrome_profile_directory="Profile 3",
         )
     ]
 

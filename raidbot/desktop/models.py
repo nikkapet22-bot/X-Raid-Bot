@@ -42,6 +42,21 @@ class BotActionSlotConfig:
     finish_template_path: Path | None = None
 
 
+@dataclass(eq=True)
+class RaidProfileConfig:
+    profile_directory: str
+    label: str
+    enabled: bool = True
+
+
+@dataclass(eq=True)
+class RaidProfileState:
+    profile_directory: str
+    label: str
+    status: str = "green"
+    last_error: str | None = None
+
+
 _DEFAULT_BOT_ACTION_SLOT_LAYOUT: tuple[tuple[str, str], ...] = (
     ("slot_1_r", "R"),
     ("slot_2_l", "L"),
@@ -78,6 +93,7 @@ class DesktopAppConfig:
     default_auto_sequence_id: str | None
     auto_run_settle_ms: int
     bot_action_slots: tuple[BotActionSlotConfig, ...]
+    raid_profiles: tuple[RaidProfileConfig, ...]
 
     def __init__(
         self,
@@ -102,6 +118,7 @@ class DesktopAppConfig:
         default_auto_sequence_id: str | None = None,
         auto_run_settle_ms: int = 1500,
         bot_action_slots: Sequence[BotActionSlotConfig] | None = None,
+        raid_profiles: Sequence[RaidProfileConfig] | None = None,
     ) -> None:
         self.telegram_api_id = telegram_api_id
         self.telegram_api_hash = telegram_api_hash
@@ -128,6 +145,10 @@ class DesktopAppConfig:
         self.default_auto_sequence_id = default_auto_sequence_id
         self.auto_run_settle_ms = auto_run_settle_ms
         self.bot_action_slots = self._coerce_bot_action_slots(bot_action_slots)
+        self.raid_profiles = self._coerce_raid_profiles(
+            raid_profiles,
+            chrome_profile_directory=chrome_profile_directory,
+        )
 
     @property
     def raidar_sender_id(self) -> int | None:
@@ -210,6 +231,36 @@ class DesktopAppConfig:
             )
         return tuple(normalized_slots)
 
+    def _coerce_raid_profiles(
+        self,
+        raid_profiles: Sequence[RaidProfileConfig] | None,
+        *,
+        chrome_profile_directory: str,
+    ) -> tuple[RaidProfileConfig, ...]:
+        normalized_profiles: list[RaidProfileConfig] = []
+        for profile in tuple(raid_profiles or ()):
+            profile_directory = str(getattr(profile, "profile_directory", "") or "").strip()
+            if not profile_directory:
+                continue
+            label = str(getattr(profile, "label", "") or profile_directory).strip()
+            normalized_profiles.append(
+                RaidProfileConfig(
+                    profile_directory=profile_directory,
+                    label=label or profile_directory,
+                    enabled=bool(getattr(profile, "enabled", True)),
+                )
+            )
+        if normalized_profiles:
+            return tuple(normalized_profiles)
+        fallback_directory = str(chrome_profile_directory).strip() or "Default"
+        return (
+            RaidProfileConfig(
+                profile_directory=fallback_directory,
+                label=fallback_directory,
+                enabled=True,
+            ),
+        )
+
 
 @dataclass
 class ActivityEntry:
@@ -241,3 +292,4 @@ class DesktopAppState:
     automation_queue_length: int = 0
     automation_current_url: str | None = None
     automation_last_error: str | None = None
+    raid_profile_states: tuple[RaidProfileState, ...] = ()
