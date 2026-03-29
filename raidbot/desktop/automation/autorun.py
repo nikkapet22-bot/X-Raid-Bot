@@ -45,6 +45,8 @@ class AutoRunProcessor:
         self._state = "idle"
         self._current_url: str | None = None
         self._last_error: str | None = None
+        self._failed_item: PendingRaidWorkItem | None = None
+        self._failed_context: OpenedRaidContext | None = None
 
     @property
     def state(self) -> str:
@@ -74,11 +76,7 @@ class AutoRunProcessor:
             self._reject(item, "auto_run_paused")
             return False
         if not self._default_sequence_id():
-            self._last_error = "default_sequence_missing"
-            if self._state != "running":
-                self._state = "paused"
-            self._on_failure(item, self._last_error, None)
-            self._emit_status()
+            self._pause_failed_item(item, "default_sequence_missing", None)
             return False
 
         self._pending.append(item)
@@ -91,31 +89,83 @@ class AutoRunProcessor:
         if self._state in {"paused", "running"} or not self._pending:
             return False
         if not self._auto_run_enabled():
+            return self._pause_failed_item(
+                self._pending.popleft(),
+                "auto_run_disabled",
+                None,
+            )
+
+        sequence_id = self._default_sequence_id()
+        if not sequence_id:
+            return self._pause_failed_item(
+                self._pending.popleft(),
+                "default_sequence_missing",
+                None,
+            )
+
+        item = self._pending.popleft()
+        return self._run_item(item, sequence_id)
+
+    def resume(self) -> bool:
+        if self._state != "paused":
+            return False
+        if not self._auto_run_enabled():
             self._last_error = "auto_run_disabled"
-            self._on_failure(self._pending[0], self._last_error, None)
             self._emit_status()
             return False
 
         sequence_id = self._default_sequence_id()
         if not sequence_id:
             self._last_error = "default_sequence_missing"
-            self._state = "paused"
-            self._on_failure(self._pending[0], self._last_error, None)
             self._emit_status()
             return False
 
-        item = self._pending.popleft()
-        owned_window = self._pre_open_check(item)
-        if owned_window is None:
-            return self._pause_failed_item(item, "target_window_not_found")
+        if self._failed_item is None:
+            if self._pending:
+                self._state = "queued"
+                self._emit_status()
+                return self.process_next()
+            self._state = "idle"
+            self._emit_status()
+            return False
 
-        try:
-            opened_context = self._open_raid(item, owned_window)
-        except Exception as exc:
-            return self._pause_failed_item(
-                item,
-                self._reason_from_exception(exc, "chrome_open_failed"),
-            )
+        return self._run_item(
+            self._failed_item,
+            sequence_id,
+            context=self._failed_context,
+        )
+
+    def clear(self) -> None:
+        self._pending.clear()
+        self._failed_item = None
+        self._failed_context = None
+        self._current_url = None
+        self._last_error = None
+        self._state = "idle"
+        self._emit_status()
+
+    def _reject(self, item: PendingRaidWorkItem, reason: str) -> None:
+        self._last_error = reason
+        self._on_failure(item, reason, None)
+        self._emit_status()
+
+    def _run_item(
+        self,
+        item: PendingRaidWorkItem,
+        sequence_id: str,
+        *,
+        context: OpenedRaidContext | None = None,
+    ) -> bool:
+        opened_context = context
+        if opened_context is None:
+            snapshot = self._pre_open_check(item)
+            try:
+                opened_context = self._open_raid(item, snapshot)
+            except Exception as exc:
+                return self._pause_failed_item(
+                    item,
+                    self._reason_from_exception(exc, "chrome_open_failed"),
+                )
 
         self._state = "running"
         self._current_url = item.normalized_url
@@ -146,6 +196,8 @@ class AutoRunProcessor:
                 self._reason_from_exception(exc, "tab_close_failed"),
                 opened_context,
             )
+        self._failed_item = None
+        self._failed_context = None
         self._current_url = None
         self._last_error = None
         self._state = "queued" if self._pending else "idle"
@@ -156,11 +208,6 @@ class AutoRunProcessor:
             pass
         return True
 
-    def _reject(self, item: PendingRaidWorkItem, reason: str) -> None:
-        self._last_error = reason
-        self._on_failure(item, reason, None)
-        self._emit_status()
-
     def _pause_failed_item(
         self,
         item: PendingRaidWorkItem,
@@ -170,6 +217,8 @@ class AutoRunProcessor:
         self._state = "paused"
         self._current_url = None
         self._last_error = reason
+        self._failed_item = item
+        self._failed_context = context
         self._on_failure(item, reason, context)
         self._emit_status()
         return False

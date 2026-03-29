@@ -328,3 +328,34 @@ def test_autorun_processor_success_callback_failure_keeps_stable_success_state()
         ("running", 0, "https://x.com/i/status/123", None),
         ("idle", 0, None, None),
     ]
+
+
+def test_autorun_processor_resume_retries_same_failed_context() -> None:
+    execute_calls: list[tuple[str, int | None]] = []
+    closes: list[int] = []
+    processor = AutoRunProcessor(
+        auto_run_enabled=lambda: True,
+        default_sequence_id=lambda: "seq-1",
+        pre_open_check=lambda _item: (),
+        open_raid=lambda _item, _snapshot: OpenedRaidContext(
+            normalized_url="https://x.com/i/status/123",
+            opened_at=6.0,
+            window_handle=21,
+            profile_directory="Profile 3",
+        ),
+        execute_raid=lambda item, context, _sequence_id: (
+            execute_calls.append((item.trace_id, context.window_handle)),
+            (len(execute_calls) > 1, "image_match_not_found" if len(execute_calls) == 1 else None),
+        )[1],
+        close_raid=lambda context: closes.append(context.window_handle),
+    )
+
+    assert processor.admit(build_item()) is True
+    assert processor.process_next() is False
+
+    resumed = processor.resume()
+
+    assert resumed is True
+    assert execute_calls == [("raid-1", 21), ("raid-1", 21)]
+    assert closes == [21]
+    assert processor.state == "idle"

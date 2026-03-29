@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 import time
 from typing import Any
@@ -14,7 +15,7 @@ from raidbot.desktop.bot_actions.sequence import build_bot_action_sequence
 from raidbot.desktop.chrome_profiles import detect_chrome_environment
 from raidbot.desktop.automation.autorun import AutoRunProcessor, PendingRaidWorkItem
 from raidbot.desktop.automation.runtime import AutomationRuntime
-from raidbot.desktop.automation.windowing import find_existing_chrome_window
+from raidbot.desktop.automation.windowing import find_opened_raid_window
 from raidbot.desktop.models import (
     ActivityEntry,
     BotRuntimeState,
@@ -163,7 +164,7 @@ class DesktopBotWorker:
             )
             self._record_detection_result(duplicate)
             return duplicate
-        if not self.config.auto_run_enabled:
+        if not self._auto_run_requested():
             return self._handle_detected_raid_via_pipeline(detection)
         processor = self._ensure_automation_processor()
         item = PendingRaidWorkItem(
@@ -185,11 +186,12 @@ class DesktopBotWorker:
         processor = self._automation_processor
         if processor is None:
             return
-        if not self.config.auto_run_enabled:
+        if not self._auto_run_requested():
             return
         if processor.state == "paused":
-            processor._state = "queued" if processor.queue_length else "idle"
+            processor.resume()
             self._sync_automation_status()
+            return
         if processor.queue_length:
             self._drain_automation_queue()
 
@@ -201,15 +203,12 @@ class DesktopBotWorker:
             return
         for pending_item in processor.pending_items:
             self._automation_reserved_urls.discard(pending_item.normalized_url)
-        if processor.queue_length:
-            processor._pending.clear()
-        if processor.state in {"paused", "queued"} and not processor.queue_length:
-            processor._state = "idle"
+        processor.clear()
         self._sync_automation_status()
 
     def notify_manual_automation_finished(self) -> None:
         processor = self._automation_processor
-        if processor is None or not self.config.auto_run_enabled:
+        if processor is None or not self._auto_run_requested():
             return
         if processor.state != "queued" or not processor.queue_length:
             return
@@ -244,12 +243,12 @@ class DesktopBotWorker:
 
         self._automation_runtime = self._build_automation_runtime()
         self._automation_processor = AutoRunProcessor(
-            auto_run_enabled=lambda: self.config.auto_run_enabled,
+            auto_run_enabled=self._auto_run_requested,
             default_sequence_id=self._bot_action_sequence_id,
-            pre_open_check=lambda _item: self._find_existing_chrome_window(),
+            pre_open_check=lambda _item: self._snapshot_target_windows(),
             open_raid=self._open_automation_raid,
             execute_raid=self._execute_automation_sequence,
-            close_raid=self._close_automation_tab,
+            close_raid=self._close_automation_window,
             on_success=self._record_automation_success,
             on_failure=self._record_automation_failure,
             on_status=self._update_automation_status,
@@ -264,17 +263,11 @@ class DesktopBotWorker:
     def _receive_automation_runtime_event(self, event: dict[str, Any]) -> None:
         self._emit("automation_runtime_event", event=event)
 
-    def _find_existing_chrome_window(self):
+    def _snapshot_target_windows(self):
         runtime = self._automation_runtime
         if runtime is None:
-            return None
-        window_manager = getattr(runtime, "window_manager", None)
-        if window_manager is None:
-            return None
-        return find_existing_chrome_window(
-            window_manager,
-            self.config.chrome_profile_directory,
-        )
+            return ()
+        return tuple(runtime.list_target_windows())
 
     def _bot_action_sequence_id(self) -> str | None:
         sequence = self._build_active_bot_action_sequence()
@@ -293,6 +286,12 @@ class DesktopBotWorker:
         self._bot_action_sequence_error = None
         return build_bot_action_sequence(enabled_slots)
 
+    def _auto_run_requested(self) -> bool:
+        return bool(
+            self.config.auto_run_enabled
+            or any(slot.enabled for slot in self.config.bot_action_slots)
+        )
+
     def _translate_automation_reason(self, reason: str | None) -> str | None:
         if reason != "default_sequence_missing":
             return reason
@@ -301,16 +300,24 @@ class DesktopBotWorker:
     def _open_automation_raid(
         self,
         item: PendingRaidWorkItem,
-        window,
+        previous_windows,
     ):
+        runtime = self._automation_runtime
+        if runtime is None:
+            raise RuntimeError("automation_runtime_unavailable")
         opener = self._build_chrome_opener()
-        context = opener.open(
-            item.normalized_url,
-            window_handle=getattr(window, "handle", None),
+        context = opener.open_raid_window(item.normalized_url)
+        if self.config.auto_run_settle_ms > 0:
+            self.auto_run_wait(self.config.auto_run_settle_ms / 1000.0)
+        opened_window = find_opened_raid_window(
+            list(previous_windows or ()),
+            runtime.list_target_windows(),
         )
+        if opened_window is None:
+            raise RuntimeError("target_window_not_found")
         self._dedupe_store.mark_if_new(item.normalized_url)
         self._automation_reserved_urls.discard(item.normalized_url)
-        return context
+        return replace(context, window_handle=opened_window.handle)
 
     def _execute_automation_sequence(
         self,
@@ -324,6 +331,8 @@ class DesktopBotWorker:
         sequence = self._build_active_bot_action_sequence()
         if sequence is None or sequence.id != sequence_id:
             return False, self._translate_automation_reason("default_sequence_missing")
+        if context.window_handle is None:
+            return False, "target_window_not_found"
         self._record_activity(
             "automation_started",
             reason="automation_started",
@@ -336,24 +345,25 @@ class DesktopBotWorker:
             url=context.normalized_url,
             window_handle=context.window_handle,
         )
-        if self.config.auto_run_settle_ms > 0:
-            self.auto_run_wait(self.config.auto_run_settle_ms / 1000.0)
-        result = runtime.run_sequence(sequence, selected_window_handle=context.window_handle)
+        result = runtime.run_sequence(
+            sequence,
+            selected_window_handle=context.window_handle,
+        )
         status = getattr(result, "status", None)
         failure_reason = getattr(result, "failure_reason", None)
         if status == "completed":
             return True, None
         return False, failure_reason or "automation_execution_failed"
 
-    def _close_automation_tab(self, context) -> None:
+    def _close_automation_window(self, context) -> None:
         runtime = self._automation_runtime
         if runtime is None:
             return
         runner = getattr(runtime, "_active_runner", None)
         input_driver = getattr(runner, "input_driver", None)
-        if input_driver is None or not hasattr(input_driver, "close_active_tab"):
+        if input_driver is None or not hasattr(input_driver, "close_active_window"):
             return
-        input_driver.close_active_tab()
+        input_driver.close_active_window()
 
     def _record_automation_success(
         self,
@@ -433,7 +443,7 @@ class DesktopBotWorker:
         processor = self._automation_processor
         if processor is None:
             return
-        while processor.queue_length and self.config.auto_run_enabled:
+        while processor.queue_length and self._auto_run_requested():
             if self.manual_run_active():
                 break
             if processor.state == "paused":
