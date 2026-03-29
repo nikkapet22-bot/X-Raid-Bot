@@ -88,6 +88,7 @@ def test_bot_actions_page_capture_button_emits_slot_capture_signal_with_index(
     qtbot.mouseClick(page.slot_boxes[2].capture_button, Qt.MouseButton.LeftButton)
 
     assert captured == [2]
+    assert page.status_label.text() == "Slot 3 (R): capturing"
 
 
 def test_bot_actions_page_test_button_emits_slot_test_signal_with_index(
@@ -104,6 +105,36 @@ def test_bot_actions_page_test_button_emits_slot_test_signal_with_index(
     qtbot.mouseClick(page.slot_boxes[1].test_button, Qt.MouseButton.LeftButton)
 
     assert captured == [1]
+    assert page.status_label.text() == "Slot 2 (L): testing"
+
+
+def test_bot_actions_page_shows_presets_button_only_for_slot_1(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+
+    assert page.slot_boxes[0].presets_button is not None
+    assert page.slot_boxes[1].presets_button is None
+    assert page.slot_boxes[2].presets_button is None
+    assert page.slot_boxes[3].presets_button is None
+
+
+def test_bot_actions_page_presets_button_emits_slot_presets_signal_with_index(
+    qtbot,
+) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+    page.show()
+    captured = []
+    page.slotPresetsRequested.connect(captured.append)
+
+    qtbot.mouseClick(page.slot_boxes[0].presets_button, Qt.MouseButton.LeftButton)
+
+    assert captured == [0]
+    assert page.status_label.text() == "Slot 1 (R): presets"
 
 
 def test_bot_actions_page_places_capture_and_test_buttons_in_compact_row(qtbot) -> None:
@@ -116,6 +147,7 @@ def test_bot_actions_page_places_capture_and_test_buttons_in_compact_row(qtbot) 
 
     assert box.button_row_layout.indexOf(box.capture_button) == 0
     assert box.button_row_layout.indexOf(box.test_button) == 1
+    assert box.button_row_layout.indexOf(box.presets_button) == 2
 
 
 def test_bot_actions_page_shows_thumbnail_preview_above_capture_button(

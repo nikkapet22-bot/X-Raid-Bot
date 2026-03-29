@@ -63,6 +63,12 @@ class SlotBox(QFrame):
         self.test_button.setProperty("variant", "secondary")
         self.button_row_layout.addWidget(self.test_button)
 
+        self.presets_button: QPushButton | None = None
+        if self._index == 0:
+            self.presets_button = QPushButton("Presets")
+            self.presets_button.setProperty("variant", "secondary")
+            self.button_row_layout.addWidget(self.presets_button)
+
         layout.addWidget(self.button_row_widget)
 
         self.template_status_label = QLabel("")
@@ -111,6 +117,7 @@ class SlotBox(QFrame):
 class BotActionsPage(QWidget):
     slotCaptureRequested = Signal(int)
     slotTestRequested = Signal(int)
+    slotPresetsRequested = Signal(int)
     slotEnabledChanged = Signal(int, bool)
     settleDelayChanged = Signal(int)
 
@@ -146,6 +153,9 @@ class BotActionsPage(QWidget):
     def show_error(self, message: str) -> None:
         self.status_label.setText(message)
 
+    def show_status(self, message: str) -> None:
+        self.status_label.setText(message)
+
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
@@ -174,15 +184,21 @@ class BotActionsPage(QWidget):
                 )
             )
             box.capture_button.clicked.connect(
-                lambda _checked=False, slot_index=index: self.slotCaptureRequested.emit(
+                lambda _checked=False, slot_index=index: self._emit_slot_capture_request(
                     slot_index
                 )
             )
             box.test_button.clicked.connect(
-                lambda _checked=False, slot_index=index: self.slotTestRequested.emit(
+                lambda _checked=False, slot_index=index: self._emit_slot_test_request(
                     slot_index
                 )
             )
+            if box.presets_button is not None:
+                box.presets_button.clicked.connect(
+                    lambda _checked=False, slot_index=index: self._emit_slot_presets_request(
+                        slot_index
+                    )
+                )
             self.slot_boxes.append(box)
             slots_layout.addWidget(box, index // 2, index % 2)
         layout.addWidget(slots_group)
@@ -197,3 +213,20 @@ class BotActionsPage(QWidget):
         status_layout.addWidget(self.status_label)
         layout.addWidget(status_group)
         layout.addStretch()
+
+    def _emit_slot_capture_request(self, slot_index: int) -> None:
+        self.show_status(f"{self._format_slot_name(slot_index)}: capturing")
+        self.slotCaptureRequested.emit(slot_index)
+
+    def _emit_slot_test_request(self, slot_index: int) -> None:
+        self.show_status(f"{self._format_slot_name(slot_index)}: testing")
+        self.slotTestRequested.emit(slot_index)
+
+    def _emit_slot_presets_request(self, slot_index: int) -> None:
+        self.show_status(f"{self._format_slot_name(slot_index)}: presets")
+        self.slotPresetsRequested.emit(slot_index)
+
+    def _format_slot_name(self, slot_index: int) -> str:
+        if 0 <= slot_index < len(self.slot_boxes):
+            return f"Slot {slot_index + 1} ({self.slot_boxes[slot_index].label_text()})"
+        return f"Slot {slot_index + 1}"
