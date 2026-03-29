@@ -60,6 +60,14 @@ def build_application_stylesheet() -> str:
         border: 1px solid {BORDER};
         border-radius: {CARD_RADIUS}px;
     }}
+    {card_selector()}[profileStatus="green"] {{
+        background-color: #10231a;
+        border: 1px solid #3bd671;
+    }}
+    {card_selector()}[profileStatus="red"] {{
+        background-color: #2a1620;
+        border: 1px solid {ERROR};
+    }}
     QLabel {{
         color: {TEXT};
     }}

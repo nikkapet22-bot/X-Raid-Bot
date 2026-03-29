@@ -10,7 +10,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
-from raidbot.desktop.models import BotActionPreset, DesktopAppConfig
+from raidbot.desktop.models import BotActionPreset, DesktopAppConfig, RaidProfileConfig
 
 
 class FakeStorage:
@@ -37,6 +37,7 @@ class FakeWorker:
         self.resume_calls = 0
         self.clear_calls = 0
         self.manual_finished_calls = 0
+        self.restart_profile_calls: list[str] = []
 
     async def run(self) -> None:
         self.run_calls += 1
@@ -56,6 +57,9 @@ class FakeWorker:
 
     def notify_manual_automation_finished(self) -> None:
         self.manual_finished_calls += 1
+
+    def restart_raid_profile(self, profile_directory: str) -> None:
+        self.restart_profile_calls.append(profile_directory)
 
 
 class FakeRunner:
@@ -119,6 +123,17 @@ class ImmediateRunner:
     def wait_until_stopped(self, timeout: float | None = None) -> bool:
         self.running = False
         return True
+
+
+class SubmitExecutingRunner(FakeRunner):
+    def submit(self, job):
+        self.submitted_coroutines.append(job)
+        future = Future()
+        try:
+            future.set_result(job())
+        except Exception as exc:
+            future.set_exception(exc)
+        return future
 
 
 class RaisingAutomationRuntime:
@@ -235,6 +250,74 @@ def build_sequence(sequence_id: str = "seq-1") -> AutomationSequence:
             )
         ],
     )
+
+
+def test_controller_add_raid_profile_appends_and_ignores_duplicates(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(
+            chrome_profile_directory="Default",
+            raid_profiles=(
+                RaidProfileConfig(
+                    profile_directory="Default",
+                    label="George",
+                    enabled=True,
+                ),
+            ),
+        ),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+    )
+    changed_configs = []
+    controller.configChanged.connect(changed_configs.append)
+
+    controller.add_raid_profile("Profile 3", "Maria")
+    controller.add_raid_profile("Profile 3", "Maria")
+
+    assert len(storage.saved_configs) == 1
+    assert storage.saved_configs[-1].raid_profiles == (
+        RaidProfileConfig(
+            profile_directory="Default",
+            label="George",
+            enabled=True,
+        ),
+        RaidProfileConfig(
+            profile_directory="Profile 3",
+            label="Maria",
+            enabled=True,
+        ),
+    )
+    assert controller.config.raid_profiles == storage.saved_configs[-1].raid_profiles
+    assert changed_configs[-1] == controller.config
+
+
+def test_controller_restart_raid_profile_submits_worker_command(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    runner = SubmitExecutingRunner()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=worker_factory,
+        runner_factory=lambda: runner,
+    )
+
+    controller.start_bot()
+    controller.restart_raid_profile("Profile 3")
+
+    assert len(runner.submitted_coroutines) == 1
+    assert created["worker"].restart_profile_calls == ["Profile 3"]
 
 
 def test_controller_start_bot_and_forward_events(qtbot) -> None:

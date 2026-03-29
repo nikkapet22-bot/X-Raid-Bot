@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QFormLayout,
@@ -24,12 +24,66 @@ from PySide6.QtWidgets import (
 from raidbot.desktop.bot_actions import BotActionsPage
 from raidbot.desktop.bot_actions.capture import SlotCaptureService
 from raidbot.desktop.bot_actions.presets_dialog import Slot1PresetsDialog
-from raidbot.desktop.chrome_profiles import detect_chrome_environment
-from raidbot.desktop.models import DesktopAppState
+from raidbot.desktop.chrome_profiles import ChromeProfile, detect_chrome_environment
+from raidbot.desktop.models import DesktopAppState, RaidProfileState
 from raidbot.desktop.settings_page import SettingsPage
 from raidbot.desktop.telegram_setup import TelegramSetupService
 from raidbot.desktop.theme import CARD_OBJECT_NAME, SECTION_OBJECT_NAME
 from raidbot.desktop.tray import TrayController
+
+
+class RaidProfileCard(QFrame):
+    restartRequested = Signal(str)
+
+    def __init__(self, profile_directory: str, *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.profile_directory = profile_directory
+        self._details_visible = False
+        self.setObjectName(CARD_OBJECT_NAME)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(6)
+
+        self.title_label = QLabel(profile_directory)
+        self.status_label = QLabel("")
+        self.status_label.setProperty("muted", "true")
+        self.reason_label = QLabel("")
+        self.reason_label.setWordWrap(True)
+        self.reason_label.hide()
+        self.restart_button = QPushButton("Restart")
+        self.restart_button.setProperty("variant", "secondary")
+        self.restart_button.clicked.connect(
+            lambda: self.restartRequested.emit(self.profile_directory)
+        )
+
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.reason_label)
+        layout.addWidget(self.restart_button)
+        layout.addStretch()
+
+    def apply_state(self, state: RaidProfileState) -> None:
+        self.profile_directory = state.profile_directory
+        self.title_label.setText(state.label)
+        profile_status = "red" if state.status == "red" else "green"
+        self.setProperty("profileStatus", profile_status)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.status_label.setText(
+            "Needs attention" if profile_status == "red" else "Healthy"
+        )
+        self.reason_label.setText(state.last_error or "No details available")
+        if profile_status != "red":
+            self._details_visible = False
+        self.reason_label.setVisible(profile_status == "red" and self._details_visible)
+        self.restart_button.setVisible(profile_status == "red")
+
+    def mousePressEvent(self, event) -> None:
+        if self.property("profileStatus") == "red":
+            self._details_visible = not self._details_visible
+            self.reason_label.setVisible(self._details_visible)
+        super().mousePressEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -63,6 +117,8 @@ class MainWindow(QMainWindow):
         self._bot_actions_last_error_text: str | None = None
         self._bot_actions_run_slots_snapshot: tuple[tuple[int, str], ...] = ()
         self._slot_1_presets_dialog: Slot1PresetsDialog | None = None
+        self._latest_state = DesktopAppState()
+        self.raid_profile_cards: dict[str, RaidProfileCard] = {}
 
         self.setWindowTitle("Raid Bot")
 
@@ -104,6 +160,11 @@ class MainWindow(QMainWindow):
             reauthorize_available=hasattr(self.controller, "reauthorize_session"),
         )
         self.settings_page.applyRequested.connect(self._apply_settings_config)
+        self.settings_page.raidProfileAddRequested.connect(self.controller.add_raid_profile)
+        self.settings_page.raidProfileRemoveRequested.connect(
+            self.controller.remove_raid_profile
+        )
+        self.settings_page.raidProfileMoveRequested.connect(self.controller.move_raid_profile)
         if hasattr(self.controller, "reauthorize_session"):
             self.settings_page.reauthorizeRequested.connect(
                 self.controller.reauthorize_session
@@ -153,6 +214,9 @@ class MainWindow(QMainWindow):
 
         self.status_panel = self._build_status_panel()
         layout.addWidget(self.status_panel)
+
+        self.profiles_panel = self._build_profiles_panel()
+        layout.addWidget(self.profiles_panel)
 
         self.metric_cards = [
             self._build_metric_card("Raids Opened", self.raids_opened_label),
@@ -222,6 +286,21 @@ class MainWindow(QMainWindow):
         status_layout.addRow("Telegram", self.connection_state_label)
         status_layout.addRow("Last successful raid", self.last_successful_label)
         layout.addLayout(status_layout)
+        return panel
+
+    def _build_profiles_panel(self) -> QWidget:
+        panel, surface = self._build_panel("profilesPanel")
+        layout = QVBoxLayout(surface)
+        layout.setSpacing(10)
+        layout.addWidget(self._build_section_title("Profiles"))
+        layout.addWidget(
+            self._build_helper_label(
+                "Healthy profiles stay green. Failed profiles turn red until restarted."
+            )
+        )
+        self.profile_cards_layout = QHBoxLayout()
+        self.profile_cards_layout.setSpacing(12)
+        layout.addLayout(self.profile_cards_layout)
         return panel
 
     def _build_metric_card(self, title: str, value_label: QLabel) -> QFrame:
@@ -326,6 +405,7 @@ class MainWindow(QMainWindow):
     def _apply_state(
         self, state: DesktopAppState, *, include_activity: bool = False
     ) -> None:
+        self._latest_state = state
         self._update_bot_state(state.bot_state.value)
         self._update_connection_state(state.connection_state.value)
         self.raids_opened_label.setText(str(state.raids_opened))
@@ -341,6 +421,7 @@ class MainWindow(QMainWindow):
         self.session_closed_label.setText(str(state.session_closed))
         self.last_successful_label.setText(state.last_successful_raid_open_at or "")
         self.last_error_label.setText(state.last_error or "")
+        self._sync_raid_profile_cards(self.controller.config, state)
         if include_activity:
             self.activity_list.clear()
             for entry in reversed(state.activity):
@@ -426,14 +507,28 @@ class MainWindow(QMainWindow):
             == QMessageBox.StandardButton.Yes
         )
 
-    def _load_available_profiles(self) -> list[str]:
+    def _load_available_profiles(self) -> list[ChromeProfile]:
         try:
             environment = detect_chrome_environment()
         except Exception:
-            return [self.controller.config.chrome_profile_directory]
-        profiles = [profile.directory_name for profile in environment.profiles]
-        if self.controller.config.chrome_profile_directory not in profiles:
-            profiles.append(self.controller.config.chrome_profile_directory)
+            return [
+                ChromeProfile(
+                    directory_name=profile.profile_directory,
+                    label=profile.label,
+                )
+                for profile in self.controller.config.raid_profiles
+            ]
+        profiles = list(environment.profiles)
+        known_directories = {profile.directory_name for profile in profiles}
+        for configured_profile in self.controller.config.raid_profiles:
+            if configured_profile.profile_directory in known_directories:
+                continue
+            profiles.append(
+                ChromeProfile(
+                    directory_name=configured_profile.profile_directory,
+                    label=configured_profile.label,
+                )
+            )
         return profiles
 
     def _load_session_status(self) -> str:
@@ -546,6 +641,37 @@ class MainWindow(QMainWindow):
         self.settings_page.set_config(config)
         self.bot_actions_page.set_slots(config.bot_action_slots)
         self.bot_actions_page.set_settle_delay(config.auto_run_settle_ms)
+        self._sync_raid_profile_cards(config, self._latest_state)
+
+    def _sync_raid_profile_cards(self, config, state: DesktopAppState) -> None:
+        while self.profile_cards_layout.count():
+            item = self.profile_cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        states_by_directory = {
+            profile_state.profile_directory: profile_state
+            for profile_state in getattr(state, "raid_profile_states", ())
+        }
+        self.raid_profile_cards = {}
+        for profile in config.raid_profiles:
+            card = RaidProfileCard(profile.profile_directory, parent=self)
+            card.restartRequested.connect(self.controller.restart_raid_profile)
+            card.apply_state(
+                states_by_directory.get(
+                    profile.profile_directory,
+                    RaidProfileState(
+                        profile_directory=profile.profile_directory,
+                        label=profile.label,
+                        status="green",
+                        last_error=None,
+                    ),
+                )
+            )
+            self.profile_cards_layout.addWidget(card)
+            self.raid_profile_cards[profile.profile_directory] = card
+        self.profile_cards_layout.addStretch()
 
     def _show_bot_actions_error(self, message: str) -> None:
         self._bot_actions_last_error_text = str(message)

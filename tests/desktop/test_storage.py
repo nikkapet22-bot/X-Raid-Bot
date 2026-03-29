@@ -11,6 +11,8 @@ from raidbot.desktop.models import (
     BotRuntimeState,
     DesktopAppConfig,
     DesktopAppState,
+    RaidProfileConfig,
+    RaidProfileState,
     TelegramConnectionState,
     default_bot_action_slots,
 )
@@ -88,6 +90,51 @@ def test_config_round_trip(tmp_path) -> None:
         ),
         BotActionSlotConfig(key="slot_3_r", label="R", enabled=False),
         BotActionSlotConfig(key="slot_4_b", label="B", enabled=True),
+    )
+
+
+def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    config = DesktopAppConfig(
+        telegram_api_id=123456,
+        telegram_api_hash="api-hash",
+        telegram_session_path=Path("sessions/raid.session"),
+        telegram_phone_number="+15555550123",
+        whitelisted_chat_ids=[1001, 1002, 1003],
+        allowed_sender_ids=[424242, 515151],
+        allowed_sender_entries=("@raidar", "@delugeraidbot"),
+        chrome_profile_directory="Default",
+        raid_profiles=(
+            RaidProfileConfig(
+                profile_directory="Default",
+                label="George",
+                enabled=True,
+            ),
+            RaidProfileConfig(
+                profile_directory="Profile 3",
+                label="Maria",
+                enabled=False,
+            ),
+        ),
+    )
+
+    storage.save_config(config)
+
+    loaded = storage.load_config()
+
+    assert loaded.raid_profiles == (
+        RaidProfileConfig(
+            profile_directory="Default",
+            label="George",
+            enabled=True,
+        ),
+        RaidProfileConfig(
+            profile_directory="Profile 3",
+            label="Maria",
+            enabled=False,
+        ),
     )
 
 
@@ -220,6 +267,47 @@ def test_state_round_trip_includes_activity_entries(tmp_path) -> None:
     assert storage.state_path.exists()
 
 
+def test_storage_round_trips_raid_profile_states(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    state = DesktopAppState(
+        raid_profile_states=(
+            RaidProfileState(
+                profile_directory="Default",
+                label="George",
+                status="green",
+                last_error=None,
+            ),
+            RaidProfileState(
+                profile_directory="Profile 3",
+                label="Maria",
+                status="red",
+                last_error="not_logged_in",
+            ),
+        )
+    )
+
+    storage.save_state(state)
+
+    loaded = storage.load_state()
+
+    assert loaded.raid_profile_states == (
+        RaidProfileState(
+            profile_directory="Default",
+            label="George",
+            status="green",
+            last_error=None,
+        ),
+        RaidProfileState(
+            profile_directory="Profile 3",
+            label="Maria",
+            status="red",
+            last_error="not_logged_in",
+        ),
+    )
+
+
 def test_storage_loads_legacy_single_sender_as_allowlist(tmp_path) -> None:
     from raidbot.desktop.storage import DesktopStorage
 
@@ -253,6 +341,13 @@ def test_storage_loads_legacy_single_sender_as_allowlist(tmp_path) -> None:
     assert loaded.default_auto_sequence_id is None
     assert loaded.auto_run_settle_ms == 1500
     assert loaded.allowed_sender_entries == ("424242",)
+    assert loaded.raid_profiles == (
+        RaidProfileConfig(
+            profile_directory="Profile 1",
+            label="Profile 1",
+            enabled=True,
+        ),
+    )
 
 
 def test_storage_loads_sender_entries_when_present(tmp_path) -> None:

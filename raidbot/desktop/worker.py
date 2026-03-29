@@ -9,7 +9,7 @@ from typing import Any
 from raidbot.browser.backends import LaunchOnlyBrowserBackend
 from raidbot.browser.executors.noop import NoOpRaidExecutor
 from raidbot.browser.pipeline import BrowserPipeline
-from raidbot.chrome import ChromeOpener
+from raidbot.chrome import ChromeOpener, OpenedRaidContext
 from raidbot.dedupe import InMemoryOpenedUrlStore
 from raidbot.desktop.bot_actions.sequence import build_bot_action_sequence
 from raidbot.desktop.chrome_profiles import detect_chrome_environment
@@ -21,6 +21,8 @@ from raidbot.desktop.models import (
     BotRuntimeState,
     DesktopAppConfig,
     DesktopAppState,
+    RaidProfileConfig,
+    RaidProfileState,
     TelegramConnectionState,
 )
 from raidbot.desktop.storage import DesktopStorage
@@ -75,11 +77,13 @@ class DesktopBotWorker:
         self._automation_runtime: Any | None = None
         self._automation_processor: AutoRunProcessor | None = None
         self._chrome_opener: Any | None = None
+        self._chrome_openers: dict[str, Any] = {}
         self._automation_reserved_urls: set[str] = set()
         self._active_auto_sequence_id: str | None = None
         self._bot_action_sequence_error: str | None = None
         self._restart_requested = False
         self._stop_requested = False
+        self._sync_raid_profile_states(save=False, emit=False)
 
     async def run(self) -> None:
         self._stop_requested = False
@@ -122,11 +126,16 @@ class DesktopBotWorker:
 
     async def apply_config(self, config: DesktopAppConfig) -> None:
         telegram_changed = self._telegram_config_changed(config)
-        profile_changed = self.config.chrome_profile_directory != config.chrome_profile_directory
+        profile_changed = (
+            self.config.chrome_profile_directory != config.chrome_profile_directory
+            or self.config.raid_profiles != config.raid_profiles
+        )
         self.config = config
 
         if profile_changed:
             self._chrome_opener = None
+            self._chrome_openers = {}
+        self._sync_raid_profile_states(save=True, emit=True)
 
         if telegram_changed:
             self._restart_requested = True
@@ -306,32 +315,21 @@ class DesktopBotWorker:
     def _open_automation_raid(
         self,
         item: PendingRaidWorkItem,
-        previous_windows,
+        _previous_windows,
     ):
-        runtime = self._automation_runtime
-        if runtime is None:
-            raise RuntimeError("automation_runtime_unavailable")
-        opener = self._build_chrome_opener()
-        context = opener.open_raid_window(item.normalized_url)
-        if self.config.auto_run_settle_ms > 0:
-            self.auto_run_wait(self.config.auto_run_settle_ms / 1000.0)
-        current_windows = runtime.list_target_windows()
-        opened_window = find_opened_raid_window(
-            list(previous_windows or ()),
-            current_windows,
-        )
-        if opened_window is None and len(current_windows) == 1:
-            opened_window = current_windows[0]
-        if opened_window is None:
-            raise RuntimeError("target_window_not_found")
         self._dedupe_store.mark_if_new(item.normalized_url)
         self._automation_reserved_urls.discard(item.normalized_url)
-        return replace(context, window_handle=opened_window.handle)
+        return OpenedRaidContext(
+            normalized_url=item.normalized_url,
+            opened_at=time.monotonic(),
+            window_handle=None,
+            profile_directory=self.config.chrome_profile_directory,
+        )
 
     def _execute_automation_sequence(
         self,
-        _item: PendingRaidWorkItem,
-        context,
+        item: PendingRaidWorkItem,
+        _context,
         sequence_id: str,
     ) -> tuple[bool, str | None]:
         runtime = self._automation_runtime
@@ -350,60 +348,79 @@ class DesktopBotWorker:
                 },
             )
         sequence = build_result.sequence
-        if context.window_handle is None:
-            return False, "target_window_not_found"
-        self._record_activity(
-            "automation_started",
-            reason="automation_started",
-            url=context.normalized_url,
-        )
-        self._active_auto_sequence_id = sequence_id
-        self._emit(
-            "automation_run_started",
-            sequence_id=sequence_id,
-            url=context.normalized_url,
-            window_handle=context.window_handle,
-        )
-        result = runtime.run_sequence(
-            sequence,
-            selected_window_handle=context.window_handle,
-        )
-        status = getattr(result, "status", None)
-        failure_reason = getattr(result, "failure_reason", None)
-        if status == "completed":
+        eligible_profiles = self._eligible_raid_profiles()
+        if not eligible_profiles:
             return True, None
-        return False, failure_reason or "automation_execution_failed"
 
-    def _close_automation_window(self, context) -> None:
-        runtime = self._automation_runtime
-        if runtime is None:
-            return
-        runner = getattr(runtime, "_active_runner", None)
-        input_driver = getattr(runner, "input_driver", None)
-        if input_driver is None or not hasattr(input_driver, "close_active_window"):
-            return
-        input_driver.close_active_window()
+        for profile in eligible_profiles:
+            previous_windows = tuple(runtime.list_target_windows())
+            profile_context, opened_window, open_failure_reason = self._open_raid_for_profile(
+                item,
+                profile,
+                previous_windows,
+            )
+            if open_failure_reason is not None or profile_context is None or opened_window is None:
+                self._record_raid_profile_failure(
+                    item,
+                    profile,
+                    open_failure_reason or "target_window_not_found",
+                    sequence_id=sequence_id,
+                )
+                continue
+
+            self._record_activity(
+                "automation_started",
+                reason="automation_started",
+                url=item.normalized_url,
+            )
+            self._emit(
+                "automation_run_started",
+                sequence_id=sequence_id,
+                url=item.normalized_url,
+                window_handle=opened_window.handle,
+                profile_directory=profile.profile_directory,
+            )
+            result = runtime.run_sequence(
+                sequence,
+                selected_window_handle=opened_window.handle,
+            )
+            status = getattr(result, "status", None)
+            failure_reason = getattr(result, "failure_reason", None)
+            if status != "completed":
+                self._record_raid_profile_failure(
+                    item,
+                    profile,
+                    failure_reason or "automation_execution_failed",
+                    sequence_id=sequence_id,
+                )
+                continue
+
+            close_failure_reason = self._close_automation_window_for_profile(runtime)
+            if close_failure_reason is not None:
+                self._record_raid_profile_failure(
+                    item,
+                    profile,
+                    close_failure_reason,
+                    sequence_id=sequence_id,
+                )
+                continue
+
+            self._record_raid_profile_success(
+                item,
+                profile,
+                sequence_id=sequence_id,
+            )
+
+        return True, None
+
+    def _close_automation_window(self, _context) -> None:
+        return
 
     def _record_automation_success(
         self,
-        item: PendingRaidWorkItem,
+        _item: PendingRaidWorkItem,
         _context,
     ) -> None:
-        self._record_activity(
-            "automation_succeeded",
-            reason="automation_succeeded",
-            url=item.normalized_url,
-        )
-        self._record_activity(
-            "session_closed",
-            reason="automation_succeeded",
-            url=item.normalized_url,
-        )
-        self._emit(
-            "automation_run_succeeded",
-            sequence_id=self._active_auto_sequence_id,
-            url=item.normalized_url,
-        )
         self._active_auto_sequence_id = None
 
     def _record_automation_failure(
@@ -431,6 +448,201 @@ class DesktopBotWorker:
                 reason=reason,
             )
             self._active_auto_sequence_id = None
+
+    def restart_raid_profile(self, profile_directory: str) -> None:
+        updated_states: list[RaidProfileState] = []
+        updated = False
+        for profile_state in self.state.raid_profile_states:
+            if profile_state.profile_directory != profile_directory:
+                updated_states.append(profile_state)
+                continue
+            updated = True
+            updated_states.append(
+                replace(
+                    profile_state,
+                    status="green",
+                    last_error=None,
+                )
+            )
+        if not updated:
+            return
+        self.state.raid_profile_states = tuple(updated_states)
+        self.storage.save_state(self.state)
+        self._emit("stats_changed", state=self.state)
+
+    def _eligible_raid_profiles(self) -> tuple[RaidProfileConfig, ...]:
+        profile_states_by_directory = {
+            profile_state.profile_directory: profile_state
+            for profile_state in self.state.raid_profile_states
+        }
+        return tuple(
+            profile
+            for profile in self.config.raid_profiles
+            if profile.enabled
+            and profile_states_by_directory.get(profile.profile_directory) is not None
+            and profile_states_by_directory[profile.profile_directory].status != "red"
+        )
+
+    def _open_raid_for_profile(
+        self,
+        item: PendingRaidWorkItem,
+        profile: RaidProfileConfig,
+        previous_windows,
+    ) -> tuple[Any | None, Any | None, str | None]:
+        runtime = self._automation_runtime
+        if runtime is None:
+            return None, None, "automation_runtime_unavailable"
+        opener = self._build_chrome_opener_for_profile(profile.profile_directory)
+        try:
+            context = opener.open_raid_window(item.normalized_url)
+        except Exception as exc:
+            return None, None, self._reason_from_exception(exc, "chrome_open_failed")
+        if self.config.auto_run_settle_ms > 0:
+            self.auto_run_wait(self.config.auto_run_settle_ms / 1000.0)
+        current_windows = runtime.list_target_windows()
+        opened_window = find_opened_raid_window(
+            list(previous_windows or ()),
+            current_windows,
+        )
+        if opened_window is None and len(current_windows) == 1:
+            opened_window = current_windows[0]
+        if opened_window is None:
+            return context, None, "target_window_not_found"
+        return replace(context, window_handle=opened_window.handle), opened_window, None
+
+    def _close_automation_window_for_profile(self, runtime: Any) -> str | None:
+        runner = getattr(runtime, "_active_runner", None)
+        input_driver = getattr(runner, "input_driver", None)
+        if input_driver is None or not hasattr(input_driver, "close_active_window"):
+            return None
+        try:
+            input_driver.close_active_window()
+        except Exception as exc:
+            return self._reason_from_exception(exc, "window_close_failed")
+        return None
+
+    def _record_raid_profile_success(
+        self,
+        item: PendingRaidWorkItem,
+        profile: RaidProfileConfig,
+        *,
+        sequence_id: str,
+    ) -> None:
+        self._set_raid_profile_state(
+            profile,
+            status="green",
+            last_error=None,
+        )
+        self._record_activity(
+            "automation_succeeded",
+            reason="automation_succeeded",
+            url=item.normalized_url,
+        )
+        self._record_activity(
+            "session_closed",
+            reason="automation_succeeded",
+            url=item.normalized_url,
+        )
+        self._emit(
+            "automation_run_succeeded",
+            sequence_id=sequence_id,
+            url=item.normalized_url,
+            profile_directory=profile.profile_directory,
+        )
+
+    def _record_raid_profile_failure(
+        self,
+        item: PendingRaidWorkItem,
+        profile: RaidProfileConfig,
+        reason: str,
+        *,
+        sequence_id: str,
+    ) -> None:
+        translated_reason = self._translate_automation_reason(reason) or "automation_execution_failed"
+        self._set_raid_profile_state(
+            profile,
+            status="red",
+            last_error=translated_reason,
+        )
+        self._record_activity(
+            "automation_failed",
+            reason=translated_reason,
+            url=item.normalized_url,
+            emit_error=True,
+            count_open_failure=True,
+        )
+        self._emit(
+            "automation_run_failed",
+            sequence_id=sequence_id,
+            url=item.normalized_url,
+            reason=translated_reason,
+            profile_directory=profile.profile_directory,
+        )
+
+    def _set_raid_profile_state(
+        self,
+        profile: RaidProfileConfig,
+        *,
+        status: str,
+        last_error: str | None,
+    ) -> None:
+        updated_states: list[RaidProfileState] = []
+        updated = False
+        for profile_state in self.state.raid_profile_states:
+            if profile_state.profile_directory != profile.profile_directory:
+                updated_states.append(profile_state)
+                continue
+            updated = True
+            updated_states.append(
+                RaidProfileState(
+                    profile_directory=profile.profile_directory,
+                    label=profile.label,
+                    status=status,
+                    last_error=last_error,
+                )
+            )
+        if not updated:
+            updated_states.append(
+                RaidProfileState(
+                    profile_directory=profile.profile_directory,
+                    label=profile.label,
+                    status=status,
+                    last_error=last_error,
+                )
+            )
+        self.state.raid_profile_states = tuple(updated_states)
+        self.storage.save_state(self.state)
+        self._emit("stats_changed", state=self.state)
+
+    def _sync_raid_profile_states(self, *, save: bool, emit: bool) -> None:
+        existing_states = {
+            profile_state.profile_directory: profile_state
+            for profile_state in self.state.raid_profile_states
+        }
+        normalized_states = tuple(
+            RaidProfileState(
+                profile_directory=profile.profile_directory,
+                label=profile.label,
+                status=(
+                    existing_states[profile.profile_directory].status
+                    if profile.profile_directory in existing_states
+                    else "green"
+                ),
+                last_error=(
+                    existing_states[profile.profile_directory].last_error
+                    if profile.profile_directory in existing_states
+                    else None
+                ),
+            )
+            for profile in self.config.raid_profiles
+        )
+        if normalized_states == self.state.raid_profile_states:
+            return
+        self.state.raid_profile_states = normalized_states
+        if save:
+            self.storage.save_state(self.state)
+        if emit:
+            self._emit("stats_changed", state=self.state)
 
     def _update_automation_status(
         self,
@@ -671,22 +883,32 @@ class DesktopBotWorker:
     def _build_chrome_opener(self) -> Any:
         if self._chrome_opener is not None:
             return self._chrome_opener
+        self._chrome_opener = self._build_chrome_opener_for_profile(
+            self.config.chrome_profile_directory
+        )
+        return self._chrome_opener
+
+    def _build_chrome_opener_for_profile(self, profile_directory: str) -> Any:
+        cached_opener = self._chrome_openers.get(profile_directory)
+        if cached_opener is not None:
+            return cached_opener
         chrome_environment = self.chrome_environment_factory()
         if chrome_environment is None:
             raise RuntimeError("Chrome environment is unavailable")
         if self.chrome_opener_factory is not None:
-            self._chrome_opener = self.chrome_opener_factory(
+            opener = self.chrome_opener_factory(
                 chrome_path=chrome_environment.chrome_path,
                 user_data_dir=chrome_environment.user_data_dir,
-                profile_directory=self.config.chrome_profile_directory,
+                profile_directory=profile_directory,
             )
-            return self._chrome_opener
-        self._chrome_opener = ChromeOpener(
-            chrome_path=chrome_environment.chrome_path,
-            user_data_dir=chrome_environment.user_data_dir,
-            profile_directory=self.config.chrome_profile_directory,
-        )
-        return self._chrome_opener
+        else:
+            opener = ChromeOpener(
+                chrome_path=chrome_environment.chrome_path,
+                user_data_dir=chrome_environment.user_data_dir,
+                profile_directory=profile_directory,
+            )
+        self._chrome_openers[profile_directory] = opener
+        return opener
 
     def _build_listener(self, config: DesktopAppConfig) -> Any:
         listener = self.listener_factory(
@@ -718,6 +940,10 @@ class DesktopBotWorker:
             or self._restart_requested
             or self.state.bot_state is BotRuntimeState.stopping
         )
+
+    def _reason_from_exception(self, exc: Exception, fallback: str) -> str:
+        message = str(exc).strip()
+        return message or fallback
 
     def _update_pipeline_profile_directory(self, profile_directory: str) -> None:
         if self._pipeline is None:

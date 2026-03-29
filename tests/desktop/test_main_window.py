@@ -20,6 +20,8 @@ from raidbot.desktop.models import (
     BotRuntimeState,
     DesktopAppConfig,
     DesktopAppState,
+    RaidProfileConfig,
+    RaidProfileState,
     TelegramConnectionState,
 )
 from raidbot.desktop.telegram_setup import AccessibleChat, RaidarCandidate, SessionStatus
@@ -137,6 +139,10 @@ class FakeController(QObject):
         self.bot_action_slot_test_calls = []
         self.bot_action_slot_enabled_updates = []
         self.auto_run_settle_ms_updates = []
+        self.raid_profile_add_calls = []
+        self.raid_profile_remove_calls = []
+        self.raid_profile_move_calls = []
+        self.restart_raid_profile_calls = []
         self.available_windows = [build_window_info()]
         self.active = False
         self.botStateChanged.connect(self._sync_active_state)
@@ -288,6 +294,62 @@ class FakeController(QObject):
 
     def test_bot_action_slot(self, slot_index: int) -> None:
         self.bot_action_slot_test_calls.append(slot_index)
+
+    def add_raid_profile(self, profile_directory: str, label: str) -> None:
+        self.raid_profile_add_calls.append((profile_directory, label))
+        if any(
+            profile.profile_directory == profile_directory
+            for profile in self.config.raid_profiles
+        ):
+            return
+        self.apply_config(
+            replace(
+                self.config,
+                chrome_profile_directory=self.config.raid_profiles[0].profile_directory,
+                raid_profiles=(
+                    *self.config.raid_profiles,
+                    RaidProfileConfig(
+                        profile_directory=profile_directory,
+                        label=label,
+                        enabled=True,
+                    ),
+                ),
+            )
+        )
+
+    def remove_raid_profile(self, profile_directory: str) -> None:
+        self.raid_profile_remove_calls.append(profile_directory)
+
+    def move_raid_profile(self, profile_directory: str, direction: str) -> None:
+        self.raid_profile_move_calls.append((profile_directory, direction))
+        profiles = list(self.config.raid_profiles)
+        current_index = next(
+            (
+                index
+                for index, profile in enumerate(profiles)
+                if profile.profile_directory == profile_directory
+            ),
+            None,
+        )
+        if current_index is None:
+            return
+        target_index = current_index - 1 if direction == "up" else current_index + 1
+        if target_index < 0 or target_index >= len(profiles):
+            return
+        profiles[current_index], profiles[target_index] = (
+            profiles[target_index],
+            profiles[current_index],
+        )
+        self.apply_config(
+            replace(
+                self.config,
+                chrome_profile_directory=profiles[0].profile_directory,
+                raid_profiles=tuple(profiles),
+            )
+        )
+
+    def restart_raid_profile(self, profile_directory: str) -> None:
+        self.restart_raid_profile_calls.append(profile_directory)
 
     def _sync_active_state(self, state: str) -> None:
         self.active = state in {"starting", "running", "stopping"}
@@ -1141,6 +1203,139 @@ def test_main_window_settings_page_hides_legacy_automation_controls(qtbot) -> No
     assert not hasattr(window.settings_page, "browser_mode_combo")
 
 
+def test_main_window_routes_detected_raid_profile_add_and_reorder_actions(qtbot) -> None:
+    from raidbot.desktop.chrome_profiles import ChromeProfile
+
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Default",
+            raid_profiles=(
+                RaidProfileConfig(
+                    profile_directory="Default",
+                    label="George",
+                    enabled=True,
+                ),
+            ),
+        )
+    )
+    window = build_window(
+        controller,
+        FakeStorage(config=controller.config),
+        available_profiles_loader=lambda: [
+            ChromeProfile(directory_name="Default", label="George"),
+            ChromeProfile(directory_name="Profile 3", label="Maria"),
+            ChromeProfile(directory_name="Profile 9", label="Pasok"),
+        ],
+    )
+    qtbot.addWidget(window)
+
+    window.settings_page.available_profile_combo.setCurrentText("Maria [Profile 3]")
+    qtbot.mouseClick(window.settings_page.add_profile_button, Qt.MouseButton.LeftButton)
+    window.settings_page.available_profile_combo.setCurrentText("Pasok [Profile 9]")
+    qtbot.mouseClick(window.settings_page.add_profile_button, Qt.MouseButton.LeftButton)
+    window.settings_page.raid_profiles_list.setCurrentRow(2)
+    qtbot.mouseClick(window.settings_page.move_profile_up_button, Qt.MouseButton.LeftButton)
+
+    assert controller.raid_profile_add_calls == [
+        ("Profile 3", "Maria"),
+        ("Profile 9", "Pasok"),
+    ]
+    assert controller.raid_profile_move_calls == [("Profile 9", "up")]
+    assert [window.settings_page.raid_profiles_list.item(index).text() for index in range(window.settings_page.raid_profiles_list.count())] == [
+        "George [Default]",
+        "Pasok [Profile 9]",
+        "Maria [Profile 3]",
+    ]
+
+
+def test_main_window_renders_raid_profile_cards_from_state(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Default",
+            raid_profiles=(
+                RaidProfileConfig("Default", "George", True),
+                RaidProfileConfig("Profile 3", "Maria", True),
+            ),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Default", "George", "green", None),
+                RaidProfileState("Profile 3", "Maria", "red", "login required"),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    assert list(window.raid_profile_cards) == ["Default", "Profile 3"]
+    assert window.raid_profile_cards["Default"].title_label.text() == "George"
+    assert window.raid_profile_cards["Default"].property("profileStatus") == "green"
+    assert window.raid_profile_cards["Default"].restart_button.isHidden() is True
+    assert window.raid_profile_cards["Profile 3"].title_label.text() == "Maria"
+    assert window.raid_profile_cards["Profile 3"].property("profileStatus") == "red"
+    assert window.raid_profile_cards["Profile 3"].restart_button.isHidden() is False
+    assert (
+        window.raid_profile_cards["Profile 3"].reason_label.text() == "login required"
+    )
+
+
+def test_main_window_profile_card_click_toggles_failure_reason(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "red", "login required"),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+    card = window.raid_profile_cards["Profile 3"]
+
+    assert card.reason_label.isHidden() is True
+
+    qtbot.mouseClick(card, Qt.MouseButton.LeftButton)
+    assert card.reason_label.isHidden() is False
+
+    qtbot.mouseClick(card, Qt.MouseButton.LeftButton)
+    assert card.reason_label.isHidden() is True
+
+
+def test_main_window_profile_card_restart_routes_to_controller(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "red", "login required"),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(
+        window.raid_profile_cards["Profile 3"].restart_button,
+        Qt.MouseButton.LeftButton,
+    )
+
+    assert controller.restart_raid_profile_calls == ["Profile 3"]
+
+
 def test_main_window_routes_settings_apply_errors_back_to_settings_status(qtbot) -> None:
     window = build_window(FailingApplyController(), FakeStorage())
     qtbot.addWidget(window)
@@ -1420,7 +1615,7 @@ def test_main_window_feeds_settings_page_real_profiles_and_session_status(qtbot)
 
     assert window.settings_page.session_status_label.text() == "authorized"
     assert window.settings_page.profile_combo.count() == 3
-    assert window.settings_page.profile_combo.currentText() == "Profile 3"
+    assert window.settings_page.profile_combo.currentText() == "Default"
     assert window.settings_page.reauthorize_button.isEnabled() is False
     assert "delete the saved desktop config file" in window.settings_page.reauthorize_hint_label.text().lower()
     assert "restart the app" in window.settings_page.reauthorize_hint_label.text().lower()
@@ -1468,10 +1663,10 @@ def test_main_window_default_loaders_feed_settings_page(qtbot, monkeypatch) -> N
     assert window.settings_page.session_status_label.text() == "authorized"
     assert [window.settings_page.profile_combo.itemText(index) for index in range(window.settings_page.profile_combo.count())] == [
         "Default",
-        "Profile 3",
-        "Profile 9",
+        "Raid [Profile 3]",
+        "Alt [Profile 9]",
     ]
-    assert window.settings_page.profile_combo.currentText() == "Profile 3"
+    assert window.settings_page.profile_combo.currentText() == "Default"
     assert window.settings_page.reauthorize_button.isEnabled() is False
 
 
