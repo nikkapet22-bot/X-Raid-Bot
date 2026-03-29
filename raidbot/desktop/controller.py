@@ -766,6 +766,7 @@ class DesktopController(QObject):
             "invalid_click_target": "invalid click target",
             "no_presets_configured": "no presets configured",
             "finish_template_missing": "finish image missing",
+            "finish_template_2_missing": "finish image 2 missing",
             "runtime_error": "runtime error",
             "stopped": "stopped",
         }

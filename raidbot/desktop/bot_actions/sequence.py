@@ -63,6 +63,9 @@ def _build_slot_step(
         finish_template_path=(
             slot.finish_template_path if slot_1_preset is not None else None
         ),
+        finish_template_path_2=(
+            slot.finish_template_path_2 if slot_1_preset is not None else None
+        ),
     )
 
 

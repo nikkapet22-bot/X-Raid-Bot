@@ -87,6 +87,7 @@ def test_build_bot_action_sequence_chooses_random_slot_1_preset() -> None:
                 enabled=True,
                 template_path=Path("captures/r.png"),
                 finish_template_path=Path("captures/finish.png"),
+                finish_template_path_2=Path("captures/finish-2.png"),
                 presets=(
                     BotActionPreset(id="preset-1", text="gm"),
                     BotActionPreset(
@@ -106,6 +107,7 @@ def test_build_bot_action_sequence_chooses_random_slot_1_preset() -> None:
     assert step.preset_text == "wagmi"
     assert step.preset_image_path == Path("captures/reply.png")
     assert step.finish_template_path == Path("captures/finish.png")
+    assert step.finish_template_path_2 == Path("captures/finish-2.png")
     assert result.warnings == ()
 
 

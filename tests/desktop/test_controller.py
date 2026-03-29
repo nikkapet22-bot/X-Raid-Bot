@@ -467,7 +467,7 @@ def test_controller_capture_updates_bot_action_slot_template_and_saves(qtbot) ->
     ).bot_action_slots[1:]
 
 
-def test_controller_persists_slot_1_presets_and_finish_template(qtbot) -> None:
+def test_controller_persists_slot_1_presets_and_both_finish_templates(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 
     storage = FakeStorage()
@@ -492,18 +492,62 @@ def test_controller_persists_slot_1_presets_and_finish_template(qtbot) -> None:
         ),
     )
     finish_template_path = Path("bot_actions/slot_1_r_finish.png")
+    finish_template_path_2 = Path("bot_actions/slot_1_r_finish_2.png")
 
     controller.set_bot_action_slot_1_presets(
         presets=presets,
         finish_template_path=finish_template_path,
+        finish_template_path_2=finish_template_path_2,
     )
 
     saved_slot = storage.saved_configs[-1].bot_action_slots[0]
     assert saved_slot.presets == presets
     assert saved_slot.finish_template_path == finish_template_path
+    assert saved_slot.finish_template_path_2 == finish_template_path_2
     assert controller.config.bot_action_slots[0].presets == presets
     assert controller.config.bot_action_slots[0].finish_template_path == finish_template_path
+    assert controller.config.bot_action_slots[0].finish_template_path_2 == finish_template_path_2
     assert updated_configs[-1].bot_action_slots[0].presets == presets
+
+
+def test_controller_maps_slot_test_second_finish_image_missing(qtbot, tmp_path: Path) -> None:
+    from raidbot.desktop.controller import DesktopController
+    from raidbot.desktop.automation.runner import RunResult
+
+    template_path = tmp_path / "slot_1_r.png"
+    template_path.write_bytes(b"capture")
+    runtime = FakeSlotTestRuntime(
+        windows=[SimpleNamespace(handle=9, last_focused_at=1.0, title="Chrome 1")],
+        result=RunResult(status="failed", failure_reason="finish_template_2_missing"),
+    )
+    controller = DesktopController(
+        storage=FakeStorage(),
+        config=build_config(
+            bot_action_slots=(
+                replace(
+                    build_config().bot_action_slots[0],
+                    template_path=template_path,
+                    presets=(BotActionPreset(id="preset-1", text="gm"),),
+                    finish_template_path=tmp_path / "finish.png",
+                ),
+                *build_config().bot_action_slots[1:],
+            )
+        ),
+        runner_factory=ImmediateRunner,
+        automation_runtime_probe=lambda: (True, None),
+        automation_runtime_factory=lambda _emit_event: runtime,
+    )
+    events = []
+    controller.botActionRunEvent.connect(events.append)
+
+    controller.test_bot_action_slot(0)
+
+    assert events[-1] == {
+        "type": "slot_test_failed",
+        "slot_index": 0,
+        "reason": "finish_template_2_missing",
+        "message": "Slot 1 (R): finish image 2 missing",
+    }
 
 
 def test_controller_ignores_noop_slot_template_updates(qtbot) -> None:

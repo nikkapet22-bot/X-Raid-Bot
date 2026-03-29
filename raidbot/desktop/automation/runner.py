@@ -375,6 +375,7 @@ class SequenceRunner:
             step.preset_image_path is not None
             and Path(step.preset_image_path).exists()
         ):
+            self.sleep(0.5)
             self.input_driver.paste_image(Path(step.preset_image_path))
         finish_template_path = step.finish_template_path
         if finish_template_path is None or not Path(finish_template_path).exists():
@@ -413,13 +414,51 @@ class SequenceRunner:
                 "point": finish_point,
             }
         )
-        confirmation = self._confirm_ui_changed_after_click(
+        finish_template_path_2 = step.finish_template_path_2
+        if finish_template_path_2 is None or not Path(finish_template_path_2).exists():
+            return RunResult(
+                status="failed",
+                failure_reason="finish_template_2_missing",
+                window_handle=finish_window.handle,
+                step_index=step_index,
+            )
+        self.sleep(0.5)
+        finish_template_2 = self.template_loader(finish_template_path_2)
+        finish_location_2 = self._find_match_for_template(
             finish_window,
             step,
             step_index,
-            finish_template,
-            finish_match,
-            finish_frame,
+            finish_template_2,
+        )
+        if isinstance(finish_location_2, RunResult):
+            return finish_location_2
+        finish_window_2, finish_frame_2, finish_match_2 = finish_location_2
+        finish_window_2 = self._refresh_active_window(finish_window_2, step_index)
+        if isinstance(finish_window_2, RunResult):
+            return finish_window_2
+        finish_point_2 = self._resolve_click_point(
+            finish_window_2,
+            step,
+            step_index,
+            finish_match_2,
+        )
+        if isinstance(finish_point_2, RunResult):
+            return finish_point_2
+        self.input_driver.move_click(finish_point_2, delay_seconds=0.5)
+        self.emit_event(
+            {
+                "type": "step_clicked",
+                "step_index": step_index,
+                "point": finish_point_2,
+            }
+        )
+        confirmation = self._confirm_ui_changed_after_click(
+            finish_window_2,
+            step,
+            step_index,
+            finish_template_2,
+            finish_match_2,
+            finish_frame_2,
         )
         if isinstance(confirmation, RunResult):
             if confirmation.status == "completed":
@@ -427,24 +466,24 @@ class SequenceRunner:
                     {
                         "type": "step_succeeded",
                         "step_index": step_index,
-                        "window_handle": finish_window.handle,
+                        "window_handle": finish_window_2.handle,
                     }
                 )
                 return None
             return confirmation
-        if self._step_succeeded(finish_match, confirmation):
+        if self._step_succeeded(finish_match_2, confirmation):
             self.emit_event(
                 {
                     "type": "step_succeeded",
                     "step_index": step_index,
-                    "window_handle": finish_window.handle,
+                    "window_handle": finish_window_2.handle,
                 }
             )
             return None
         return RunResult(
             status="failed",
             failure_reason="ui_did_not_change",
-            window_handle=finish_window.handle,
+            window_handle=finish_window_2.handle,
             step_index=step_index,
         )
 
