@@ -234,6 +234,21 @@ class SlotCaptureService:
         if image is None:
             return existing_path
         target_path = self.base_dir / "bot_actions" / f"{slot.key}.png"
+        return self._save_capture(image, target_path)
+
+    def capture_to_path(
+        self,
+        relative_path: Path,
+        *,
+        existing_path: Path | None = None,
+    ) -> Path | None:
+        image = self.capture_overlay.capture()
+        if image is None:
+            return existing_path
+        target_path = self.base_dir / Path(relative_path)
+        return self._save_capture(image, target_path)
+
+    def _save_capture(self, image: Any, target_path: Path) -> Path:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         save_result = image.save(str(target_path))
         if save_result is False or not target_path.exists():

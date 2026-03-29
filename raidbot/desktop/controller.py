@@ -10,6 +10,7 @@ from typing import Any
 from PySide6.QtCore import QObject, Signal, Slot
 
 from raidbot.desktop.automation import runtime as automation_runtime
+from raidbot.desktop.models import BotActionPreset
 from raidbot.desktop.storage import DesktopStorage
 from raidbot.desktop.worker import DesktopBotWorker
 
@@ -225,6 +226,46 @@ class DesktopController(QObject):
             resolve_sender_entries=False,
         )
 
+    def set_bot_action_slot_1_presets(
+        self,
+        *,
+        presets: tuple[BotActionPreset, ...],
+        finish_template_path: Path | None,
+    ) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        current_slot = self.config.bot_action_slots[0]
+        normalized_presets = tuple(
+            BotActionPreset(
+                id=str(preset.id),
+                text=str(preset.text),
+                image_path=(
+                    Path(preset.image_path)
+                    if preset.image_path is not None
+                    else None
+                ),
+            )
+            for preset in presets
+        )
+        normalized_finish_template_path = (
+            Path(finish_template_path) if finish_template_path is not None else None
+        )
+        if (
+            current_slot.presets == normalized_presets
+            and current_slot.finish_template_path == normalized_finish_template_path
+        ):
+            return
+        updated_slots = list(self.config.bot_action_slots)
+        updated_slots[0] = replace(
+            current_slot,
+            presets=normalized_presets,
+            finish_template_path=normalized_finish_template_path,
+        )
+        self._persist_config(
+            replace(self.config, bot_action_slots=tuple(updated_slots)),
+            resolve_sender_entries=False,
+        )
+
     def test_bot_action_slot(self, slot_index: int) -> None:
         if self.config is None:
             raise ValueError("No desktop configuration is available")
@@ -289,6 +330,7 @@ class DesktopController(QObject):
                 runtime,
                 build_slot_test_sequence(slot),
                 getattr(selected_window, "handle", None),
+                require_interactable_window=False,
             )
         )
 
@@ -545,9 +587,23 @@ class DesktopController(QObject):
     def _receive_automation_event(self, event: dict[str, Any]) -> None:
         self._automationEventReceived.emit(event)
 
-    def _run_automation_sequence(self, runtime, sequence, selected_window_handle: int | None) -> None:
+    def _run_automation_sequence(
+        self,
+        runtime,
+        sequence,
+        selected_window_handle: int | None,
+        *,
+        require_interactable_window: bool = True,
+    ) -> None:
         try:
-            result = runtime.run_sequence(sequence, selected_window_handle)
+            if require_interactable_window:
+                result = runtime.run_sequence(sequence, selected_window_handle)
+            else:
+                result = runtime.run_sequence(
+                    sequence,
+                    selected_window_handle,
+                    require_interactable_window=False,
+                )
         except Exception as exc:
             self._submissionFailed.emit(str(exc))
             from raidbot.desktop.automation.runner import RunResult

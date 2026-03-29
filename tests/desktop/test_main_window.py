@@ -15,6 +15,7 @@ from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
 from raidbot.desktop.automation.windowing import WindowInfo
 from raidbot.desktop.models import (
     ActivityEntry,
+    BotActionPreset,
     BotRuntimeState,
     DesktopAppConfig,
     DesktopAppState,
@@ -131,6 +132,7 @@ class FakeController(QObject):
         self.automation_run_calls = []
         self.automation_dry_run_calls = []
         self.bot_action_slot_template_updates = []
+        self.bot_action_slot_1_presets_updates = []
         self.bot_action_slot_test_calls = []
         self.bot_action_slot_enabled_updates = []
         self.auto_run_settle_ms_updates = []
@@ -266,6 +268,21 @@ class FakeController(QObject):
         )
         self.apply_config(replace(self.config, bot_action_slots=tuple(updated_slots)))
 
+    def set_bot_action_slot_1_presets(
+        self,
+        *,
+        presets: tuple[BotActionPreset, ...],
+        finish_template_path: Path | None,
+    ) -> None:
+        self.bot_action_slot_1_presets_updates.append((presets, finish_template_path))
+        updated_slots = list(self.config.bot_action_slots)
+        updated_slots[0] = replace(
+            updated_slots[0],
+            presets=presets,
+            finish_template_path=finish_template_path,
+        )
+        self.apply_config(replace(self.config, bot_action_slots=tuple(updated_slots)))
+
     def test_bot_action_slot(self, slot_index: int) -> None:
         self.bot_action_slot_test_calls.append(slot_index)
 
@@ -283,9 +300,16 @@ class FakeSlotCaptureService:
         self.returned_path = returned_path
         self.error = error
         self.calls = []
+        self.capture_to_path_calls = []
 
     def capture_slot(self, slot, existing_path: Path | None = None):
         self.calls.append((slot, existing_path))
+        if self.error is not None:
+            raise self.error
+        return self.returned_path
+
+    def capture_to_path(self, relative_path: Path, *, existing_path: Path | None = None):
+        self.capture_to_path_calls.append((relative_path, existing_path))
         if self.error is not None:
             raise self.error
         return self.returned_path
@@ -729,6 +753,33 @@ def test_main_window_capture_updates_bot_action_slot_via_controller(qtbot) -> No
         window.bot_actions_page.slot_boxes[0].template_status_label.text()
         == str(captured_path)
     )
+    assert window.bot_actions_page.status_label.text() == "Status: Slot 1 (R): image saved"
+
+
+def test_main_window_slot_1_presets_dialog_capture_updates_finish_preview(qtbot) -> None:
+    finish_path = Path("bot_actions/slot_1_r_finish.png")
+    capture_service = FakeSlotCaptureService(finish_path)
+    controller = FakeController()
+    window = build_window(
+        controller,
+        FakeStorage(),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.bot_actions_page.slot_boxes[0].presets_button, Qt.MouseButton.LeftButton)
+
+    dialog = window._slot_1_presets_dialog
+    assert dialog is not None
+
+    qtbot.mouseClick(dialog.capture_finish_button, Qt.MouseButton.LeftButton)
+
+    assert capture_service.capture_to_path_calls == [
+        (Path("bot_actions/slot_1_r_finish.png"), None)
+    ]
+    assert controller.bot_action_slot_1_presets_updates[-1] == ((), finish_path)
+    assert dialog.finish_template_path == finish_path
+    assert dialog.finish_image_status_label.text() == str(finish_path)
 
 
 def test_main_window_test_button_calls_controller_slot_test(qtbot) -> None:
@@ -995,14 +1046,14 @@ def test_automation_page_shows_immediate_feedback_for_common_buttons(qtbot) -> N
     assert deleted == ["seq-1"]
 
 
-def test_main_window_settings_page_shows_browser_mode_and_executor(qtbot) -> None:
+def test_main_window_settings_page_hides_legacy_automation_controls(qtbot) -> None:
     from raidbot.desktop.main_window import MainWindow
 
     window = MainWindow(controller=FakeController(), storage=FakeStorage())
     qtbot.addWidget(window)
 
-    assert window.settings_page.browser_mode_combo.currentText() == "launch-only"
-    assert window.settings_page.executor_name_label.text() == "noop"
+    assert not hasattr(window.settings_page, "automation_section")
+    assert not hasattr(window.settings_page, "browser_mode_combo")
 
 
 def test_main_window_routes_settings_apply_errors_back_to_settings_status(qtbot) -> None:

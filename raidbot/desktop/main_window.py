@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from raidbot.desktop.bot_actions import BotActionsPage
 from raidbot.desktop.bot_actions.capture import SlotCaptureService
+from raidbot.desktop.bot_actions.presets_dialog import Slot1PresetsDialog
 from raidbot.desktop.chrome_profiles import detect_chrome_environment
 from raidbot.desktop.models import DesktopAppState
 from raidbot.desktop.settings_page import SettingsPage
@@ -61,6 +62,7 @@ class MainWindow(QMainWindow):
         self._bot_actions_current_slot_text: str | None = None
         self._bot_actions_last_error_text: str | None = None
         self._bot_actions_run_slots_snapshot: tuple[tuple[int, str], ...] = ()
+        self._slot_1_presets_dialog: Slot1PresetsDialog | None = None
 
         self.setWindowTitle("Raid Bot")
 
@@ -113,6 +115,9 @@ class MainWindow(QMainWindow):
         self.bot_actions_page.slotCaptureRequested.connect(self._capture_bot_action_slot)
         self.bot_actions_page.slotTestRequested.connect(
             self.controller.test_bot_action_slot
+        )
+        self.bot_actions_page.slotPresetsRequested.connect(
+            self._open_bot_action_slot_presets
         )
         self.bot_actions_page.slotEnabledChanged.connect(
             self.controller.set_bot_action_slot_enabled
@@ -461,8 +466,76 @@ class MainWindow(QMainWindow):
                 existing_path=slot.template_path,
             )
             self.controller.set_bot_action_slot_template_path(slot_index, template_path)
+            if template_path is not None:
+                self._bot_actions_status_text = (
+                    f"{self._format_bot_action_slot(slot_index, slot.label)}: image saved"
+                )
+                self._bot_actions_last_error_text = None
+                self._bot_actions_current_slot_text = None
+                self._render_bot_actions_status()
         except Exception as exc:
             self._show_bot_actions_error(str(exc))
+
+    def _open_bot_action_slot_presets(self, slot_index: int) -> None:
+        if slot_index != 0:
+            return
+        slot = self.controller.config.bot_action_slots[0]
+        dialog = Slot1PresetsDialog(slot=slot, parent=self)
+        dialog.capture_finish_button.clicked.connect(self._capture_slot_1_finish_template)
+        dialog.button_box.accepted.connect(self._save_slot_1_presets_dialog)
+        dialog.finished.connect(self._clear_slot_1_presets_dialog)
+        self._slot_1_presets_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _capture_slot_1_finish_template(self) -> None:
+        dialog = self._slot_1_presets_dialog
+        if dialog is None:
+            return
+        try:
+            finish_template_path = self.slot_capture_service.capture_to_path(
+                Path("bot_actions/slot_1_r_finish.png"),
+                existing_path=dialog.finish_template_path,
+            )
+            dialog.finish_template_path = finish_template_path
+            dialog.finish_image_status_label.setText(
+                str(finish_template_path)
+                if finish_template_path is not None
+                else "No finish image"
+            )
+            updated_slot = dialog.build_updated_slot()
+            self.controller.set_bot_action_slot_1_presets(
+                presets=updated_slot.presets,
+                finish_template_path=updated_slot.finish_template_path,
+            )
+            if finish_template_path is not None:
+                self._bot_actions_status_text = "Slot 1 (R): finish image saved"
+                self._bot_actions_last_error_text = None
+                self._bot_actions_current_slot_text = None
+                self._render_bot_actions_status()
+        except Exception as exc:
+            self._show_bot_actions_error(str(exc))
+
+    def _save_slot_1_presets_dialog(self) -> None:
+        dialog = self._slot_1_presets_dialog
+        if dialog is None:
+            return
+        try:
+            updated_slot = dialog.build_updated_slot()
+            self.controller.set_bot_action_slot_1_presets(
+                presets=updated_slot.presets,
+                finish_template_path=updated_slot.finish_template_path,
+            )
+            self._bot_actions_status_text = "Slot 1 (R): presets saved"
+            self._bot_actions_last_error_text = None
+            self._bot_actions_current_slot_text = None
+            self._render_bot_actions_status()
+        except Exception as exc:
+            self._show_bot_actions_error(str(exc))
+
+    def _clear_slot_1_presets_dialog(self, _result: int) -> None:
+        self._slot_1_presets_dialog = None
 
     def _sync_config(self, config) -> None:
         self.settings_page.set_config(config)
@@ -536,6 +609,9 @@ class MainWindow(QMainWindow):
             return None
         slot_number, slot_label = self._bot_actions_run_slots_snapshot[step_index]
         return f"Slot {slot_number} ({slot_label})"
+
+    def _format_bot_action_slot(self, slot_index: int, slot_label: str) -> str:
+        return f"Slot {slot_index + 1} ({slot_label})"
 
     def _render_bot_actions_status(self) -> None:
         lines = [f"Status: {self._bot_actions_status_text}"]

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
-from raidbot.desktop.models import DesktopAppConfig
+from raidbot.desktop.models import BotActionPreset, DesktopAppConfig
 
 
 class FakeStorage:
@@ -149,8 +149,14 @@ class FakeSlotTestRuntime:
     def list_target_windows(self):
         return list(self.windows)
 
-    def run_sequence(self, sequence, selected_window_handle):
-        self.run_calls.append((sequence, selected_window_handle))
+    def run_sequence(
+        self,
+        sequence,
+        selected_window_handle,
+        *,
+        require_interactable_window=True,
+    ):
+        self.run_calls.append((sequence, selected_window_handle, require_interactable_window))
         return self.result
 
     def dry_run_step(self, sequence, step_index, selected_window_handle):
@@ -461,6 +467,45 @@ def test_controller_capture_updates_bot_action_slot_template_and_saves(qtbot) ->
     ).bot_action_slots[1:]
 
 
+def test_controller_persists_slot_1_presets_and_finish_template(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    config = build_config(
+        allowed_sender_ids=[42],
+        allowed_sender_entries=("raidar",),
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=config,
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: FailIfResolveCalled(),
+    )
+    updated_configs = []
+    controller.configChanged.connect(updated_configs.append)
+    presets = (
+        BotActionPreset(
+            id="preset-1",
+            text="gm",
+            image_path=Path("bot_actions/presets/gm.png"),
+        ),
+    )
+    finish_template_path = Path("bot_actions/slot_1_r_finish.png")
+
+    controller.set_bot_action_slot_1_presets(
+        presets=presets,
+        finish_template_path=finish_template_path,
+    )
+
+    saved_slot = storage.saved_configs[-1].bot_action_slots[0]
+    assert saved_slot.presets == presets
+    assert saved_slot.finish_template_path == finish_template_path
+    assert controller.config.bot_action_slots[0].presets == presets
+    assert controller.config.bot_action_slots[0].finish_template_path == finish_template_path
+    assert updated_configs[-1].bot_action_slots[0].presets == presets
+
+
 def test_controller_ignores_noop_slot_template_updates(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 
@@ -689,6 +734,7 @@ def test_controller_runs_slot_test_against_most_recent_chrome_window(qtbot, tmp_
     ]
     assert events[-1]["message"] == "Slot 1 (R): success"
     assert runtime.run_calls[0][1] == 9
+    assert runtime.run_calls[0][2] is False
     assert runtime.run_calls[0][0].steps[0].template_path == template_path
 
 
