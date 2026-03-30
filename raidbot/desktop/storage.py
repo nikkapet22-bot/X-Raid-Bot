@@ -329,6 +329,7 @@ class DesktopStorage:
             "profile_directory": profile.profile_directory,
             "label": profile.label,
             "enabled": profile.enabled,
+            "raid_on_restart": profile.raid_on_restart,
         }
 
     def _raid_profile_config_from_data(self, data: dict[str, Any]) -> RaidProfileConfig:
@@ -337,6 +338,7 @@ class DesktopStorage:
             profile_directory=profile_directory,
             label=str(data.get("label") or profile_directory).strip() or profile_directory,
             enabled=self._maybe_bool(data.get("enabled"), default=True),
+            raid_on_restart=self._maybe_bool(data.get("raid_on_restart"), default=False),
         )
 
     def _raid_profile_state_to_data(self, profile_state: RaidProfileState) -> dict[str, Any]:

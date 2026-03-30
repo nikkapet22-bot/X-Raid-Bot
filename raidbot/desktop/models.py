@@ -47,6 +47,7 @@ class RaidProfileConfig:
     profile_directory: str
     label: str
     enabled: bool = True
+    raid_on_restart: bool = False
 
 
 @dataclass(eq=True)
@@ -253,6 +254,7 @@ class DesktopAppConfig:
                     profile_directory=profile_directory,
                     label=label or profile_directory,
                     enabled=bool(getattr(profile, "enabled", True)),
+                    raid_on_restart=bool(getattr(profile, "raid_on_restart", False)),
                 )
             )
         if normalized_profiles:

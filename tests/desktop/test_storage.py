@@ -111,11 +111,13 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
                 profile_directory="Default",
                 label="George",
                 enabled=True,
+                raid_on_restart=False,
             ),
             RaidProfileConfig(
                 profile_directory="Profile 3",
                 label="Maria",
                 enabled=False,
+                raid_on_restart=True,
             ),
         ),
     )
@@ -129,11 +131,13 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
             profile_directory="Default",
             label="George",
             enabled=True,
+            raid_on_restart=False,
         ),
         RaidProfileConfig(
             profile_directory="Profile 3",
             label="Maria",
             enabled=False,
+            raid_on_restart=True,
         ),
     )
 
