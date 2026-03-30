@@ -10,10 +10,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QObject, QRect, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QIcon
-from PySide6.QtWidgets import QApplication, QScrollArea, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QSystemTrayIcon, QWidget
 
 from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
 from raidbot.desktop.automation.windowing import WindowInfo
+from raidbot.desktop.main_window import ActivityBadge, MainWindow
 from raidbot.desktop.models import (
     ActivityEntry,
     BotActionPreset,
@@ -389,8 +390,6 @@ class FakeSlotCaptureService:
 
 
 def build_window(controller: FakeController, storage: FakeStorage, **overrides):
-    from raidbot.desktop.main_window import MainWindow
-
     values = {
         "controller": controller,
         "storage": storage,
@@ -468,7 +467,10 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
         state=DesktopAppState(
             bot_state=BotRuntimeState.stopped,
             connection_state=TelegramConnectionState.disconnected,
+            raids_detected=6,
             raids_opened=4,
+            raids_completed=3,
+            raids_failed=1,
             duplicates_skipped=2,
             non_matching_skipped=3,
             open_failures=1,
@@ -503,23 +505,25 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
 
     assert window.bot_state_label.text() == "stopped"
     assert window.connection_state_label.text() == "disconnected"
+    assert window.raids_detected_label.text() == "6"
     assert window.raids_opened_label.text() == "4"
-    assert window.sender_rejected_label.text() == "5"
-    assert window.browser_session_failed_label.text() == "6"
-    assert window.page_ready_label.text() == "7"
-    assert window.executor_not_configured_label.text() == "8"
-    assert window.executor_succeeded_label.text() == "9"
-    assert window.executor_failed_label.text() == "10"
-    assert window.session_closed_label.text() == "11"
+    assert window.raids_completed_label.text() == "3"
+    assert window.raids_failed_label.text() == "1"
     assert window.last_error_label.text() == "boom"
-    assert window.activity_list.count() == 2
+    assert window.activity_list.count() == 1
     assert "Page Ready" in window.activity_list.item(0).text()
-    assert "Sender Rejected" in window.activity_list.item(1).text()
+    first_activity_widget = window.activity_list.itemWidget(window.activity_list.item(0))
+    assert first_activity_widget.property("activityTone") == "accent"
+    first_badge = first_activity_widget.findChild(ActivityBadge, "activityBadge")
+    assert first_badge is not None
 
     updated_state = DesktopAppState(
         bot_state=BotRuntimeState.running,
         connection_state=TelegramConnectionState.connected,
+        raids_detected=7,
         raids_opened=5,
+        raids_completed=4,
+        raids_failed=2,
         duplicates_skipped=2,
         non_matching_skipped=3,
         open_failures=1,
@@ -546,21 +550,25 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
                 reason="executor crashed",
             )
         )
+        controller.activityAdded.emit(
+            ActivityEntry(
+                timestamp=datetime(2026, 3, 26, 10, 11, 0),
+                action="duplicate",
+                url="https://x.com/i/status/201",
+                reason="duplicate",
+            )
+        )
         controller.errorRaised.emit("new-error")
 
         assert window.bot_state_label.text() == "running"
         assert window.connection_state_label.text() == "connected"
+        assert window.raids_detected_label.text() == "7"
         assert window.raids_opened_label.text() == "5"
-        assert window.sender_rejected_label.text() == "12"
-        assert window.browser_session_failed_label.text() == "13"
-        assert window.page_ready_label.text() == "14"
-        assert window.executor_not_configured_label.text() == "15"
-        assert window.executor_succeeded_label.text() == "16"
-        assert window.executor_failed_label.text() == "17"
-        assert window.session_closed_label.text() == "18"
+        assert window.raids_completed_label.text() == "4"
+        assert window.raids_failed_label.text() == "2"
         assert window.last_successful_label.text() == "2026-03-26T10:10:00"
         assert window.last_error_label.text() == "new-error"
-        assert window.activity_list.count() == 3
+        assert window.activity_list.count() == 2
         assert "Executor Failed" in window.activity_list.item(0).text()
         assert "Page Ready" in window.activity_list.item(1).text()
     finally:
@@ -578,7 +586,7 @@ def test_main_window_dashboard_exposes_metric_cards_and_panels(qtbot) -> None:
     assert window.command_bot_state_label.objectName() == "commandBotStateLabel"
     assert window.command_connection_state_label.objectName() == "commandConnectionStateLabel"
     assert window.status_panel.objectName() == "statusPanel"
-    assert len(window.metric_cards) == 11
+    assert len(window.metric_cards) == 4
     assert window.activity_panel.objectName() == "activityPanel"
     assert window.error_panel.objectName() == "errorPanel"
     assert window.command_status_row.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
@@ -591,7 +599,8 @@ def test_main_window_removed_generic_automation_controls_are_not_visible(qtbot) 
     window = build_window(FakeController(), FakeStorage())
     qtbot.addWidget(window)
 
-    assert window.tabs.tabText(2) == "Bot Actions"
+    assert window.findChild(QWidget, "sidebar") is not None
+    assert window.stack.count() == 3
     assert hasattr(window, "bot_actions_page")
     assert not hasattr(window, "automation_page")
     assert not hasattr(window.bot_actions_page, "sequence_list")
@@ -1372,7 +1381,7 @@ def test_main_window_routes_settings_apply_errors_back_to_settings_status(qtbot)
 
     qtbot.mouseClick(window.settings_page.save_button, Qt.MouseButton.LeftButton)
 
-    assert window.settings_page.status_label.text() == "Could not resolve sender '@missing'."
+    assert "Could not resolve sender '@missing'." in window.settings_page.status_label.text()
 
 
 def test_main_window_uses_visible_fallback_icon_for_tray(qtbot) -> None:
@@ -1665,6 +1674,14 @@ def test_main_window_restore_from_tray_uses_last_known_geometry(qtbot) -> None:
     window.restore_from_tray()
 
     assert window.geometry() == expected_geometry
+
+
+def test_main_window_uses_sidebar_shell(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    assert window.findChild(QWidget, "sidebar") is not None
+    assert getattr(window, "stack", None) is not None
 
 
 def test_main_window_feeds_settings_page_real_profiles_and_session_status(qtbot) -> None:

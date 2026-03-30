@@ -255,7 +255,10 @@ def test_state_round_trip_includes_activity_entries(tmp_path) -> None:
     state = DesktopAppState(
         bot_state=BotRuntimeState.stopped,
         connection_state=TelegramConnectionState.disconnected,
+        raids_detected=9,
         raids_opened=7,
+        raids_completed=3,
+        raids_failed=2,
         duplicates_skipped=2,
         non_matching_skipped=5,
         open_failures=1,
@@ -521,7 +524,10 @@ def test_storage_load_state_defaults_new_pipeline_counters_to_zero(tmp_path) -> 
             {
                 "bot_state": "stopped",
                 "connection_state": "disconnected",
+                "raids_detected": 6,
                 "raids_opened": 7,
+                "raids_completed": 4,
+                "raids_failed": 1,
                 "duplicates_skipped": 2,
                 "non_matching_skipped": 5,
                 "open_failures": 1,
@@ -532,7 +538,10 @@ def test_storage_load_state_defaults_new_pipeline_counters_to_zero(tmp_path) -> 
 
     loaded = storage.load_state()
 
+    assert loaded.raids_detected == 6
     assert loaded.raids_opened == 7
+    assert loaded.raids_completed == 4
+    assert loaded.raids_failed == 1
     assert loaded.duplicates_skipped == 2
     assert loaded.non_matching_skipped == 5
     assert loaded.open_failures == 1

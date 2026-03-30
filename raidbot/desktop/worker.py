@@ -42,6 +42,16 @@ from raidbot.telegram_client import TelegramRaidListener
 
 EmitEvent = Callable[[dict[str, Any]], None]
 NowFactory = Callable[[], datetime]
+_DEDUPED_ACTIVITY_ACTIONS = {
+    "automation_started",
+    "automation_succeeded",
+    "browser_session_opened",
+    "page_ready",
+    "executor_not_configured",
+    "executor_succeeded",
+    "executor_failed",
+    "session_closed",
+}
 
 
 class DesktopBotWorker:
@@ -75,6 +85,7 @@ class DesktopBotWorker:
 
         self.state = self.storage.load_state()
         self._dedupe_store = InMemoryOpenedUrlStore()
+        self._restore_dedupe_store_from_state()
         self._service: Any | None = None
         self._pipeline: Any | None = None
         self._listener: Any | None = None
@@ -85,9 +96,18 @@ class DesktopBotWorker:
         self._automation_reserved_urls: set[str] = set()
         self._active_auto_sequence_id: str | None = None
         self._bot_action_sequence_error: str | None = None
+        self._automation_failure_already_recorded = False
         self._restart_requested = False
         self._stop_requested = False
         self._sync_raid_profile_states(save=False, emit=False)
+
+    def _restore_dedupe_store_from_state(self) -> None:
+        for entry in self.state.activity:
+            url = getattr(entry, "url", None)
+            action = getattr(entry, "action", None)
+            if not url or action not in _DEDUPED_ACTIVITY_ACTIONS:
+                continue
+            self._dedupe_store.mark_if_new(url)
 
     async def run(self) -> None:
         self._stop_requested = False
@@ -349,6 +369,7 @@ class DesktopBotWorker:
         if runtime is None:
             return False, "automation_runtime_unavailable"
         preset_chooser = build_slot_1_preset_chooser()
+        self._automation_failure_already_recorded = False
         build_result = self._build_active_bot_action_sequence_result(
             choose_preset=preset_chooser,
         )
@@ -365,8 +386,12 @@ class DesktopBotWorker:
             )
         eligible_profiles = self._eligible_raid_profiles()
         if not eligible_profiles:
-            return True, None
+            return False, "all_profiles_blocked"
 
+        raid_opened = False
+        raid_succeeded = False
+        failure_recorded = False
+        last_failure_reason: str | None = None
         for profile_index, profile in enumerate(eligible_profiles):
             sequence = (
                 build_result.sequence
@@ -382,25 +407,33 @@ class DesktopBotWorker:
                 previous_windows,
             )
             if open_failure_reason is not None or profile_context is None or opened_window is None:
+                last_failure_reason = open_failure_reason or "target_window_not_found"
                 self._record_raid_profile_failure(
                     item,
                     profile,
-                    open_failure_reason or "target_window_not_found",
+                    last_failure_reason,
                     sequence_id=sequence_id,
                 )
+                failure_recorded = True
                 continue
+
+            if not raid_opened:
+                self._record_whole_raid_opened()
+                raid_opened = True
 
             page_ready_failure_reason = self._wait_for_page_ready(
                 runtime,
                 opened_window.handle,
             )
             if page_ready_failure_reason is not None:
+                last_failure_reason = page_ready_failure_reason
                 self._record_raid_profile_failure(
                     item,
                     profile,
                     page_ready_failure_reason,
                     sequence_id=sequence_id,
                 )
+                failure_recorded = True
                 continue
 
             self._record_activity(
@@ -422,22 +455,26 @@ class DesktopBotWorker:
             status = getattr(result, "status", None)
             failure_reason = getattr(result, "failure_reason", None)
             if status != "completed":
+                last_failure_reason = failure_reason or "automation_execution_failed"
                 self._record_raid_profile_failure(
                     item,
                     profile,
-                    failure_reason or "automation_execution_failed",
+                    last_failure_reason,
                     sequence_id=sequence_id,
                 )
+                failure_recorded = True
                 continue
 
             close_failure_reason = self._close_automation_window_for_profile(runtime)
             if close_failure_reason is not None:
+                last_failure_reason = close_failure_reason
                 self._record_raid_profile_failure(
                     item,
                     profile,
                     close_failure_reason,
                     sequence_id=sequence_id,
                 )
+                failure_recorded = True
                 continue
 
             self._record_raid_profile_success(
@@ -445,8 +482,15 @@ class DesktopBotWorker:
                 profile,
                 sequence_id=sequence_id,
             )
+            raid_succeeded = True
 
-        return True, None
+        if raid_succeeded:
+            self._record_whole_raid_completed()
+            return True, None
+
+        self._record_whole_raid_failed()
+        self._automation_failure_already_recorded = failure_recorded
+        return False, last_failure_reason or "automation_execution_failed"
 
     def _close_automation_window(self, _context) -> None:
         return
@@ -464,6 +508,10 @@ class DesktopBotWorker:
         reason: str,
         context,
     ) -> None:
+        if self._automation_failure_already_recorded:
+            self._automation_failure_already_recorded = False
+            self._active_auto_sequence_id = None
+            return
         reason = self._translate_automation_reason(reason) or "automation_execution_failed"
         self._automation_reserved_urls.discard(item.normalized_url)
         self._record_activity(
@@ -472,7 +520,11 @@ class DesktopBotWorker:
             url=item.normalized_url,
             emit_error=True,
             count_open_failure=(
-                context is not None or reason in {"browser_startup_failure", "chrome_open_failed"}
+                (
+                    context is not None
+                    and reason not in {"all_profiles_blocked", "auto_run_paused"}
+                )
+                or reason in {"browser_startup_failure", "chrome_open_failed"}
             ),
         )
         if context is not None and self._active_auto_sequence_id is not None:
@@ -504,6 +556,9 @@ class DesktopBotWorker:
         self.state.raid_profile_states = tuple(updated_states)
         self.storage.save_state(self.state)
         self._emit("stats_changed", state=self.state)
+        processor = self._automation_processor
+        if processor is not None and processor.state == "paused":
+            processor.clear()
 
     def _eligible_raid_profiles(self) -> tuple[RaidProfileConfig, ...]:
         profile_states_by_directory = {
@@ -867,10 +922,9 @@ class DesktopBotWorker:
         count_open_failure: bool = True,
     ) -> None:
         timestamp = self.now()
-        if action == "browser_session_opened":
-            self.state.raids_opened += 1
-            self.state.last_successful_raid_open_at = timestamp.isoformat()
-        elif action == "automation_started":
+        if action == "raid_detected":
+            self.state.raids_detected += 1
+        elif action == "browser_session_opened":
             self.state.raids_opened += 1
             self.state.last_successful_raid_open_at = timestamp.isoformat()
         elif action == "duplicate":
@@ -883,6 +937,7 @@ class DesktopBotWorker:
         elif action == "browser_session_failed":
             self.state.browser_session_failed += 1
             self.state.open_failures += 1
+            self.state.raids_failed += 1
             self.state.last_error = reason
         elif action == "automation_failed":
             if count_open_failure:
@@ -895,8 +950,10 @@ class DesktopBotWorker:
             self.state.executor_not_configured += 1
         elif action == "executor_succeeded":
             self.state.executor_succeeded += 1
+            self.state.raids_completed += 1
         elif action == "executor_failed":
             self.state.executor_failed += 1
+            self.state.raids_failed += 1
             self.state.last_error = reason
         elif action == "session_closed":
             self.state.session_closed += 1
@@ -908,11 +965,27 @@ class DesktopBotWorker:
             reason=reason,
         )
         self.state.activity = [*self.state.activity, entry][-200:]
-        self.storage.save_state(self.state)
-        self._emit("stats_changed", state=self.state)
+        self._persist_state_snapshot()
         self._emit("activity_added", entry=entry)
         if emit_error:
             self._emit("error", message=reason or action)
+
+    def _record_whole_raid_opened(self) -> None:
+        self.state.raids_opened += 1
+        self.state.last_successful_raid_open_at = self.now().isoformat()
+        self._persist_state_snapshot()
+
+    def _record_whole_raid_completed(self) -> None:
+        self.state.raids_completed += 1
+        self._persist_state_snapshot()
+
+    def _record_whole_raid_failed(self) -> None:
+        self.state.raids_failed += 1
+        self._persist_state_snapshot()
+
+    def _persist_state_snapshot(self) -> None:
+        self.storage.save_state(self.state)
+        self._emit("stats_changed", state=self.state)
 
     def _build_service(self, config: DesktopAppConfig) -> Any:
         if self.service_factory is not None:

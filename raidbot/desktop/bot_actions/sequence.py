@@ -10,6 +10,9 @@ from raidbot.desktop.models import BotActionPreset, BotActionSlotConfig
 
 BOT_ACTION_STEP_SEARCH_SECONDS = 8.0
 SLOT_TEST_STEP_SEARCH_SECONDS = 1.0
+BOT_ACTION_MATCH_THRESHOLD = 0.9
+BOT_ACTION_FIRST_SLOT_SCROLL_ATTEMPTS = 4
+BOT_ACTION_SCROLL_AMOUNT = -360
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,32 @@ class BotActionBuildWarning:
 class BotActionSequenceBuildResult:
     sequence: AutomationSequence
     warnings: tuple[BotActionBuildWarning, ...] = ()
+
+
+def build_slot_1_preset_chooser(
+    *,
+    choose_preset=choice,
+):
+    used_preset_ids: set[str] = set()
+
+    def choose_without_reuse(presets: Sequence[BotActionPreset]) -> BotActionPreset:
+        if len(presets) <= 1:
+            selected = choose_preset(presets)
+            used_preset_ids.add(selected.id)
+            return selected
+
+        available_presets = tuple(
+            preset for preset in presets if preset.id not in used_preset_ids
+        )
+        if not available_presets:
+            used_preset_ids.clear()
+            available_presets = tuple(presets)
+
+        selected = choose_preset(available_presets)
+        used_preset_ids.add(selected.id)
+        return selected
+
+    return choose_without_reuse
 
 
 def _choose_slot_1_preset(
@@ -40,6 +69,7 @@ def _build_slot_step(
     *,
     max_search_seconds: float,
     choose_preset=choice,
+    allow_scroll_retry: bool = False,
 ) -> AutomationStep:
     is_slot_3 = slot.key == "slot_3_r"
     slot_1_preset = None
@@ -48,10 +78,12 @@ def _build_slot_step(
     return AutomationStep(
         name=slot.key,
         template_path=slot.template_path,
-        match_threshold=0.9,
+        match_threshold=BOT_ACTION_MATCH_THRESHOLD,
         max_search_seconds=max_search_seconds,
-        max_scroll_attempts=0,
-        scroll_amount=-120,
+        max_scroll_attempts=(
+            BOT_ACTION_FIRST_SLOT_SCROLL_ATTEMPTS if allow_scroll_retry else 0
+        ),
+        scroll_amount=BOT_ACTION_SCROLL_AMOUNT,
         max_click_attempts=2 if is_slot_3 else 1,
         post_click_settle_ms=250,
         pre_confirm_clicks=2 if is_slot_3 else 1,
@@ -72,7 +104,7 @@ def build_bot_action_sequence(
     choose_preset=choice,
 ) -> BotActionSequenceBuildResult:
     warnings: list[BotActionBuildWarning] = []
-    steps: list[AutomationStep] = []
+    enabled_slots: list[tuple[int, BotActionSlotConfig]] = []
     for slot_index, slot in enumerate(slots):
         if not slot.enabled or slot.template_path is None:
             continue
@@ -84,11 +116,29 @@ def build_bot_action_sequence(
                 )
             )
             continue
+        enabled_slots.append((slot_index, slot))
+
+    ordered_slots = [
+        *(
+            (slot_index, slot)
+            for slot_index, slot in enabled_slots
+            if slot.key != "slot_1_r"
+        ),
+        *(
+            (slot_index, slot)
+            for slot_index, slot in enabled_slots
+            if slot.key == "slot_1_r"
+        ),
+    ]
+
+    steps: list[AutomationStep] = []
+    for _slot_index, slot in ordered_slots:
         steps.append(
             _build_slot_step(
                 slot,
                 max_search_seconds=BOT_ACTION_STEP_SEARCH_SECONDS,
                 choose_preset=choose_preset,
+                allow_scroll_retry=not steps,
             )
         )
     return BotActionSequenceBuildResult(
@@ -114,6 +164,7 @@ def build_slot_test_sequence(
                 slot,
                 max_search_seconds=SLOT_TEST_STEP_SEARCH_SECONDS,
                 choose_preset=choose_preset,
+                allow_scroll_retry=True,
             )
         ],
     )

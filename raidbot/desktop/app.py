@@ -172,6 +172,9 @@ def _restore_retained_window() -> None:
     window = getattr(app, "_raidbot_window", None)
     if window is None:
         return
+    if hasattr(window, "restore_from_tray"):
+        window.restore_from_tray()
+        return
     if hasattr(window, "showNormal"):
         window.showNormal()
     elif hasattr(window, "show"):

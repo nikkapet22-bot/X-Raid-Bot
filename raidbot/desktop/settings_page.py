@@ -261,16 +261,19 @@ class SettingsPage(QWidget):
         try:
             config = self._build_config()
         except ValueError as exc:
-            self.status_label.setText(str(exc))
+            self.show_error(str(exc))
             return
         self.status_label.clear()
+        self.status_label.setStyleSheet("")
         self.applyRequested.emit(config)
 
     def show_error(self, message: str) -> None:
-        self.status_label.setText(message)
+        self.status_label.setText(f"⚠  {message}")
+        self.status_label.setStyleSheet("color: #f87171; font-weight: 500;")
 
     def show_success(self, message: str) -> None:
-        self.status_label.setText(message)
+        self.status_label.setText(f"✓  {message}")
+        self.status_label.setStyleSheet("color: #2dd4bf; font-weight: 500;")
 
     def _build_section(
         self,
@@ -291,15 +294,27 @@ class SettingsPage(QWidget):
         section_layout.addWidget(surface)
 
         surface_layout = QVBoxLayout(surface)
-        surface_layout.setContentsMargins(18, 18, 18, 18)
-        surface_layout.setSpacing(12)
+        surface_layout.setContentsMargins(20, 20, 20, 20)
+        surface_layout.setSpacing(14)
 
         title_label = QLabel(title)
+        title_label.setObjectName("sectionTitle")
+
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet(
+            "background: #1e3252; max-height: 1px; border: none;"
+        )
+
         description_label = QLabel(description)
         description_label.setWordWrap(True)
         description_label.setProperty("muted", True)
 
+        content_layout.setVerticalSpacing(10)
+        content_layout.setHorizontalSpacing(20)
+
         surface_layout.addWidget(title_label)
+        surface_layout.addWidget(divider)
         surface_layout.addWidget(description_label)
         surface_layout.addLayout(content_layout)
         return section, surface

@@ -66,6 +66,9 @@ class TrayController:
         self.controller.start_bot()
 
     def restore_window(self) -> None:
+        if hasattr(self.window, "restore_from_tray"):
+            self.window.restore_from_tray()
+            return
         self.window.showNormal()
         self.window.raise_()
         self.window.activateWindow()

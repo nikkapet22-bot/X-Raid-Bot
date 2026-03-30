@@ -119,7 +119,7 @@ def test_settings_save_rejects_invalid_numeric_input_without_crashing(qtbot) -> 
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
-    assert page.status_label.text() == "Telegram API ID must be a valid integer."
+    assert "Telegram API ID must be a valid integer." in page.status_label.text()
 
 
 def test_settings_save_rejects_blank_telegram_api_hash(qtbot) -> None:
@@ -141,7 +141,7 @@ def test_settings_save_rejects_blank_telegram_api_hash(qtbot) -> None:
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
-    assert page.status_label.text() == "Telegram API Hash is required."
+    assert "Telegram API Hash is required." in page.status_label.text()
 
 
 def test_settings_save_clears_previous_error_on_success(qtbot) -> None:
@@ -159,7 +159,7 @@ def test_settings_save_clears_previous_error_on_success(qtbot) -> None:
 
     page.api_id_input.setText("not-a-number")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
-    assert page.status_label.text() == "Telegram API ID must be a valid integer."
+    assert "Telegram API ID must be a valid integer." in page.status_label.text()
 
     page.api_id_input.setText("123456")
     page.whitelist_input.setText("-1001, -2002")
@@ -190,7 +190,7 @@ def test_settings_save_rejects_when_all_sender_rows_are_blank(qtbot) -> None:
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
-    assert page.status_label.text() == "At least one allowed sender is required."
+    assert "At least one allowed sender is required." in page.status_label.text()
 
 
 def test_settings_save_rejects_missing_persisted_sender_rows(qtbot) -> None:
@@ -209,7 +209,7 @@ def test_settings_save_rejects_missing_persisted_sender_rows(qtbot) -> None:
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
-    assert page.status_label.text() == "At least one allowed sender is required."
+    assert "At least one allowed sender is required." in page.status_label.text()
 
 
 def test_settings_save_rejects_invalid_whitelist_without_crashing(qtbot) -> None:
@@ -231,7 +231,7 @@ def test_settings_save_rejects_invalid_whitelist_without_crashing(qtbot) -> None
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
-    assert page.status_label.text() == "Chat whitelist must contain valid integers."
+    assert "Chat whitelist must contain valid integers." in page.status_label.text()
 
 
 def test_settings_page_supports_adding_and_removing_sender_rows(qtbot) -> None:
@@ -398,7 +398,7 @@ def test_settings_page_exposes_status_feedback_helpers(qtbot) -> None:
     qtbot.addWidget(page)
 
     page.show_error("Resolve failed.")
-    assert page.status_label.text() == "Resolve failed."
+    assert "Resolve failed." in page.status_label.text()
 
     page.show_success("Settings saved.")
-    assert page.status_label.text() == "Settings saved."
+    assert "Settings saved." in page.status_label.text()

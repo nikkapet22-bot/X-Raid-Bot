@@ -510,7 +510,7 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
     assert input_driver.clicks == [(25, 15), (45, 15)]
 
 
-def test_runner_slot_1_waits_between_text_paste_and_image_paste(
+def test_runner_slot_1_pastes_text_and_image_without_extra_waits(
     tmp_path: Path,
 ) -> None:
     clock = FakeClock()
@@ -563,8 +563,8 @@ def test_runner_slot_1_waits_between_text_paste_and_image_paste(
 
     assert result.status == "completed"
     assert input_driver.events == [
-        ("text:gm", 101.0),
-        (f"file_image:{reply_image_path}", 102.0),
+        ("text:gm", 100.0),
+        (f"file_image:{reply_image_path}", 100.5),
     ]
 
 
@@ -599,6 +599,42 @@ def test_runner_slot_1_clicks_main_image_then_single_finish_image(
 
     assert result.status == "completed"
     assert input_driver.clicks == [(25, 15), (45, 15)]
+    assert clock.value >= 101.0
+
+
+def test_runner_slot_1_waits_briefly_for_finish_image_before_scrolling(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match(), None, _match(40, 10), None]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.scrolls == []
+    assert input_driver.clicks == [(25, 15), (45, 15)]
+    assert clock.value >= 101.1
 
 
 def test_runner_slot_1_scrolls_down_when_finish_image_is_not_initially_visible(
@@ -611,7 +647,7 @@ def test_runner_slot_1_scrolls_down_when_finish_image_is_not_initially_visible(
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
-        matcher=FakeMatcher([_match(), None, _match(40, 10), None]),
+        matcher=FakeMatcher([_match(), *([None] * 25), _match(40, 10), None]),
         input_driver=input_driver,
         template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
         now=clock.now,

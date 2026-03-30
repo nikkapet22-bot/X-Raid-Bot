@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -113,28 +114,67 @@ class Slot1PresetsDialog(QDialog):
 
     def _build_layout(self) -> None:
         root_layout = QVBoxLayout(self)
-        root_layout.setSpacing(12)
+        root_layout.setSpacing(16)
+        root_layout.setContentsMargins(20, 20, 20, 20)
+
+        # Title
+        header_label = QLabel("Slot 1 — Reply Presets")
+        header_label.setObjectName("sectionTitle")
+        root_layout.addWidget(header_label)
+
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.HLine)
+        div.setStyleSheet("background: #1e3252; max-height: 1px; border: none;")
+        root_layout.addWidget(div)
 
         top_row = QHBoxLayout()
-        top_row.setSpacing(12)
+        top_row.setSpacing(16)
 
+        # Left: list + add/remove buttons
         list_column = QVBoxLayout()
+        list_column.setSpacing(8)
+        preset_list_label = QLabel("Presets")
+        preset_list_label.setProperty("muted", "true")
+        list_column.addWidget(preset_list_label)
         list_column.addWidget(self.preset_list)
         list_buttons = QHBoxLayout()
+        list_buttons.setSpacing(6)
+        self.add_preset_button.setProperty("variant", "primary")
+        self.remove_preset_button.setProperty("variant", "secondary")
         list_buttons.addWidget(self.add_preset_button)
         list_buttons.addWidget(self.remove_preset_button)
         list_column.addLayout(list_buttons)
 
+        # Right: editor
         editor_widget = QWidget()
-        editor_form = QFormLayout(editor_widget)
-        editor_form.addRow("Text", self.preset_text_input)
-        image_buttons = QHBoxLayout()
-        image_buttons.addWidget(self.upload_image_button)
-        image_buttons.addWidget(self.clear_image_button)
-        editor_form.addRow("Preset image", self.preset_image_status_label)
-        editor_form.addRow("", image_buttons)
-        editor_form.addRow("Finish image", self.finish_image_status_label)
-        editor_form.addRow("", self.capture_finish_button)
+        editor_layout = QVBoxLayout(editor_widget)
+        editor_layout.setSpacing(12)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+
+        text_label = QLabel("Reply text")
+        text_label.setProperty("muted", "true")
+        editor_layout.addWidget(text_label)
+        editor_layout.addWidget(self.preset_text_input)
+
+        img_label = QLabel("Preset image")
+        img_label.setProperty("muted", "true")
+        editor_layout.addWidget(img_label)
+        editor_layout.addWidget(self.preset_image_status_label)
+        img_buttons = QHBoxLayout()
+        img_buttons.setSpacing(6)
+        self.upload_image_button.setProperty("variant", "secondary")
+        self.clear_image_button.setProperty("variant", "quiet")
+        img_buttons.addWidget(self.upload_image_button)
+        img_buttons.addWidget(self.clear_image_button)
+        editor_layout.addLayout(img_buttons)
+
+        finish_label = QLabel("Finish image")
+        finish_label.setProperty("muted", "true")
+        editor_layout.addWidget(finish_label)
+        editor_layout.addWidget(self.finish_image_status_label)
+        self.capture_finish_button.setProperty("variant", "secondary")
+        editor_layout.addWidget(self.capture_finish_button)
+        editor_layout.addStretch()
 
         top_row.addLayout(list_column, 1)
         top_row.addWidget(editor_widget, 2)

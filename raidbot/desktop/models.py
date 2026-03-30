@@ -279,7 +279,10 @@ class ActivityEntry:
 class DesktopAppState:
     bot_state: BotRuntimeState = BotRuntimeState.stopped
     connection_state: TelegramConnectionState = TelegramConnectionState.disconnected
+    raids_detected: int = 0
     raids_opened: int = 0
+    raids_completed: int = 0
+    raids_failed: int = 0
     duplicates_skipped: int = 0
     non_matching_skipped: int = 0
     open_failures: int = 0

@@ -12,6 +12,9 @@ from .templates import load_template_image
 from .windowing import WindowInfo, WindowManager, choose_window_for_rule
 
 _SLOT_1_FINISH_SCROLL_ATTEMPTS = 4
+_SLOT_1_FINISH_SEARCH_SECONDS = 1.0
+_SLOT_1_TEXT_TO_IMAGE_DELAY_SECONDS = 0.5
+_SLOT_1_FINISH_POST_CLICK_DELAY_SECONDS = 1.0
 _SCROLL_SETTLE_SECONDS = 1.0
 
 
@@ -372,14 +375,13 @@ class SequenceRunner:
                 "point": point,
             }
         )
-        self.sleep(1.0)
         if step.preset_text is not None:
             self.input_driver.paste_text(step.preset_text)
         if (
             step.preset_image_path is not None
             and Path(step.preset_image_path).exists()
         ):
-            self.sleep(1.0)
+            self.sleep(_SLOT_1_TEXT_TO_IMAGE_DELAY_SECONDS)
             self.input_driver.paste_image_file(Path(step.preset_image_path))
             self.sleep(1.0)
         finish_template_path = step.finish_template_path
@@ -393,7 +395,7 @@ class SequenceRunner:
         finish_template = self.template_loader(finish_template_path)
         finish_search_step = replace(
             step,
-            max_search_seconds=0.0,
+            max_search_seconds=_SLOT_1_FINISH_SEARCH_SECONDS,
             max_scroll_attempts=max(
                 step.max_scroll_attempts,
                 _SLOT_1_FINISH_SCROLL_ATTEMPTS,
@@ -427,6 +429,7 @@ class SequenceRunner:
                 "point": finish_point,
             }
         )
+        self.sleep(_SLOT_1_FINISH_POST_CLICK_DELAY_SECONDS)
         confirmation = self._confirm_ui_changed_after_click(
             finish_window,
             step,

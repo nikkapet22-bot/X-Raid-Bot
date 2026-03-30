@@ -4,18 +4,21 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtCore import QRect, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QTabWidget,
+    QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
     QStyle,
@@ -28,9 +31,49 @@ from raidbot.desktop.chrome_profiles import ChromeProfile, detect_chrome_environ
 from raidbot.desktop.models import DesktopAppState, RaidProfileState
 from raidbot.desktop.settings_page import SettingsPage
 from raidbot.desktop.telegram_setup import TelegramSetupService
-from raidbot.desktop.theme import CARD_OBJECT_NAME, SECTION_OBJECT_NAME
+from raidbot.desktop.theme import (
+    CARD_OBJECT_NAME,
+    SECTION_OBJECT_NAME,
+    NAV_SIDEBAR_WIDTH,
+    ACCENT,
+    SUCCESS,
+    WARNING,
+    ERROR,
+    MUTED,
+    TEXT,
+)
 from raidbot.desktop.tray import TrayController
 
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _bot_state_variant(state: str) -> str:
+    if state == "running":
+        return "running"
+    if state in {"starting", "stopping"}:
+        return "active"
+    if state == "error":
+        return "error"
+    return "neutral"
+
+
+def _connection_state_variant(state: str) -> str:
+    if state == "connected":
+        return "running"
+    if state in {"connecting", "reconnecting"}:
+        return "active"
+    if state == "auth_required":
+        return "error"
+    return "neutral"
+
+
+def _apply_variant(label: QLabel, variant: str) -> None:
+    label.setProperty("stateVariant", variant)
+    label.style().unpolish(label)
+    label.style().polish(label)
+
+
+# ── Profile card ──────────────────────────────────────────────────────────────
 
 class RaidProfileCard(QFrame):
     restartRequested = Signal(str)
@@ -41,23 +84,37 @@ class RaidProfileCard(QFrame):
         self._details_visible = False
         self.setObjectName(CARD_OBJECT_NAME)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumWidth(140)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
+        layout.setContentsMargins(14, 14, 14, 14)
 
+        header_row = QHBoxLayout()
+        header_row.setSpacing(8)
+        header_row.setContentsMargins(0, 0, 0, 0)
+        self.dot_label = QLabel()
+        self.dot_label.setObjectName("statusDot")
+        self.dot_label.setFixedSize(10, 10)
         self.title_label = QLabel(profile_directory)
+        self.title_label.setObjectName("sectionTitle")
+        header_row.addWidget(self.dot_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        header_row.addWidget(self.title_label, 1)
+        layout.addLayout(header_row)
+
         self.status_label = QLabel("")
         self.status_label.setProperty("muted", "true")
         self.reason_label = QLabel("")
         self.reason_label.setWordWrap(True)
+        self.reason_label.setProperty("muted", "true")
         self.reason_label.hide()
+
         self.restart_button = QPushButton("Restart")
         self.restart_button.setProperty("variant", "secondary")
         self.restart_button.clicked.connect(
             lambda: self.restartRequested.emit(self.profile_directory)
         )
 
-        layout.addWidget(self.title_label)
         layout.addWidget(self.status_label)
         layout.addWidget(self.reason_label)
         layout.addWidget(self.restart_button)
@@ -66,18 +123,22 @@ class RaidProfileCard(QFrame):
     def apply_state(self, state: RaidProfileState) -> None:
         self.profile_directory = state.profile_directory
         self.title_label.setText(state.label)
-        profile_status = "red" if state.status == "red" else "green"
+        is_error = state.status == "red"
+        profile_status = "red" if is_error else "green"
+
         self.setProperty("profileStatus", profile_status)
         self.style().unpolish(self)
         self.style().polish(self)
-        self.status_label.setText(
-            "Needs attention" if profile_status == "red" else "Healthy"
-        )
+
+        dot_variant = "error" if is_error else "running"
+        _apply_variant(self.dot_label, dot_variant)
+
+        self.status_label.setText("Needs attention" if is_error else "Healthy")
         self.reason_label.setText(state.last_error or "No details available")
-        if profile_status != "red":
+        if not is_error:
             self._details_visible = False
-        self.reason_label.setVisible(profile_status == "red" and self._details_visible)
-        self.restart_button.setVisible(profile_status == "red")
+        self.reason_label.setVisible(is_error and self._details_visible)
+        self.restart_button.setVisible(is_error)
 
     def mousePressEvent(self, event) -> None:
         if self.property("profileStatus") == "red":
@@ -85,6 +146,172 @@ class RaidProfileCard(QFrame):
             self.reason_label.setVisible(self._details_visible)
         super().mousePressEvent(event)
 
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+
+class ActivityBadge(QWidget):
+    _HEIGHT = 24
+    _H_PADDING = 10
+    _TONE_STYLES = {
+        "accent": ("#1d4aa6", "#3167d7", "#b7d4ff"),
+        "success": ("#0f5a4d", "#1f8d79", "#7ff0de"),
+        "warning": ("#7b3b08", "#c86518", "#ffc68f"),
+        "error": ("#7a1f25", "#ca4c55", "#ffb4b9"),
+    }
+
+    def __init__(self, text: str, tone: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._text = text
+        self._tone = tone
+        self.setObjectName("activityBadge")
+        font = QFont(self.font())
+        font.setBold(True)
+        self.setFont(font)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(self._HEIGHT)
+
+    def sizeHint(self) -> QSize:
+        metrics = QFontMetrics(self.font())
+        return QSize(
+            metrics.horizontalAdvance(self._text) + (self._H_PADDING * 2),
+            self._HEIGHT,
+        )
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        del event
+        fill, border, text = self._TONE_STYLES.get(
+            self._tone,
+            self._TONE_STYLES["accent"],
+        )
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pill_rect = self.rect().adjusted(0, 0, -1, -1)
+        radius = pill_rect.height() / 2
+        painter.setPen(QPen(QColor(border), 1))
+        painter.setBrush(QColor(fill))
+        painter.drawRoundedRect(pill_rect, radius, radius)
+        painter.setPen(QColor(text))
+        painter.setFont(self.font())
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
+        painter.end()
+
+
+class ActivityFeedRow(QFrame):
+    def __init__(
+        self,
+        *,
+        title: str,
+        tone: str,
+        timestamp_text: str,
+        url: str | None,
+        reason: str | None,
+    ) -> None:
+        super().__init__()
+        self.setObjectName("activityCard")
+        self.setProperty("activityTone", tone)
+        self.setMinimumHeight(34)
+
+        layout = QHBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(10, 5, 10, 5)
+
+        time_label = QLabel(timestamp_text)
+        time_label.setObjectName("activityTime")
+        time_label.setFixedWidth(54)
+        layout.addWidget(time_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        badge_label = ActivityBadge(title, tone)
+        layout.addWidget(badge_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        url_label = QLabel(self._truncate_middle(url or "—", 34))
+        url_label.setObjectName("activityUrl")
+        url_label.setToolTip(url or "")
+        layout.addWidget(url_label, 1, Qt.AlignmentFlag.AlignVCenter)
+
+        reason_label = QLabel(self._truncate_middle(reason or "—", 20))
+        reason_label.setObjectName("activityReason")
+        reason_label.setToolTip(reason or "")
+        reason_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        reason_label.setFixedWidth(116)
+        layout.addWidget(reason_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def _truncate_middle(self, text: str, max_length: int) -> str:
+        if len(text) <= max_length:
+            return text
+        keep = max(4, (max_length - 1) // 2)
+        return f"{text[:keep]}…{text[-keep:]}"
+
+
+class SidebarNav(QWidget):
+    pageRequested = Signal(int)
+
+    _NAV_ITEMS = [
+        ("  Dashboard",   0),
+        ("  Settings",    1),
+        ("  Bot Actions", 2),
+    ]
+
+    def __init__(self, *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("sidebar")
+        self.setFixedWidth(NAV_SIDEBAR_WIDTH)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 20, 12, 20)
+        layout.setSpacing(4)
+
+        # App identity block
+        brand = QWidget()
+        brand_layout = QVBoxLayout(brand)
+        brand_layout.setContentsMargins(8, 0, 0, 0)
+        brand_layout.setSpacing(2)
+        name_label = QLabel("RAID BOT")
+        name_label.setObjectName("appName")
+        tag_label = QLabel("Automation Console")
+        tag_label.setProperty("muted", "true")
+        brand_layout.addWidget(name_label)
+        brand_layout.addWidget(tag_label)
+        layout.addWidget(brand)
+
+        # Divider
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.HLine)
+        div.setStyleSheet("background: #1e3252; max-height: 1px; border: none; margin: 10px 0;")
+        layout.addWidget(div)
+
+        self._buttons: list[QPushButton] = []
+        for label, index in self._NAV_ITEMS:
+            btn = QPushButton(label)
+            btn.setObjectName("navButton")
+            btn.clicked.connect(lambda _, i=index: self._activate(i))
+            layout.addWidget(btn)
+            self._buttons.append(btn)
+
+        layout.addStretch()
+
+        # Version tag at bottom
+        ver = QLabel("v1.0")
+        ver.setProperty("muted", "true")
+        ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(ver)
+
+        self._activate(0)
+
+    def _activate(self, index: int) -> None:
+        for i, btn in enumerate(self._buttons):
+            btn.setProperty("active", "true" if i == index else "false")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        self.pageRequested.emit(index)
+
+    def set_active_page(self, index: int) -> None:
+        self._activate(index)
+
+
+# ── Main window ───────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
     def __init__(
@@ -123,12 +350,17 @@ class MainWindow(QMainWindow):
         self._restore_was_maximized = False
 
         self.setWindowTitle("Raid Bot")
+        self.setMinimumSize(960, 640)
 
+        # ── Labels ────────────────────────────────────────────────────────────
         self.bot_state_label = QLabel("")
         self.connection_state_label = QLabel("")
         self.command_bot_state_label = QLabel("")
         self.command_connection_state_label = QLabel("")
+        self.raids_detected_label = QLabel("0")
         self.raids_opened_label = QLabel("0")
+        self.raids_completed_label = QLabel("0")
+        self.raids_failed_label = QLabel("0")
         self.duplicates_label = QLabel("0")
         self.non_matching_label = QLabel("0")
         self.open_failures_label = QLabel("0")
@@ -142,19 +374,39 @@ class MainWindow(QMainWindow):
         self.last_successful_label = QLabel("")
         self.last_error_label = QLabel("")
         self.activity_list = QListWidget()
+        self.activity_list.setObjectName("activityList")
+        self.activity_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.activity_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        self.start_button = QPushButton("Start")
-        self.stop_button = QPushButton("Stop")
+        # ── Dot indicators for command row ────────────────────────────────────
+        self._bot_dot = QLabel()
+        self._bot_dot.setObjectName("statusDot")
+        self._bot_dot.setFixedSize(9, 9)
+        self._conn_dot = QLabel()
+        self._conn_dot.setObjectName("statusDot")
+        self._conn_dot.setFixedSize(9, 9)
+
+        # ── Buttons ────────────────────────────────────────────────────────────
+        self.start_button = QPushButton("  Start")
+        self.stop_button = QPushButton("  Stop")
         self.start_button.setProperty("variant", "primary")
         self.stop_button.setProperty("variant", "danger")
+        self.start_button.setMinimumWidth(100)
+        self.stop_button.setMinimumWidth(100)
         self.start_button.clicked.connect(self.controller.start_bot)
         self.stop_button.clicked.connect(self.controller.stop_bot)
 
-        central_widget = QWidget()
-        central_layout = QVBoxLayout(central_widget)
+        # ── Layout ─────────────────────────────────────────────────────────────
+        central = QWidget()
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self._wrap_tab_content(self._build_dashboard_tab()), "Dashboard")
+        self.sidebar = SidebarNav()
+        root.addWidget(self.sidebar)
+
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self._wrap_page(self._build_dashboard_tab()))
         self.settings_page = SettingsPage(
             config=self.controller.config,
             available_profiles=self.available_profiles_loader(),
@@ -171,31 +423,30 @@ class MainWindow(QMainWindow):
             self.settings_page.reauthorizeRequested.connect(
                 self.controller.reauthorize_session
             )
-        self.tabs.addTab(self._wrap_tab_content(self.settings_page), "Settings")
-        self.bot_actions_page = BotActionsPage(
-            config=self.controller.config,
-        )
+        self.stack.addWidget(self._wrap_page(self.settings_page))
+
+        self.bot_actions_page = BotActionsPage(config=self.controller.config)
         self.bot_actions_page.pageReadyCaptureRequested.connect(
             self._capture_page_ready_template
         )
         self.bot_actions_page.slotCaptureRequested.connect(self._capture_bot_action_slot)
-        self.bot_actions_page.slotTestRequested.connect(
-            self.controller.test_bot_action_slot
-        )
-        self.bot_actions_page.slotPresetsRequested.connect(
-            self._open_bot_action_slot_presets
-        )
+        self.bot_actions_page.slotTestRequested.connect(self.controller.test_bot_action_slot)
+        self.bot_actions_page.slotPresetsRequested.connect(self._open_bot_action_slot_presets)
         self.bot_actions_page.slotEnabledChanged.connect(
             self.controller.set_bot_action_slot_enabled
         )
         self.bot_actions_page.settleDelayChanged.connect(
             self.controller.set_auto_run_settle_ms
         )
-        self.tabs.addTab(self._wrap_tab_content(self.bot_actions_page), "Bot Actions")
-        central_layout.addWidget(self.tabs)
+        self.stack.addWidget(self._wrap_page(self.bot_actions_page))
 
-        self.setCentralWidget(central_widget)
+        self.sidebar.pageRequested.connect(self.stack.setCurrentIndex)
+        root.addWidget(self.stack, 1)
 
+        # Keep self.tabs alias for any external code that references it
+        self.tabs = self.stack
+
+        self.setCentralWidget(central)
         self._connect_controller_signals()
         state = self.storage.load_state()
         self._apply_state(state, include_activity=True)
@@ -209,10 +460,17 @@ class MainWindow(QMainWindow):
             initial_bot_state=self.bot_state,
         )
 
+    # ── Page builders ─────────────────────────────────────────────────────────
+
     def _build_dashboard_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setSpacing(16)
+        layout.setSpacing(14)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        page_title = QLabel("Dashboard")
+        page_title.setObjectName("pageTitle")
+        layout.addWidget(page_title)
 
         self.command_status_row = self._build_command_status_row()
         layout.addWidget(self.command_status_row)
@@ -224,30 +482,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.profiles_panel)
 
         self.metric_cards = [
-            self._build_metric_card("Raids Opened", self.raids_opened_label),
-            self._build_metric_card("Duplicates", self.duplicates_label),
-            self._build_metric_card("Non-matching", self.non_matching_label),
-            self._build_metric_card("Open Failures", self.open_failures_label),
-            self._build_metric_card("Sender Rejected", self.sender_rejected_label),
-            self._build_metric_card(
-                "Browser Session Failed",
-                self.browser_session_failed_label,
-            ),
-            self._build_metric_card("Page Ready", self.page_ready_label),
-            self._build_metric_card(
-                "Executor Not Configured",
-                self.executor_not_configured_label,
-            ),
-            self._build_metric_card("Executor Succeeded", self.executor_succeeded_label),
-            self._build_metric_card("Executor Failed", self.executor_failed_label),
-            self._build_metric_card("Session Closed", self.session_closed_label),
+            self._build_metric_card("Raids Detected",         self.raids_detected_label),
+            self._build_metric_card("Raids Opened",           self.raids_opened_label),
+            self._build_metric_card("Raids Completed",        self.raids_completed_label),
+            self._build_metric_card("Raids Failed",           self.raids_failed_label),
         ]
-        for card_group in (self.metric_cards[:6], self.metric_cards[6:]):
-            metrics_row = QHBoxLayout()
-            metrics_row.setSpacing(12)
-            for card in card_group:
-                metrics_row.addWidget(card)
-            layout.addLayout(metrics_row)
+        metrics_row = QHBoxLayout()
+        metrics_row.setSpacing(10)
+        for card in self.metric_cards:
+            metrics_row.addWidget(card)
+        layout.addLayout(metrics_row)
 
         self.activity_panel = self._build_activity_panel()
         self.error_panel = self._build_error_panel()
@@ -259,34 +503,46 @@ class MainWindow(QMainWindow):
     def _build_command_status_row(self) -> QWidget:
         row, surface = self._build_panel("commandStatusRow")
         layout = QHBoxLayout(surface)
+        layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(12)
         layout.addWidget(self.start_button)
         layout.addWidget(self.stop_button)
         layout.addStretch()
         layout.addWidget(
             self._build_compact_status_block(
-                "Bot", self.command_bot_state_label, "commandBotStateLabel"
+                "Bot", self.command_bot_state_label, "commandBotStateLabel",
+                dot=self._bot_dot,
             )
         )
+        self._add_vertical_separator(layout)
         layout.addWidget(
             self._build_compact_status_block(
-                "Telegram",
-                self.command_connection_state_label,
+                "Telegram", self.command_connection_state_label,
                 "commandConnectionStateLabel",
+                dot=self._conn_dot,
             )
         )
         return row
 
+    def _add_vertical_separator(self, layout: QHBoxLayout) -> None:
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("background: #1e3252; max-width: 1px; border: none; margin: 6px 4px;")
+        layout.addWidget(sep)
+
     def _build_status_panel(self) -> QWidget:
         panel, surface = self._build_panel("statusPanel")
         layout = QVBoxLayout(surface)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 18, 20, 18)
         layout.addWidget(self._build_section_title("System Status"))
+        layout.addWidget(self._build_divider())
         layout.addWidget(
             self._build_helper_label("Monitor bot runtime and Telegram connectivity.")
         )
-
         status_layout = QFormLayout()
+        status_layout.setVerticalSpacing(10)
+        status_layout.setHorizontalSpacing(24)
         status_layout.addRow("Bot state", self.bot_state_label)
         status_layout.addRow("Telegram", self.connection_state_label)
         status_layout.addRow("Last successful raid", self.last_successful_label)
@@ -296,8 +552,10 @@ class MainWindow(QMainWindow):
     def _build_profiles_panel(self) -> QWidget:
         panel, surface = self._build_panel("profilesPanel")
         layout = QVBoxLayout(surface)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 18, 20, 18)
         layout.addWidget(self._build_section_title("Profiles"))
+        layout.addWidget(self._build_divider())
         layout.addWidget(
             self._build_helper_label(
                 "Healthy profiles stay green. Failed profiles turn red until restarted."
@@ -312,9 +570,11 @@ class MainWindow(QMainWindow):
         card = QFrame()
         card.setObjectName(CARD_OBJECT_NAME)
         layout = QVBoxLayout(card)
-        layout.setSpacing(6)
+        layout.setSpacing(4)
+        layout.setContentsMargins(14, 14, 14, 14)
         title_label = QLabel(title)
-        title_label.setProperty("muted", "true")
+        title_label.setObjectName("metricTitle")
+        value_label.setObjectName("metricValue")
         layout.addWidget(title_label)
         layout.addWidget(value_label)
         layout.addStretch()
@@ -323,8 +583,10 @@ class MainWindow(QMainWindow):
     def _build_activity_panel(self) -> QWidget:
         panel, surface = self._build_panel("activityPanel")
         layout = QVBoxLayout(surface)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 18, 20, 18)
         layout.addWidget(self._build_section_title("Recent Activity"))
+        layout.addWidget(self._build_divider())
         layout.addWidget(
             self._build_helper_label(
                 "New raid actions appear here as the bot processes messages."
@@ -336,8 +598,10 @@ class MainWindow(QMainWindow):
     def _build_error_panel(self) -> QWidget:
         panel, surface = self._build_panel("errorPanel")
         layout = QVBoxLayout(surface)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 18, 20, 18)
         layout.addWidget(self._build_section_title("Last Error"))
+        layout.addWidget(self._build_divider())
         layout.addWidget(
             self._build_helper_label("If something breaks, the latest issue is pinned here.")
         )
@@ -345,17 +609,29 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_compact_status_block(
-        self, title: str, value_label: QLabel, object_name: str
+        self,
+        title: str,
+        value_label: QLabel,
+        object_name: str,
+        *,
+        dot: QLabel | None = None,
     ) -> QWidget:
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setSpacing(2)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+        layout.setContentsMargins(8, 0, 8, 0)
         title_label = QLabel(title)
         title_label.setProperty("muted", "true")
         value_label.setObjectName(object_name)
+        val_row = QHBoxLayout()
+        val_row.setSpacing(6)
+        val_row.setContentsMargins(0, 0, 0, 0)
+        if dot is not None:
+            _apply_variant(dot, "neutral")
+            val_row.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        val_row.addWidget(value_label)
         layout.addWidget(title_label)
-        layout.addWidget(value_label)
+        layout.addLayout(val_row)
         return container
 
     def _build_panel(self, object_name: str) -> tuple[QWidget, QWidget]:
@@ -363,21 +639,25 @@ class MainWindow(QMainWindow):
         panel.setObjectName(object_name)
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(0, 0, 0, 0)
-
         surface = QWidget()
         surface.setObjectName(SECTION_OBJECT_NAME)
         panel_layout.addWidget(surface)
         return panel, surface
 
+    def _wrap_page(self, widget: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(widget)
+        return scroll
+
+    # keep old name used elsewhere
     def _wrap_tab_content(self, widget: QWidget) -> QScrollArea:
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        scroll_area.setWidget(widget)
-        return scroll_area
+        return self._wrap_page(widget)
 
     def _build_section_title(self, text: str) -> QLabel:
         label = QLabel(text)
+        label.setObjectName("sectionTitle")
         return label
 
     def _build_helper_label(self, text: str) -> QLabel:
@@ -385,6 +665,14 @@ class MainWindow(QMainWindow):
         label.setWordWrap(True)
         label.setProperty("muted", "true")
         return label
+
+    def _build_divider(self) -> QFrame:
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.HLine)
+        div.setStyleSheet("background: #1e3252; max-height: 1px; border: none;")
+        return div
+
+    # ── Controller signals ────────────────────────────────────────────────────
 
     def _connect_controller_signals(self) -> None:
         self.controller.botStateChanged.connect(self._update_bot_state)
@@ -394,18 +682,26 @@ class MainWindow(QMainWindow):
         self.controller.errorRaised.connect(self.last_error_label.setText)
         self.controller.errorRaised.connect(self._show_bot_actions_error)
         self.controller.configChanged.connect(self._sync_config)
-        self.controller.automationQueueStateChanged.connect(self._update_bot_actions_queue_state)
+        self.controller.automationQueueStateChanged.connect(
+            self._update_bot_actions_queue_state
+        )
         self.controller.botActionRunEvent.connect(self._handle_bot_actions_run_event)
 
     def _update_bot_state(self, state: str) -> None:
         self.bot_state = state
-        self.bot_state_label.setText(state)
-        self.command_bot_state_label.setText(state)
+        variant = _bot_state_variant(state)
+        for label in (self.bot_state_label, self.command_bot_state_label):
+            label.setText(state)
+            _apply_variant(label, variant)
+        _apply_variant(self._bot_dot, variant)
 
     def _update_connection_state(self, state: str) -> None:
         self.connection_state = state
-        self.connection_state_label.setText(state)
-        self.command_connection_state_label.setText(state)
+        variant = _connection_state_variant(state)
+        for label in (self.connection_state_label, self.command_connection_state_label):
+            label.setText(state)
+            _apply_variant(label, variant)
+        _apply_variant(self._conn_dot, variant)
 
     def _apply_state(
         self, state: DesktopAppState, *, include_activity: bool = False
@@ -413,7 +709,10 @@ class MainWindow(QMainWindow):
         self._latest_state = state
         self._update_bot_state(state.bot_state.value)
         self._update_connection_state(state.connection_state.value)
+        self.raids_detected_label.setText(str(state.raids_detected))
         self.raids_opened_label.setText(str(state.raids_opened))
+        self.raids_completed_label.setText(str(state.raids_completed))
+        self.raids_failed_label.setText(str(state.raids_failed))
         self.duplicates_label.setText(str(state.duplicates_skipped))
         self.non_matching_label.setText(str(state.non_matching_skipped))
         self.open_failures_label.setText(str(state.open_failures))
@@ -428,22 +727,21 @@ class MainWindow(QMainWindow):
         self.last_error_label.setText(state.last_error or "")
         self._sync_raid_profile_cards(self.controller.config, state)
         if include_activity:
-            self.activity_list.clear()
-            for entry in reversed(state.activity):
-                self.activity_list.addItem(self._format_activity(entry))
+            self._populate_activity_list(state.activity)
 
     def _apply_stats_state(self, state: DesktopAppState) -> None:
         self._apply_state(state, include_activity=False)
 
     def _append_activity_entry(self, entry) -> None:
-        self.activity_list.insertItem(0, self._format_activity(entry))
+        if not self._should_display_activity(entry.action):
+            return
+        self._insert_activity_entry(entry, at_top=True)
 
     def _format_activity(self, entry) -> str:
         timestamp = entry.timestamp
-        if isinstance(timestamp, datetime):
-            timestamp_text = timestamp.isoformat()
-        else:
-            timestamp_text = str(timestamp)
+        timestamp_text = (
+            timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
+        )
         parts = [timestamp_text, self._format_activity_action(entry.action)]
         if entry.url:
             parts.append(entry.url)
@@ -461,9 +759,64 @@ class MainWindow(QMainWindow):
             "executor_failed": "Executor Failed",
             "session_closed": "Session Closed",
         }
-        if action in action_labels:
-            return action_labels[action]
-        return action.replace("_", " ").title()
+        return action_labels.get(action, action.replace("_", " ").title())
+
+    def _activity_tone(self, action: str) -> str:
+        if action in {"automation_failed", "browser_session_failed", "executor_failed"}:
+            return "error"
+        if action in {"sender_rejected", "duplicate", "auto_queued"}:
+            return "warning"
+        if action in {"automation_succeeded", "executor_succeeded", "session_closed"}:
+            return "success"
+        return "accent"
+
+    def _activity_badge(self, action: str) -> str:
+        labels = {
+            "raid_detected": "DETECTED",
+            "auto_queued": "QUEUED",
+            "automation_started": "RUNNING",
+            "automation_succeeded": "DONE",
+            "automation_failed": "FAILED",
+            "browser_session_failed": "FAILED",
+            "page_ready": "READY",
+            "session_closed": "CLOSED",
+            "sender_rejected": "REJECTED",
+            "executor_failed": "ERROR",
+            "executor_succeeded": "DONE",
+        }
+        return labels.get(action, action.replace("_", " ").upper())
+
+    def _populate_activity_list(self, entries) -> None:
+        self.activity_list.clear()
+        for entry in reversed(entries):
+            if not self._should_display_activity(entry.action):
+                continue
+            self._insert_activity_entry(entry, at_top=False)
+
+    def _should_display_activity(self, action: str) -> bool:
+        return action not in {"duplicate", "sender_rejected"}
+
+    def _insert_activity_entry(self, entry, *, at_top: bool) -> None:
+        tone = self._activity_tone(entry.action)
+        list_item = QListWidgetItem(self._format_activity(entry))
+        row_widget = ActivityFeedRow(
+            title=self._format_activity_action(entry.action),
+            tone=tone,
+            timestamp_text=self._format_activity_timestamp(entry.timestamp),
+            url=getattr(entry, "url", None),
+            reason=getattr(entry, "reason", None),
+        )
+        list_item.setSizeHint(row_widget.sizeHint())
+        if at_top:
+            self.activity_list.insertItem(0, list_item)
+        else:
+            self.activity_list.addItem(list_item)
+        self.activity_list.setItemWidget(list_item, row_widget)
+
+    def _format_activity_timestamp(self, timestamp: object) -> str:
+        if isinstance(timestamp, datetime):
+            return timestamp.strftime("%H:%M:%S")
+        return str(timestamp)
 
     def _ensure_window_icon(self) -> None:
         if not self.windowIcon().isNull():
@@ -495,12 +848,11 @@ class MainWindow(QMainWindow):
 
     def _remember_restore_geometry(self) -> None:
         normal_geometry = self.normalGeometry()
-        if not normal_geometry.isNull():
-            self._restore_geometry = QRect(normal_geometry)
-        else:
-            geometry = self.geometry()
-            if not geometry.isNull():
-                self._restore_geometry = QRect(geometry)
+        self._restore_geometry = (
+            QRect(normal_geometry)
+            if not normal_geometry.isNull()
+            else (QRect(self.geometry()) if not self.geometry().isNull() else None)
+        )
         self._restore_was_maximized = self.isMaximized()
 
     def showEvent(self, event) -> None:
@@ -528,11 +880,9 @@ class MainWindow(QMainWindow):
         if not self._should_wait_for_shutdown():
             event.accept()
             return
-
         if not self.confirm_close():
             event.ignore()
             return
-
         if self.controller.stop_bot_and_wait():
             event.accept()
             return
@@ -605,8 +955,7 @@ class MainWindow(QMainWindow):
         slot = self.controller.config.bot_action_slots[slot_index]
         try:
             template_path = self.slot_capture_service.capture_slot(
-                slot,
-                existing_path=slot.template_path,
+                slot, existing_path=slot.template_path,
             )
             self.controller.set_bot_action_slot_template_path(slot_index, template_path)
             if template_path is not None:
@@ -713,10 +1062,9 @@ class MainWindow(QMainWindow):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-
         states_by_directory = {
-            profile_state.profile_directory: profile_state
-            for profile_state in getattr(state, "raid_profile_states", ())
+            ps.profile_directory: ps
+            for ps in getattr(state, "raid_profile_states", ())
         }
         self.raid_profile_cards = {}
         for profile in config.raid_profiles:
@@ -743,10 +1091,8 @@ class MainWindow(QMainWindow):
 
     def _update_bot_actions_queue_state(self, state: str) -> None:
         queue_status_map = {
-            "queued": "Queued",
-            "running": "Running",
-            "paused": "Paused",
-            "idle": "Idle",
+            "queued": "Queued", "running": "Running",
+            "paused": "Paused", "idle": "Idle",
         }
         self._bot_actions_status_text = queue_status_map.get(str(state), "Idle")
         if state == "idle":
@@ -815,6 +1161,11 @@ class MainWindow(QMainWindow):
         if self._bot_actions_last_error_text:
             lines.append(f"Last error: {self._bot_actions_last_error_text}")
         self.bot_actions_page.status_label.setText("\n".join(lines))
+        self.bot_actions_page.set_status_fields(
+            latest_status=self._bot_actions_status_text,
+            current_slot=self._bot_actions_current_slot_text,
+            last_error=self._bot_actions_last_error_text,
+        )
 
     def _bot_state_is_active(self, state: str) -> bool:
         return state in {"starting", "running", "stopping"}

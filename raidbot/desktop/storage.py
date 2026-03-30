@@ -161,7 +161,10 @@ class DesktopStorage:
         return {
             "bot_state": state.bot_state.value,
             "connection_state": state.connection_state.value,
+            "raids_detected": state.raids_detected,
             "raids_opened": state.raids_opened,
+            "raids_completed": state.raids_completed,
+            "raids_failed": state.raids_failed,
             "duplicates_skipped": state.duplicates_skipped,
             "non_matching_skipped": state.non_matching_skipped,
             "open_failures": state.open_failures,
@@ -192,7 +195,10 @@ class DesktopStorage:
             connection_state=TelegramConnectionState(
                 data.get("connection_state", TelegramConnectionState.disconnected.value)
             ),
+            raids_detected=int(data.get("raids_detected", 0)),
             raids_opened=int(data.get("raids_opened", 0)),
+            raids_completed=int(data.get("raids_completed", 0)),
+            raids_failed=int(data.get("raids_failed", 0)),
             duplicates_skipped=int(data.get("duplicates_skipped", 0)),
             non_matching_skipped=int(data.get("non_matching_skipped", 0)),
             open_failures=int(data.get("open_failures", 0)),

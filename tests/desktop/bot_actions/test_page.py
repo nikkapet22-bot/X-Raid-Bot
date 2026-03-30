@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QImage
+from PySide6.QtWidgets import QGroupBox
 
 from raidbot.desktop.models import DesktopAppConfig
 
@@ -42,6 +43,7 @@ def test_bot_actions_page_renders_four_fixed_slots(qtbot) -> None:
     assert page.settle_delay_input.minimum() == 0
     assert page.settle_delay_input.maximum() == 10000
     assert page.settle_delay_input.value() == 1500
+    assert "Timing" not in {group.title() for group in page.findChildren(QGroupBox)}
 
 
 def test_bot_actions_page_renders_shared_page_ready_capture(qtbot) -> None:
@@ -64,6 +66,8 @@ def test_bot_actions_page_show_error_updates_status_label(qtbot) -> None:
     page.show_error("capture failed")
 
     assert page.status_label.text() == "capture failed"
+    assert page.status_latest_value_label.text() == "Error"
+    assert page.status_last_error_value_label.text() == "capture failed"
 
 
 def test_bot_actions_page_checkbox_emits_slot_enabled_signal_with_index_and_state(
@@ -100,6 +104,7 @@ def test_bot_actions_page_capture_button_emits_slot_capture_signal_with_index(
 
     assert captured == [2]
     assert page.status_label.text() == "Slot 3 (R): capturing"
+    assert page.status_latest_value_label.text() == "Slot 3 (R): capturing"
 
 
 def test_bot_actions_page_test_button_emits_slot_test_signal_with_index(
@@ -117,6 +122,7 @@ def test_bot_actions_page_test_button_emits_slot_test_signal_with_index(
 
     assert captured == [1]
     assert page.status_label.text() == "Slot 2 (L): testing"
+    assert page.status_latest_value_label.text() == "Slot 2 (L): testing"
 
 
 def test_bot_actions_page_page_ready_capture_emits_signal(qtbot) -> None:
@@ -132,6 +138,7 @@ def test_bot_actions_page_page_ready_capture_emits_signal(qtbot) -> None:
 
     assert captured == ["capture"]
     assert page.status_label.text() == "Page Ready: capturing"
+    assert page.status_latest_value_label.text() == "Page Ready: capturing"
 
 
 def test_bot_actions_page_shows_presets_button_only_for_slot_1(qtbot) -> None:
@@ -161,6 +168,7 @@ def test_bot_actions_page_presets_button_emits_slot_presets_signal_with_index(
 
     assert captured == [0]
     assert page.status_label.text() == "Slot 1 (R): presets"
+    assert page.status_latest_value_label.text() == "Slot 1 (R): presets"
 
 
 def test_bot_actions_page_places_capture_and_test_buttons_in_compact_row(qtbot) -> None:
@@ -174,6 +182,39 @@ def test_bot_actions_page_places_capture_and_test_buttons_in_compact_row(qtbot) 
     assert box.button_row_layout.indexOf(box.capture_button) == 0
     assert box.button_row_layout.indexOf(box.test_button) == 1
     assert box.button_row_layout.indexOf(box.presets_button) == 2
+
+
+def test_bot_actions_page_places_toggle_next_to_slot_glyph(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+
+    box = page.slot_boxes[0]
+
+    assert box.header_layout.indexOf(box._dot) == 0
+    assert box.header_layout.indexOf(box.slot_label) == 1
+    assert box.header_layout.indexOf(box.enabled_checkbox) == 2
+    assert box.header_layout.itemAt(3).spacerItem() is not None
+    assert box.header_layout.indexOf(box.slot_number_label) == 4
+    assert box.enabled_checkbox.sizeHint().width() == 34
+    assert box.enabled_checkbox.sizeHint().height() == 18
+
+
+def test_bot_actions_page_uses_compact_action_button_style(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+
+    box = page.slot_boxes[0]
+
+    assert page.page_ready_capture_button.property("botActionButton") == "true"
+    assert box.capture_button.property("botActionButton") == "true"
+    assert box.test_button.property("botActionButton") == "true"
+    assert box.presets_button.property("botActionButton") == "true"
+    assert box.presets_button.property("variant") == "secondary"
+    assert page.page_ready_card.objectName() == "card"
 
 
 def test_bot_actions_page_shows_thumbnail_preview_above_capture_button(

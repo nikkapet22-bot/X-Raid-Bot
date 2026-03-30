@@ -130,6 +130,10 @@ def test_desktop_app_state_defaults_are_stopped_and_disconnected() -> None:
 
     assert state.bot_state is BotRuntimeState.stopped
     assert state.connection_state is TelegramConnectionState.disconnected
+    assert state.raids_detected == 0
+    assert state.raids_opened == 0
+    assert state.raids_completed == 0
+    assert state.raids_failed == 0
     assert state.sender_rejected == 0
     assert state.browser_session_failed == 0
     assert state.page_ready == 0

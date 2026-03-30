@@ -35,8 +35,8 @@ def test_build_application_stylesheet_contains_dark_surface_and_accent() -> None
 
     stylesheet = build_application_stylesheet()
 
-    assert "#0f1724" in stylesheet
-    assert "#2f7ef7" in stylesheet
+    assert "#0a1628" in stylesheet
+    assert "#4f8ef7" in stylesheet
     assert "QPushButton" in stylesheet
     assert "QWizard QPushButton" in stylesheet
     assert 'QPushButton[variant="secondary"]' in stylesheet
@@ -48,8 +48,8 @@ def test_build_application_stylesheet_contains_dark_surface_and_accent() -> None
     )
     assert match is not None
     hover_block = match.group(1)
-    assert "background-color: #0f1724;" in hover_block
-    assert "color: #edf3ff;" in hover_block
+    assert "background-color: #0e1e35;" in hover_block
+    assert "color: #dce8ff;" in hover_block
     assert "border-color: transparent;" in hover_block
 
 
@@ -445,7 +445,7 @@ def test_main_applies_application_stylesheet(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "create_startup_window", lambda **_kwargs: FakeWindow())
 
     assert app_module.main([]) == 0
-    assert "#0f1724" in applied["stylesheet"]
+    assert "#0a1628" in applied["stylesheet"]
 
 
 def test_main_signals_existing_instance_and_exits_cleanly(monkeypatch) -> None:
