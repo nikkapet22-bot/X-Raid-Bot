@@ -25,8 +25,10 @@ def test_hidden_launcher_vbs_runs_pythonw_without_visible_console() -> None:
     contents = HIDDEN_LAUNCHER_PATH.read_text(encoding="utf-8")
 
     assert 'CreateObject("WScript.Shell")' in contents
+    assert "CurrentDirectory = repoRoot" in contents
     assert "pythonw -m raidbot.desktop.app" in contents
-    assert ", 0, False" in contents
+    assert "cmd /c" not in contents
+    assert ", 1, False" in contents
 
 
 def test_readme_mentions_double_click_launcher() -> None:

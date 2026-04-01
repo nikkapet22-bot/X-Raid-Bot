@@ -8,10 +8,10 @@ from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
 from raidbot.desktop.models import BotActionPreset, BotActionSlotConfig
 
 
-BOT_ACTION_STEP_SEARCH_SECONDS = 8.0
+BOT_ACTION_STEP_SEARCH_SECONDS = 2.0
 SLOT_TEST_STEP_SEARCH_SECONDS = 1.0
 BOT_ACTION_MATCH_THRESHOLD = 0.9
-BOT_ACTION_FIRST_SLOT_SCROLL_ATTEMPTS = 4
+BOT_ACTION_SLOT_SCROLL_ATTEMPTS = 4
 BOT_ACTION_SCROLL_AMOUNT = -360
 
 
@@ -68,6 +68,7 @@ def _build_slot_step(
     slot: BotActionSlotConfig,
     *,
     max_search_seconds: float,
+    slot_1_finish_delay_seconds: int = 2,
     choose_preset=choice,
     allow_scroll_retry: bool = False,
 ) -> AutomationStep:
@@ -81,7 +82,7 @@ def _build_slot_step(
         match_threshold=BOT_ACTION_MATCH_THRESHOLD,
         max_search_seconds=max_search_seconds,
         max_scroll_attempts=(
-            BOT_ACTION_FIRST_SLOT_SCROLL_ATTEMPTS if allow_scroll_retry else 0
+            BOT_ACTION_SLOT_SCROLL_ATTEMPTS if allow_scroll_retry else 0
         ),
         scroll_amount=BOT_ACTION_SCROLL_AMOUNT,
         max_click_attempts=2 if is_slot_3 else 1,
@@ -95,12 +96,18 @@ def _build_slot_step(
         finish_template_path=(
             slot.finish_template_path if slot_1_preset is not None else None
         ),
+        finish_delay_seconds=(
+            float(slot_1_finish_delay_seconds)
+            if slot_1_preset is not None
+            else None
+        ),
     )
 
 
 def build_bot_action_sequence(
     slots: Sequence[BotActionSlotConfig],
     *,
+    slot_1_finish_delay_seconds: int = 2,
     choose_preset=choice,
 ) -> BotActionSequenceBuildResult:
     warnings: list[BotActionBuildWarning] = []
@@ -137,8 +144,9 @@ def build_bot_action_sequence(
             _build_slot_step(
                 slot,
                 max_search_seconds=BOT_ACTION_STEP_SEARCH_SECONDS,
+                slot_1_finish_delay_seconds=slot_1_finish_delay_seconds,
                 choose_preset=choose_preset,
-                allow_scroll_retry=not steps,
+                allow_scroll_retry=True,
             )
         )
     return BotActionSequenceBuildResult(
@@ -154,6 +162,7 @@ def build_bot_action_sequence(
 def build_slot_test_sequence(
     slot: BotActionSlotConfig,
     *,
+    slot_1_finish_delay_seconds: int = 2,
     choose_preset=choice,
 ) -> AutomationSequence:
     return AutomationSequence(
@@ -163,6 +172,7 @@ def build_slot_test_sequence(
             _build_slot_step(
                 slot,
                 max_search_seconds=SLOT_TEST_STEP_SEARCH_SECONDS,
+                slot_1_finish_delay_seconds=slot_1_finish_delay_seconds,
                 choose_preset=choose_preset,
                 allow_scroll_retry=True,
             )

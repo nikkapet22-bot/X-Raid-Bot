@@ -8,6 +8,7 @@ from PySide6.QtCore import QLockFile
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMessageBox, QStyle
 
+from raidbot.desktop.branding import APP_NAME
 from raidbot.desktop.controller import DesktopController
 from raidbot.desktop.main_window import MainWindow
 from raidbot.desktop.storage import DesktopStorage, default_base_dir
@@ -85,6 +86,8 @@ def _present_window(window) -> None:
     _retain_window_reference(window)
     _ensure_window_icon(window)
     window.show()
+    if hasattr(window, "ensure_visible_on_screen"):
+        window.ensure_visible_on_screen()
     if hasattr(window, "raise_"):
         window.raise_()
     if hasattr(window, "activateWindow"):
@@ -115,8 +118,8 @@ def _acquire_instance_lock(base_dir: Path) -> QLockFile | None:
 def _show_duplicate_instance_warning() -> None:
     QMessageBox.warning(
         None,
-        "Raid Bot Already Running",
-        "Raid Bot is already running. Look for pythonw.exe in Task Manager or use the tray icon to restore the existing window.",
+        f"{APP_NAME} Already Running",
+        f"{APP_NAME} is already running. Look for pythonw.exe in Task Manager or use the tray icon to restore the existing window.",
     )
 
 
@@ -205,6 +208,10 @@ def _build_telegram_setup_service(api_id: int, api_hash: str, session_path):
 
 def main(argv: list[str] | None = None) -> int:
     app = QApplication(argv or [])
+    if hasattr(app, "setApplicationName"):
+        app.setApplicationName(APP_NAME)
+    if hasattr(app, "setApplicationDisplayName"):
+        app.setApplicationDisplayName(APP_NAME)
     app.setStyleSheet(build_application_stylesheet())
     base_dir = default_base_dir()
     if _acquire_instance_lock(base_dir) is None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -48,6 +48,10 @@ class RaidProfileConfig:
     label: str
     enabled: bool = True
     raid_on_restart: bool = False
+    reply_enabled: bool = True
+    like_enabled: bool = True
+    repost_enabled: bool = True
+    bookmark_enabled: bool = True
 
 
 @dataclass(eq=True)
@@ -64,12 +68,45 @@ _DEFAULT_BOT_ACTION_SLOT_LAYOUT: tuple[tuple[str, str], ...] = (
     ("slot_3_r", "R"),
     ("slot_4_b", "B"),
 )
+_RAID_PROFILE_ACTION_FIELD_BY_SLOT_KEY: dict[str, str] = {
+    "slot_1_r": "reply_enabled",
+    "slot_2_l": "like_enabled",
+    "slot_3_r": "repost_enabled",
+    "slot_4_b": "bookmark_enabled",
+}
+_RAID_PROFILE_ACTION_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("reply_enabled", "Reply", "slot_1_r"),
+    ("like_enabled", "Like", "slot_2_l"),
+    ("repost_enabled", "Repost", "slot_3_r"),
+    ("bookmark_enabled", "Bookmark", "slot_4_b"),
+)
 
 
 def default_bot_action_slots() -> tuple[BotActionSlotConfig, ...]:
     return tuple(
         BotActionSlotConfig(key=key, label=label)
         for key, label in _DEFAULT_BOT_ACTION_SLOT_LAYOUT
+    )
+
+
+def raid_profile_action_specs() -> tuple[tuple[str, str, str], ...]:
+    return _RAID_PROFILE_ACTION_SPECS
+
+
+def raid_profile_allows_slot(
+    profile: RaidProfileConfig,
+    slot_key: str,
+) -> bool:
+    field_name = _RAID_PROFILE_ACTION_FIELD_BY_SLOT_KEY.get(str(slot_key))
+    if field_name is None:
+        return True
+    return bool(getattr(profile, field_name, True))
+
+
+def raid_profile_has_any_actions_enabled(profile: RaidProfileConfig) -> bool:
+    return any(
+        bool(getattr(profile, field_name, True))
+        for field_name, _label, _slot_key in _RAID_PROFILE_ACTION_SPECS
     )
 
 
@@ -93,6 +130,7 @@ class DesktopAppConfig:
     auto_run_enabled: bool
     default_auto_sequence_id: str | None
     auto_run_settle_ms: int
+    slot_1_finish_delay_seconds: int
     page_ready_template_path: Path | None
     bot_action_slots: tuple[BotActionSlotConfig, ...]
     raid_profiles: tuple[RaidProfileConfig, ...]
@@ -119,6 +157,7 @@ class DesktopAppConfig:
         auto_run_enabled: bool = False,
         default_auto_sequence_id: str | None = None,
         auto_run_settle_ms: int = 1500,
+        slot_1_finish_delay_seconds: int = 2,
         page_ready_template_path: Path | None = None,
         bot_action_slots: Sequence[BotActionSlotConfig] | None = None,
         raid_profiles: Sequence[RaidProfileConfig] | None = None,
@@ -147,6 +186,7 @@ class DesktopAppConfig:
         self.auto_run_enabled = auto_run_enabled
         self.default_auto_sequence_id = default_auto_sequence_id
         self.auto_run_settle_ms = auto_run_settle_ms
+        self.slot_1_finish_delay_seconds = int(slot_1_finish_delay_seconds)
         self.page_ready_template_path = (
             Path(page_ready_template_path) if page_ready_template_path is not None else None
         )
@@ -255,6 +295,10 @@ class DesktopAppConfig:
                     label=label or profile_directory,
                     enabled=bool(getattr(profile, "enabled", True)),
                     raid_on_restart=bool(getattr(profile, "raid_on_restart", False)),
+                    reply_enabled=bool(getattr(profile, "reply_enabled", True)),
+                    like_enabled=bool(getattr(profile, "like_enabled", True)),
+                    repost_enabled=bool(getattr(profile, "repost_enabled", True)),
+                    bookmark_enabled=bool(getattr(profile, "bookmark_enabled", True)),
                 )
             )
         if normalized_profiles:
@@ -275,6 +319,26 @@ class ActivityEntry:
     action: str
     url: str | None = None
     reason: str | None = None
+    profile_directory: str | None = None
+
+
+@dataclass
+class SuccessfulProfileRun:
+    timestamp: datetime
+    duration_seconds: float | None = None
+
+
+@dataclass
+class DashboardMetricResetState:
+    avg_completion_reset_at: datetime | None = None
+    avg_raids_per_hour_reset_at: datetime | None = None
+    raids_completed_offset: int = 0
+    raids_failed_offset: int = 0
+    success_rate_completed_offset: int = 0
+    success_rate_failed_offset: int = 0
+    uptime_reset_at: datetime | None = None
+    legacy_local_time_migrated: bool = True
+    successful_profile_metrics_initialized: bool = True
 
 
 @dataclass
@@ -297,9 +361,38 @@ class DesktopAppState:
     session_closed: int = 0
     last_successful_raid_open_at: str | None = None
     activity: list[ActivityEntry] = field(default_factory=list)
+    successful_profile_runs: list[SuccessfulProfileRun] = field(default_factory=list)
     last_error: str | None = None
     automation_queue_state: str = "idle"
     automation_queue_length: int = 0
     automation_current_url: str | None = None
     automation_last_error: str | None = None
+    dashboard_metric_resets: DashboardMetricResetState = field(
+        default_factory=DashboardMetricResetState
+    )
     raid_profile_states: tuple[RaidProfileState, ...] = ()
+
+
+def apply_dashboard_metric_reset(
+    state: DesktopAppState,
+    metric_key: str,
+    *,
+    now: datetime,
+) -> DesktopAppState:
+    resets = replace(state.dashboard_metric_resets)
+    if metric_key == "avg_raid_completion_time":
+        resets.avg_completion_reset_at = now
+    elif metric_key == "avg_raids_per_hour":
+        resets.avg_raids_per_hour_reset_at = now
+    elif metric_key == "raids_completed":
+        resets.raids_completed_offset = state.raids_completed
+    elif metric_key == "raids_failed":
+        resets.raids_failed_offset = state.raids_failed
+    elif metric_key == "success_rate":
+        resets.success_rate_completed_offset = state.raids_completed
+        resets.success_rate_failed_offset = state.raids_failed
+    elif metric_key == "uptime":
+        resets.uptime_reset_at = now
+    else:
+        raise ValueError(f"Unknown dashboard metric: {metric_key}")
+    return replace(state, dashboard_metric_resets=resets)

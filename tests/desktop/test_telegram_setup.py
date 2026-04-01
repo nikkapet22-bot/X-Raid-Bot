@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +33,11 @@ class FakeDialog:
 class FakeMessage:
     sender: FakeEntity | None
 
+    sender_id: int | None = None
+
+    async def get_sender(self):
+        return self.sender
+
 
 def _make_password_error() -> Exception:
     error_type = type("SessionPasswordNeededError", (Exception,), {})
@@ -57,12 +63,23 @@ class FakeClient:
 
     async def disconnect(self) -> None:
         self.disconnect_calls += 1
+        self.state.setdefault("events", []).append("disconnect")
 
     async def is_user_authorized(self) -> bool:
         return self.state.get("authorized", False)
 
     async def send_code_request(self, phone_number: str) -> None:
         self.send_code_requests.append(phone_number)
+        return self.state.get(
+            "send_code_result",
+            SimpleNamespace(phone_code_hash="test-phone-code-hash"),
+        )
+
+    async def get_entity(self, entry: str):
+        entities = self.state.get("entities", {})
+        if entry not in entities:
+            raise ValueError(f"missing entity for {entry}")
+        return entities[entry]
 
     async def sign_in(
         self,
@@ -70,14 +87,28 @@ class FakeClient:
         phone: str | None = None,
         code: str | None = None,
         password: str | None = None,
+        phone_code_hash: str | None = None,
     ) -> None:
-        self.sign_in_calls.append({"phone": phone, "code": code, "password": password})
+        self.sign_in_calls.append(
+            {
+                "phone": phone,
+                "code": code,
+                "password": password,
+                "phone_code_hash": phone_code_hash,
+            }
+        )
         if password is not None:
             expected_password = self.state.get("expected_password")
             if expected_password is not None and password != expected_password:
                 raise RuntimeError("bad password")
             self.state["authorized"] = True
             return
+
+        if self.state.get("require_phone_code_hash") and phone_code_hash != self.state.get(
+            "expected_phone_code_hash",
+            "test-phone-code-hash",
+        ):
+            raise RuntimeError("You also need to provide a phone_code_hash.")
 
         sign_in_error = self.state.get("sign_in_error")
         if sign_in_error is not None:
@@ -166,6 +197,119 @@ async def test_authorize_reuses_existing_session_without_prompting(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_request_code_sends_telegram_code_without_sign_in(tmp_path: Path) -> None:
+    from raidbot.desktop.telegram_setup import SessionStatus, TelegramSetupService
+
+    state = {"authorized": False}
+    service = TelegramSetupService(
+        api_id=123456,
+        api_hash="hash-value",
+        session_path=tmp_path / "raidbot.session",
+        client_factory=build_client_factory(state),
+    )
+
+    status = await service.request_code("+15555550123")
+
+    assert status is SessionStatus.authorization_required
+    client = state["clients"][0]
+    assert client.send_code_requests == ["+15555550123"]
+    assert client.sign_in_calls == []
+
+
+@pytest.mark.asyncio
+async def test_authorize_reuses_phone_code_hash_from_request_code(tmp_path: Path) -> None:
+    from raidbot.desktop.telegram_setup import SessionStatus, TelegramSetupService
+
+    state = {
+        "authorized": False,
+        "require_phone_code_hash": True,
+        "expected_phone_code_hash": "hash-123",
+        "send_code_result": SimpleNamespace(phone_code_hash="hash-123"),
+    }
+    service = TelegramSetupService(
+        api_id=123456,
+        api_hash="hash-value",
+        session_path=tmp_path / "raidbot.session",
+        client_factory=build_client_factory(state),
+    )
+
+    request_status = await service.request_code("+15555550123")
+
+    async def phone_number_callback() -> str:
+        return "+15555550123"
+
+    async def code_callback() -> str:
+        return "12345"
+
+    authorize_status = await service.authorize(
+        phone_number_callback=phone_number_callback,
+        code_callback=code_callback,
+    )
+
+    assert request_status is SessionStatus.authorization_required
+    assert authorize_status is SessionStatus.authorized
+    assert state["clients"][-1].sign_in_calls == [
+        {
+            "phone": "+15555550123",
+            "code": "12345",
+            "password": None,
+            "phone_code_hash": "hash-123",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolve_sender_entry_returns_entity_id(tmp_path: Path) -> None:
+    from raidbot.desktop.telegram_setup import TelegramSetupService
+
+    session_path = tmp_path / "raidbot.session"
+    _write_session_artifacts(session_path)
+    state = {
+        "authorized": True,
+        "entities": {
+            "@raidar": FakeEntity(77, username="raidar"),
+        },
+    }
+    service = TelegramSetupService(
+        api_id=123456,
+        api_hash="hash-value",
+        session_path=session_path,
+        client_factory=build_client_factory(state),
+    )
+
+    entity_id = await service.resolve_sender_entry("@raidar")
+
+    assert entity_id == 77
+    assert state["clients"][0].session_path != str(session_path)
+
+
+@pytest.mark.asyncio
+async def test_resolve_sender_entry_details_returns_id_and_canonical_label(tmp_path: Path) -> None:
+    from raidbot.desktop.telegram_setup import TelegramSetupService
+
+    session_path = tmp_path / "raidbot.session"
+    _write_session_artifacts(session_path)
+    state = {
+        "authorized": True,
+        "entities": {
+            "5349287105": FakeEntity(5349287105, username="RallyGuard_Raid_Bot"),
+        },
+    }
+    service = TelegramSetupService(
+        api_id=123456,
+        api_hash="hash-value",
+        session_path=session_path,
+        client_factory=build_client_factory(state),
+    )
+
+    resolved = await service.resolve_sender_entry_details("5349287105")
+
+    assert resolved.entity_id == 5349287105
+    assert resolved.label == "@RallyGuard_Raid_Bot"
+    assert state["clients"][0].session_path != str(session_path)
+
+
+@pytest.mark.asyncio
 async def test_authorize_handles_code_and_password_flow(tmp_path: Path) -> None:
     from raidbot.desktop.telegram_setup import SessionStatus, TelegramSetupService
 
@@ -200,8 +344,18 @@ async def test_authorize_handles_code_and_password_flow(tmp_path: Path) -> None:
     client = state["clients"][0]
     assert client.send_code_requests == ["+15555550123"]
     assert client.sign_in_calls == [
-        {"phone": "+15555550123", "code": "12345", "password": None},
-        {"phone": None, "code": None, "password": "hunter2"},
+        {
+            "phone": "+15555550123",
+            "code": "12345",
+            "password": None,
+            "phone_code_hash": "test-phone-code-hash",
+        },
+        {
+            "phone": None,
+            "code": None,
+            "password": "hunter2",
+            "phone_code_hash": None,
+        },
     ]
 
 
@@ -236,6 +390,38 @@ async def test_authorize_cleans_up_incomplete_session_on_failure(tmp_path: Path)
 
     assert session_path.exists() is False
     assert (tmp_path / "raidbot.session-journal").exists() is False
+
+
+@pytest.mark.asyncio
+async def test_authorize_disconnects_before_cleanup_on_failure(tmp_path: Path) -> None:
+    from raidbot.desktop.telegram_setup import TelegramSetupService
+
+    state = {
+        "authorized": False,
+        "sign_in_error": RuntimeError("bad code"),
+    }
+    service = TelegramSetupService(
+        api_id=123456,
+        api_hash="hash-value",
+        session_path=tmp_path / "raidbot.session",
+        client_factory=build_client_factory(state),
+    )
+    event_log: list[str] = state.setdefault("events", [])
+    service._remove_session_files = lambda: event_log.append("cleanup")
+
+    async def phone_number_callback() -> str:
+        return "+15555550123"
+
+    async def code_callback() -> str:
+        return "99999"
+
+    with pytest.raises(RuntimeError, match="bad code"):
+        await service.authorize(
+            phone_number_callback=phone_number_callback,
+            code_callback=code_callback,
+        )
+
+    assert event_log == ["disconnect", "cleanup"]
 
 
 @pytest.mark.asyncio
@@ -440,3 +626,31 @@ async def test_infer_recent_sender_candidates_prefers_supported_exact_bot_matche
 
     assert [candidate.entity_id for candidate in candidates] == [10, 30, 20]
     assert [candidate.label for candidate in candidates] == ["@delugeraidbot", "d.raidbot", "Alice"]
+
+
+@pytest.mark.asyncio
+async def test_infer_recent_sender_candidates_uses_runtime_sender_id_with_resolved_label(
+    tmp_path: Path,
+) -> None:
+    from raidbot.desktop.telegram_setup import TelegramSetupService
+
+    resolved_sender = FakeEntity(7022354529, username="RallyGuard_Raid_Bot")
+    state = {
+        "authorized": True,
+        "messages": {
+            1001: [
+                FakeMessage(sender=resolved_sender, sender_id=5349287105),
+            ],
+        },
+    }
+    service = TelegramSetupService(
+        api_id=123456,
+        api_hash="hash-value",
+        session_path=tmp_path / "raidbot.session",
+        client_factory=build_client_factory(state),
+    )
+
+    candidates = await service.infer_recent_sender_candidates([1001])
+
+    assert [candidate.entity_id for candidate in candidates] == [5349287105]
+    assert [candidate.label for candidate in candidates] == ["@RallyGuard_Raid_Bot"]

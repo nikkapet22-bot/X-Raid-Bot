@@ -49,6 +49,7 @@ def test_handle_message_detects_job_for_allowed_sender():
             chat_id=-1001,
             sender_id=77,
             text="Like + Repost now\n\nhttps://x.com/i/status/123",
+            has_video=True,
         )
     )
 
@@ -85,6 +86,7 @@ def test_handle_message_returns_duplicate_before_job_creation():
             chat_id=-1001,
             sender_id=42,
             text="Like + Repost now\n\nhttps://x.com/i/status/123",
+            has_video=True,
         )
     )
 
@@ -113,7 +115,7 @@ def test_handle_message_rejects_non_whitelisted_chats():
     assert dedupe_store.contains_calls == []
 
 
-def test_handle_message_rejects_wrong_sender_id():
+def test_handle_message_returns_sender_rejected_reason_for_wrong_sender_id():
     service, dedupe_store = build_service()
 
     result = service.handle_message(
@@ -125,12 +127,13 @@ def test_handle_message_rejects_wrong_sender_id():
     )
 
     assert result.kind == "sender_rejected"
+    assert result.reason == "sender_id=777 not in allowlist"
     assert result.normalized_url is None
     assert result.job is None
     assert dedupe_store.contains_calls == []
 
 
-def test_handle_message_returns_not_a_raid_for_non_matching_text():
+def test_handle_message_returns_missing_action_markers_reason_for_non_matching_text():
     service, dedupe_store = build_service()
 
     result = service.handle_message(
@@ -142,6 +145,7 @@ def test_handle_message_returns_not_a_raid_for_non_matching_text():
     )
 
     assert result.kind == "not_a_raid"
+    assert result.reason == "missing_action_markers"
     assert result.normalized_url is None
     assert result.job is None
     assert dedupe_store.contains_calls == []
@@ -177,6 +181,7 @@ def test_handle_message_merges_default_requirements_into_detected_job():
             chat_id=-1001,
             sender_id=42,
             text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/555",
+            has_video=True,
         )
     )
 
@@ -188,3 +193,60 @@ def test_handle_message_merges_default_requirements_into_detected_job():
         bookmark=True,
         reply=True,
     )
+
+
+def test_handle_message_returns_missing_video_reason_for_parsed_link_without_video() -> None:
+    service, dedupe_store = build_service()
+
+    result = service.handle_message(
+        IncomingMessage(
+            chat_id=-1001,
+            sender_id=42,
+            text="Like + Repost now\n\nhttps://x.com/i/status/123",
+            has_video=False,
+        )
+    )
+
+    assert result.kind == "not_a_raid"
+    assert result.reason == "missing_video"
+    assert result.normalized_url is None
+    assert result.job is None
+    assert dedupe_store.contains_calls == []
+
+
+def test_handle_message_returns_missing_status_url_reason() -> None:
+    service, dedupe_store = build_service()
+
+    result = service.handle_message(
+        IncomingMessage(
+            chat_id=-1001,
+            sender_id=42,
+            text="Like + Repost now but no tweet link here",
+            has_video=True,
+        )
+    )
+
+    assert result.kind == "not_a_raid"
+    assert result.reason == "missing_status_url"
+    assert result.normalized_url is None
+    assert result.job is None
+    assert dedupe_store.contains_calls == []
+
+
+def test_handle_message_returns_missing_action_markers_reason_when_status_url_exists() -> None:
+    service, dedupe_store = build_service()
+
+    result = service.handle_message(
+        IncomingMessage(
+            chat_id=-1001,
+            sender_id=42,
+            text="Check this out\n\nhttps://x.com/i/status/123",
+            has_video=True,
+        )
+    )
+
+    assert result.kind == "not_a_raid"
+    assert result.reason == "missing_action_markers"
+    assert result.normalized_url is None
+    assert result.job is None
+    assert dedupe_store.contains_calls == []

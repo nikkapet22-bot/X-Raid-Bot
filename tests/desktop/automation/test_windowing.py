@@ -47,6 +47,59 @@ def test_window_manager_reports_focus_failure_for_minimized_window() -> None:
     assert outcome.reason == "window_not_focusable"
 
 
+def test_window_manager_retries_focus_before_reporting_failure() -> None:
+    window = WindowInfo(
+        handle=1,
+        title="X - Chrome",
+        bounds=(0, 0, 100, 100),
+        last_focused_at=1.0,
+        is_minimized=False,
+    )
+    clock = [10.0]
+    focus_attempts: list[float] = []
+
+    def focus_window(_handle: int) -> bool:
+        focus_attempts.append(clock[0])
+        return len(focus_attempts) >= 3
+
+    def wait(seconds: float) -> None:
+        clock[0] += seconds
+
+    manager = WindowManager(
+        list_windows=lambda: [window],
+        restore_window=lambda _handle: True,
+        focus_window=focus_window,
+        clock=lambda: clock[0],
+        wait=wait,
+    )
+
+    outcome = manager.ensure_interactable_window(window)
+
+    assert outcome.success is True
+    assert outcome.window == window
+    assert focus_attempts == [10.0, 10.05, 10.100000000000001]
+
+
+def test_window_manager_reports_maximize_success() -> None:
+    window = WindowInfo(
+        handle=1,
+        title="X - Chrome",
+        bounds=(0, 0, 100, 100),
+        last_focused_at=1.0,
+        is_minimized=False,
+    )
+    maximize_calls: list[int] = []
+    manager = WindowManager(
+        list_windows=lambda: [window],
+        restore_window=lambda _handle: True,
+        focus_window=lambda _handle: True,
+        maximize_window=lambda handle: maximize_calls.append(handle) or True,
+    )
+
+    assert manager.maximize_window(window) is True
+    assert maximize_calls == [1]
+
+
 def test_window_manager_keeps_most_recently_focused_matching_window_across_refreshes() -> None:
     rounds = iter(
         [

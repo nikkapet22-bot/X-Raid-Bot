@@ -5,14 +5,17 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFrame,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
     QTextEdit,
     QWidget,
     QVBoxLayout,
@@ -20,9 +23,10 @@ from PySide6.QtWidgets import (
     QWizardPage,
 )
 
+from raidbot.desktop.branding import APP_NAME, SETUP_WINDOW_TITLE
 from raidbot.desktop.chrome_profiles import ChromeEnvironment, ChromeProfile, detect_chrome_environment
 from raidbot.desktop.models import DesktopAppConfig
-from raidbot.desktop.telegram_setup import SUPPORTED_RAID_BOT_IDENTIFIERS
+from raidbot.desktop.telegram_setup import SUPPORTED_RAID_BOT_IDENTIFIERS, SessionStatus
 
 
 def _create_page_shell(page: QWizardPage, *, title: str, subtitle: str) -> tuple[QVBoxLayout, QWidget]:
@@ -36,15 +40,16 @@ def _create_page_shell(page: QWizardPage, *, title: str, subtitle: str) -> tuple
     header_layout.setContentsMargins(0, 0, 0, 0)
     header_layout.setSpacing(6)
 
-    eyebrow = QLabel("RAID BOT")
-    eyebrow.setProperty("muted", True)
     headline = QLabel(title)
     headline.setObjectName("wizardHeadline")
     subtitle_label = QLabel(subtitle)
+    subtitle_label.setObjectName("wizardSubtitle")
     subtitle_label.setProperty("muted", True)
     subtitle_label.setWordWrap(True)
 
-    header_layout.addWidget(eyebrow)
+    page.page_headline_label = headline
+    page.page_subtitle_label = subtitle_label
+
     header_layout.addWidget(headline)
     header_layout.addWidget(subtitle_label)
     root.addWidget(header)
@@ -112,7 +117,9 @@ class SetupWizard(QWizard):
         self.telegram_service = None
         self.start_now_requested = False
 
-        self.setWindowTitle("Raid Bot Setup")
+        self.setWindowTitle(SETUP_WINDOW_TITLE)
+        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        self.setMinimumSize(920, 700)
 
         self.welcome_page = WelcomePage()
         self.telegram_page = TelegramAuthorizationPage()
@@ -144,6 +151,8 @@ class SetupWizard(QWizard):
         return self.storage.base_dir / "telegram" / "raidbot.session"
 
     def build_telegram_service(self):
+        if self.telegram_service is not None:
+            return self.telegram_service
         self.session_path().parent.mkdir(parents=True, exist_ok=True)
         self.telegram_service = self.telegram_service_factory(
             _parse_int_field(self.telegram_page.api_id_input.text(), field_name="Telegram API ID"),
@@ -167,6 +176,7 @@ class SetupWizard(QWizard):
             telegram_phone_number=self.telegram_page.phone_input.text().strip() or None,
             whitelisted_chat_ids=self.chat_page.selected_chat_ids(),
             allowed_sender_ids=self.raidar_page.selected_sender_ids(),
+            allowed_sender_entries=self.raidar_page.selected_sender_entries(),
             chrome_profile_directory=self.chrome_page.selected_profile_directory(),
         )
 
@@ -174,15 +184,13 @@ class SetupWizard(QWizard):
 class WelcomePage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Welcome")
         _root, self.surface = _create_page_shell(
             self,
-            title="Set Up Raid Bot",
+            title=f"Set Up {APP_NAME}",
             subtitle="A guided onboarding flow for Telegram access, supported raid senders, and a dedicated raid browser profile.",
         )
         layout = _create_surface_layout(self.surface)
 
-        self.headline_label = QLabel("Set Up Raid Bot")
         self.description_label = QLabel(
             "Configure Telegram access, supported raid senders, and the dedicated raid browser profile used for raids."
         )
@@ -196,17 +204,11 @@ class WelcomePage(QWizardPage):
             "• Allowed raid senders\n"
             "• Raid browser profile"
         )
-        for label in (
-            self.headline_label,
-            self.description_label,
-            self.note_label,
-            self.checklist_label,
-        ):
+        for label in (self.description_label, self.note_label, self.checklist_label):
             label.setWordWrap(True)
         self.note_label.setProperty("muted", True)
         self.checklist_label.setObjectName("wizardChecklist")
 
-        layout.addWidget(self.headline_label)
         layout.addWidget(self.description_label)
         layout.addWidget(self.note_label)
         layout.addWidget(self.checklist_label)
@@ -216,15 +218,21 @@ class WelcomePage(QWizardPage):
 class TelegramAuthorizationPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Telegram Authorization")
         self.authorized = False
+        self.code_requested = False
         self.status_label = QLabel("")
         self.api_id_input = QLineEdit()
         self.api_hash_input = QLineEdit()
         self.phone_input = QLineEdit()
         self.code_input = QLineEdit()
         self.password_input = QLineEdit()
+        self.send_code_button = QPushButton("Send Code")
+        self.password_help_label = QLabel(
+            "If you have 2FA enabled, enter your Telegram password. Otherwise skip this step."
+        )
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.send_code_button.setProperty("variant", "secondary")
+        self.send_code_button.clicked.connect(self._handle_send_code)
 
         _root, self.surface = _create_page_shell(
             self,
@@ -239,34 +247,87 @@ class TelegramAuthorizationPage(QWizardPage):
         self.helper_label.setProperty("muted", True)
         surface_layout.addWidget(self.helper_label)
 
+        code_row = QWidget()
+        code_row_layout = QHBoxLayout(code_row)
+        code_row_layout.setContentsMargins(0, 0, 0, 0)
+        code_row_layout.setSpacing(8)
+        code_row_layout.addWidget(self.code_input, 1)
+        code_row_layout.addWidget(self.send_code_button, 0)
+
         layout = QFormLayout()
         layout.addRow("API ID", self.api_id_input)
         layout.addRow("API Hash", self.api_hash_input)
         layout.addRow("Phone", self.phone_input)
-        layout.addRow("Code", self.code_input)
-        layout.addRow("Password", self.password_input)
+        layout.addRow("Telegram Code", code_row)
+        layout.addRow("2FA Password (optional)", self.password_input)
+        layout.addRow("", self.password_help_label)
         layout.addRow(self.status_label)
         surface_layout.addLayout(layout)
         self.status_label.setWordWrap(True)
+        self.password_help_label.setWordWrap(True)
+        self.password_help_label.setProperty("muted", True)
 
         for widget in (
             self.api_id_input,
             self.api_hash_input,
             self.phone_input,
-            self.code_input,
-            self.password_input,
         ):
             widget.textChanged.connect(self._reset_authorization_state)
+        for widget in (self.code_input, self.password_input):
+            widget.textChanged.connect(self._handle_auth_value_change)
 
     def _reset_authorization_state(self, *_args) -> None:
         wizard = self.wizard()
         self.authorized = False
+        self.code_requested = False
         self.status_label.clear()
+        self.send_code_button.setText("Send Code")
+        self.send_code_button.setEnabled(True)
         if wizard is not None:
             wizard.telegram_service = None
             wizard.chat_page.reset_for_telegram_reauth()
             wizard.raidar_page.reset_for_telegram_reauth()
         self.completeChanged.emit()
+
+    def _handle_auth_value_change(self, *_args) -> None:
+        self.authorized = False
+        if self.status_label.text() == "Authorized":
+            self.status_label.clear()
+        self.completeChanged.emit()
+
+    def _handle_send_code(self) -> None:
+        phone_number = self.phone_input.text().strip()
+        if not phone_number:
+            self.status_label.setText("Phone is required.")
+            return
+        self.send_code_button.setText("Sending...")
+        self.send_code_button.setEnabled(False)
+        QApplication.processEvents()
+        wizard = self.wizard()
+        try:
+            service = wizard.build_telegram_service()
+            status = asyncio.run(service.request_code(phone_number))
+        except ValueError as exc:
+            self.status_label.setText(str(exc))
+            self.send_code_button.setText("Send Code")
+            self.send_code_button.setEnabled(True)
+            return
+        except Exception as exc:
+            self.status_label.setText(str(exc))
+            self.send_code_button.setText("Send Code")
+            self.send_code_button.setEnabled(True)
+            return
+        if status is SessionStatus.authorized:
+            self.authorized = True
+            self.code_requested = False
+            self.status_label.setText("Authorized")
+            self.send_code_button.setText("Authorized")
+            self.send_code_button.setEnabled(False)
+            return
+        self.code_requested = True
+        self.status_label.setText("Telegram code sent.")
+        self.send_code_button.setText("Code Sent")
+        self.send_code_button.setEnabled(True)
 
     def isComplete(self) -> bool:
         return bool(
@@ -278,6 +339,23 @@ class TelegramAuthorizationPage(QWizardPage):
             return True
 
         wizard = self.wizard()
+        try:
+            service = wizard.build_telegram_service()
+        except ValueError as exc:
+            self.status_label.setText(str(exc))
+            return False
+        except Exception as exc:
+            self.status_label.setText(str(exc))
+            return False
+
+        try:
+            session_status = asyncio.run(service.get_session_status())
+        except Exception as exc:
+            self.status_label.setText(str(exc))
+            return False
+        if session_status is not SessionStatus.authorized and not self.code_requested:
+            self.status_label.setText("Press Send Code first.")
+            return False
 
         async def phone_callback() -> str:
             return self.phone_input.text().strip()
@@ -289,7 +367,6 @@ class TelegramAuthorizationPage(QWizardPage):
             return self.password_input.text().strip()
 
         try:
-            service = wizard.build_telegram_service()
             asyncio.run(
                 service.authorize(
                     phone_number_callback=phone_callback,
@@ -305,6 +382,7 @@ class TelegramAuthorizationPage(QWizardPage):
             return False
 
         self.authorized = True
+        self.code_requested = False
         self.status_label.setText("Authorized")
         return True
 
@@ -312,12 +390,11 @@ class TelegramAuthorizationPage(QWizardPage):
 class ChatDiscoveryPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Chat Discovery")
         self._loaded = False
         self.search_input = QLineEdit()
         self.chat_list = QListWidget()
         self.helper_label = QLabel(
-            "Select the chats Raid Bot is allowed to monitor. Use search to narrow the list once discovery completes."
+            f"Select the chats {APP_NAME} is allowed to monitor. Use search to narrow the list once discovery completes."
         )
         self.empty_label = QLabel(
             "No chats are loaded yet. Authorize Telegram first, then return here to discover accessible chats."
@@ -406,7 +483,6 @@ class ChatDiscoveryPage(QWizardPage):
 class RaidarSelectionPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Allowed Raid Senders")
         self._loaded = False
         self._default_help_text = (
             "Confirm one or more detected senders when possible. "
@@ -523,6 +599,24 @@ class RaidarSelectionPage(QWizardPage):
                 ordered_sender_ids.append(sender_id)
         return ordered_sender_ids
 
+    def selected_sender_entries(self) -> list[str]:
+        selected_entries: list[str] = []
+        for index in range(self.candidate_list.count()):
+            item = self.candidate_list.item(index)
+            if item.checkState() == Qt.CheckState.Checked:
+                entry = item.text().strip()
+                if entry and entry not in selected_entries:
+                    selected_entries.append(entry)
+        manual_sender_ids = _parse_int_list_field(
+            self.manual_sender_ids_input.text(),
+            field_name="Allowed sender IDs",
+        )
+        for sender_id in manual_sender_ids:
+            entry = str(sender_id)
+            if entry not in selected_entries:
+                selected_entries.append(entry)
+        return selected_entries
+
     def selected_sender_id(self) -> int | None:
         selected_sender_ids = self.selected_sender_ids()
         if not selected_sender_ids:
@@ -541,11 +635,10 @@ class RaidarSelectionPage(QWizardPage):
 class ChromeProfilePage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Raid Browser Profile")
         self._loaded = False
         self.profile_combo = QComboBox()
         self.helper_label = QLabel(
-            "Choose the dedicated Chrome profile Raid Bot should use for raids. That profile must already be logged into X."
+            f"Choose the dedicated Chrome profile {APP_NAME} should use for raids. That profile must already be logged into X."
         )
         self.status_label = QLabel("")
         self.profile_combo.currentIndexChanged.connect(
@@ -600,7 +693,6 @@ class ChromeProfilePage(QWizardPage):
 class ReviewPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Review and Save")
         self.helper_label = QLabel("Review your setup before saving.")
         self.empty_label = QLabel("Review details will appear once the setup data is ready.")
         self.status_label = QLabel("Waiting for setup details...")
@@ -644,7 +736,7 @@ class ReviewPage(QWizardPage):
                 [
                     f"API ID: {config.telegram_api_id}",
                     f"Chats: {', '.join(str(chat_id) for chat_id in config.whitelisted_chat_ids)}",
-                    f"Allowed sender IDs: {', '.join(str(sender_id) for sender_id in config.allowed_sender_ids)}",
+                    f"Allowed senders: {', '.join(config.allowed_sender_entries)}",
                     f"Dedicated raid browser profile: {config.chrome_profile_directory}",
                 ]
             )

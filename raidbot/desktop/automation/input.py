@@ -40,6 +40,9 @@ class InputDriver:
         self._wait(delay_seconds)
         self._click_left()
 
+    def move_cursor(self, point: Point) -> None:
+        self._set_cursor_pos(point)
+
     def scroll(self, amount: int) -> None:
         self._scroll_wheel(amount)
 

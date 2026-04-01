@@ -41,11 +41,26 @@ class AutomationRuntime:
         *,
         require_interactable_window: bool = True,
     ):
+        return self.run_sequence_with_options(
+            sequence,
+            selected_window_handle,
+            require_interactable_window=require_interactable_window,
+        )
+
+    def run_sequence_with_options(
+        self,
+        sequence,
+        selected_window_handle: int | None,
+        *,
+        require_interactable_window: bool = True,
+        move_cursor_before_scroll: bool = False,
+    ):
         selected_window = self._selected_window(selected_window_handle)
         if selected_window is _MISSING_SELECTED_WINDOW:
             return self._run_result(status="failed", failure_reason="target_window_not_found")
         runner = self._build_runner(
-            require_interactable_window=require_interactable_window
+            require_interactable_window=require_interactable_window,
+            move_cursor_before_scroll=move_cursor_before_scroll,
         )
         self._active_runner = runner
         return runner.run_sequence(sequence, selected_window=selected_window)
@@ -103,7 +118,15 @@ class AutomationRuntime:
         if self._active_runner is not None and hasattr(self._active_runner, "request_stop"):
             self._active_runner.request_stop()
 
-    def _build_runner(self, *, require_interactable_window: bool = True):
+    def move_cursor(self, point: tuple[int, int]) -> None:
+        self.input_driver_factory().move_cursor(point)
+
+    def _build_runner(
+        self,
+        *,
+        require_interactable_window: bool = True,
+        move_cursor_before_scroll: bool = False,
+    ):
         return self.sequence_runner_factory(
             window_manager=self.window_manager,
             capture=self.capture_factory(),
@@ -111,6 +134,7 @@ class AutomationRuntime:
             input_driver=self.input_driver_factory(),
             emit_event=self.emit_event,
             require_interactable_window=require_interactable_window,
+            move_cursor_before_scroll=move_cursor_before_scroll,
         )
 
     def _selected_window(self, selected_window_handle: int | None):

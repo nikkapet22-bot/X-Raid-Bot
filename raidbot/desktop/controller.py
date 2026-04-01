@@ -2,19 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from dataclasses import replace
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal, Slot
 
 from raidbot.desktop.automation import runtime as automation_runtime
-from raidbot.desktop.models import BotActionPreset, RaidProfileConfig
+from raidbot.desktop.models import (
+    BotActionPreset,
+    RaidProfileConfig,
+    apply_dashboard_metric_reset,
+)
 from raidbot.desktop.storage import DesktopStorage
 from raidbot.desktop.worker import DesktopBotWorker
 
 _AutomationRuntime = automation_runtime.AutomationRuntime
+_SLOT_TEST_WINDOW_SETTLE_SECONDS = 1.0
 
 
 class AsyncWorkerRunner:
@@ -101,6 +108,7 @@ class DesktopController(QObject):
         automation_runtime_probe: Callable[[], tuple[bool, str | None]] | None = None,
         automation_runtime_factory: Callable[[Callable[[dict[str, Any]], None]], Any] | None = None,
         telegram_setup_service_factory: Callable[[Any], Any] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -112,6 +120,7 @@ class DesktopController(QObject):
         self.automation_runtime_factory = (
             automation_runtime_factory or self._default_automation_runtime_factory
         )
+        self.sleep = sleep
         self.telegram_setup_service_factory = (
             telegram_setup_service_factory or self._default_telegram_setup_service_factory
         )
@@ -186,6 +195,15 @@ class DesktopController(QObject):
             resolve_sender_entries=False,
         )
 
+    def set_slot_1_finish_delay_seconds(self, finish_delay_seconds: int) -> None:
+        self._persist_config(
+            replace(
+                self.config,
+                slot_1_finish_delay_seconds=int(finish_delay_seconds),
+            ),
+            resolve_sender_entries=False,
+        )
+
     def add_raid_profile(self, profile_directory: str, label: str) -> None:
         if self.config is None:
             raise ValueError("No desktop configuration is available")
@@ -251,6 +269,52 @@ class DesktopController(QObject):
         )
         self._persist_raid_profiles(tuple(profiles))
 
+    def set_raid_profile_raid_on_restart(
+        self,
+        profile_directory: str,
+        enabled: bool,
+    ) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        normalized_directory = str(profile_directory).strip()
+        updated_profiles = tuple(
+            replace(profile, raid_on_restart=bool(enabled))
+            if profile.profile_directory == normalized_directory
+            else profile
+            for profile in self.config.raid_profiles
+        )
+        if updated_profiles == self.config.raid_profiles:
+            return
+        self._persist_raid_profiles(updated_profiles)
+
+    def set_raid_profile_action_overrides(
+        self,
+        profile_directory: str,
+        *,
+        reply_enabled: bool,
+        like_enabled: bool,
+        repost_enabled: bool,
+        bookmark_enabled: bool,
+    ) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        normalized_directory = str(profile_directory).strip()
+        updated_profiles = tuple(
+            replace(
+                profile,
+                reply_enabled=bool(reply_enabled),
+                like_enabled=bool(like_enabled),
+                repost_enabled=bool(repost_enabled),
+                bookmark_enabled=bool(bookmark_enabled),
+            )
+            if profile.profile_directory == normalized_directory
+            else profile
+            for profile in self.config.raid_profiles
+        )
+        if updated_profiles == self.config.raid_profiles:
+            return
+        self._persist_raid_profiles(updated_profiles)
+
     def restart_raid_profile(self, profile_directory: str) -> None:
         if (
             self._worker is None
@@ -260,6 +324,24 @@ class DesktopController(QObject):
         ):
             return
         self._submit_to_runner(lambda: self._worker.restart_raid_profile(profile_directory))
+
+    def reset_dashboard_metric(self, metric_key: str) -> None:
+        if (
+            self._worker is not None
+            and self._runner is not None
+            and self._runner.is_running()
+            and hasattr(self._worker, "reset_dashboard_metric")
+        ):
+            self._submit_to_runner(lambda: self._worker.reset_dashboard_metric(metric_key))
+            return
+        state = self.storage.load_state()
+        updated_state = apply_dashboard_metric_reset(
+            state,
+            metric_key,
+            now=datetime.now(),
+        )
+        self.storage.save_state(updated_state)
+        self.statsChanged.emit(updated_state)
 
     def set_bot_action_slot_template_path(
         self,
@@ -427,11 +509,13 @@ class DesktopController(QObject):
         self._automation_runner = self.runner_factory()
         self._set_automation_run_state("running")
         self._automation_runner.start(
-            lambda: self._run_automation_sequence(
+            lambda: self._run_slot_test_sequence(
                 runtime,
-                build_slot_test_sequence(slot),
+                build_slot_test_sequence(
+                    slot,
+                    slot_1_finish_delay_seconds=self.config.slot_1_finish_delay_seconds,
+                ),
                 getattr(selected_window, "handle", None),
-                require_interactable_window=False,
             )
         )
 
@@ -657,25 +741,70 @@ class DesktopController(QObject):
         )
         if not normalized_entries:
             raise ValueError("At least one allowed sender is required.")
+        existing_entry_to_details = {
+            str(entry).strip(): (
+                int(sender_id),
+                str(entry).strip(),
+            )
+            for entry, sender_id in zip(
+                getattr(self.config, "allowed_sender_entries", ()),
+                getattr(self.config, "allowed_sender_ids", ()),
+            )
+            if str(entry).strip()
+        }
+        existing_id_to_label = {
+            int(sender_id): str(entry).strip()
+            for entry, sender_id in zip(
+                getattr(self.config, "allowed_sender_entries", ()),
+                getattr(self.config, "allowed_sender_ids", ()),
+            )
+            if str(entry).strip().startswith("@")
+        }
         resolved_sender_ids: list[int] = []
+        canonical_entries: list[str] = []
         seen_sender_ids: set[int] = set()
         service = None
         for entry in normalized_entries:
             if entry.lstrip("-").isdigit():
                 sender_id = int(entry)
+                existing_label = existing_id_to_label.get(sender_id)
+                if existing_label is not None:
+                    display_entry = existing_label
+                else:
+                    if service is None:
+                        service = self.telegram_setup_service_factory(config)
+                    resolved = asyncio.run(service.resolve_sender_entry_details(entry))
+                    sender_id = int(resolved.entity_id)
+                    display_entry = resolved.label
+                    if not str(display_entry).strip().startswith("@"):
+                        raise ValueError(
+                            f"Sender ID '{entry}' could not be converted to a @username."
+                        )
+            elif entry in existing_entry_to_details and entry.startswith("@"):
+                sender_id, display_entry = existing_entry_to_details[entry]
             else:
                 if service is None:
                     service = self.telegram_setup_service_factory(config)
-                sender_id = int(asyncio.run(service.resolve_sender_entry(entry)))
+                resolved = asyncio.run(service.resolve_sender_entry_details(entry))
+                sender_id = int(resolved.entity_id)
+                display_entry = resolved.label
             if sender_id in seen_sender_ids:
                 continue
             seen_sender_ids.add(sender_id)
             resolved_sender_ids.append(sender_id)
+            canonical_entries.append(display_entry)
         return replace(
             config,
-            allowed_sender_entries=normalized_entries,
+            allowed_sender_entries=tuple(canonical_entries),
             allowed_sender_ids=resolved_sender_ids,
         )
+
+    def infer_recent_sender_candidates(self, chat_ids: list[int] | tuple[int, ...]):
+        normalized_chat_ids = [int(chat_id) for chat_id in chat_ids]
+        if not normalized_chat_ids:
+            raise ValueError("Select at least one allowed chat before scanning senders.")
+        service = self.telegram_setup_service_factory(self.config)
+        return asyncio.run(service.infer_recent_sender_candidates(normalized_chat_ids))
 
     def _probe_automation_runtime(self) -> tuple[bool, str | None]:
         from raidbot.desktop.automation.platform import automation_runtime_available
@@ -712,9 +841,17 @@ class DesktopController(QObject):
         selected_window_handle: int | None,
         *,
         require_interactable_window: bool = True,
+        move_cursor_before_scroll: bool = False,
     ) -> None:
         try:
-            if require_interactable_window:
+            if hasattr(runtime, "run_sequence_with_options"):
+                result = runtime.run_sequence_with_options(
+                    sequence,
+                    selected_window_handle,
+                    require_interactable_window=require_interactable_window,
+                    move_cursor_before_scroll=move_cursor_before_scroll,
+                )
+            elif require_interactable_window:
                 result = runtime.run_sequence(sequence, selected_window_handle)
             else:
                 result = runtime.run_sequence(
@@ -728,6 +865,21 @@ class DesktopController(QObject):
 
             result = RunResult(status="failed", failure_reason="runtime_error")
         self._automationResultReceived.emit(result)
+
+    def _run_slot_test_sequence(
+        self,
+        runtime,
+        sequence,
+        selected_window_handle: int | None,
+    ) -> None:
+        self.sleep(_SLOT_TEST_WINDOW_SETTLE_SECONDS)
+        self._run_automation_sequence(
+            runtime,
+            sequence,
+            selected_window_handle,
+            require_interactable_window=True,
+            move_cursor_before_scroll=True,
+        )
 
     def _run_automation_dry_run(
         self,

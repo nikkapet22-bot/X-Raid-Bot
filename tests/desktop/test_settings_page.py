@@ -9,6 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 
 from raidbot.desktop.models import DesktopAppConfig
+from raidbot.desktop.telegram_setup import AccessibleChat
 
 
 def build_config(**overrides) -> DesktopAppConfig:
@@ -33,12 +34,32 @@ def build_config(**overrides) -> DesktopAppConfig:
     return DesktopAppConfig(**values)
 
 
+def build_available_chats() -> list[AccessibleChat]:
+    return [
+        AccessibleChat(chat_id=-1001, title="Raid Group"),
+        AccessibleChat(chat_id=-2002, title="Launch Squad"),
+        AccessibleChat(chat_id=-3003, title="Alpha Team"),
+    ]
+
+
+def set_selected_chat_rows(page, qtbot, chat_ids: list[int]) -> None:
+    while len(page.chat_row_combos) < len(chat_ids):
+        qtbot.mouseClick(page.add_chat_button, Qt.MouseButton.LeftButton)
+    while len(page.chat_row_combos) > len(chat_ids):
+        qtbot.mouseClick(page.chat_remove_buttons[-1], Qt.MouseButton.LeftButton)
+    for combo, chat_id in zip(page.chat_row_combos, chat_ids):
+        index = combo.findData(chat_id)
+        assert index >= 0
+        combo.setCurrentIndex(index)
+
+
 def test_settings_save_emits_sender_entries_and_numeric_sender_ids(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -47,7 +68,7 @@ def test_settings_save_emits_sender_entries_and_numeric_sender_ids(qtbot) -> Non
     page.applyRequested.connect(applied.append)
 
     page.api_hash_input.setText("new-hash")
-    page.whitelist_input.setText("-1001, -2002")
+    set_selected_chat_rows(page, qtbot, [-1001, -2002])
     page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.add_sender_button, Qt.MouseButton.LeftButton)
     page.sender_entry_inputs[1].setText("@delugeraidbot")
@@ -80,6 +101,7 @@ def test_settings_save_preserves_hidden_bot_action_config(qtbot) -> None:
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -89,7 +111,7 @@ def test_settings_save_preserves_hidden_bot_action_config(qtbot) -> None:
     page.applyRequested.connect(applied.append)
 
     page.api_hash_input.setText("new-hash")
-    page.whitelist_input.setText("-1001, -2002")
+    set_selected_chat_rows(page, qtbot, [-1001, -2002])
     page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
@@ -106,6 +128,7 @@ def test_settings_save_rejects_invalid_numeric_input_without_crashing(qtbot) -> 
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -114,7 +137,7 @@ def test_settings_save_rejects_invalid_numeric_input_without_crashing(qtbot) -> 
     page.applyRequested.connect(applied.append)
 
     page.api_id_input.setText("not-a-number")
-    page.whitelist_input.setText("-1001, -2002")
+    set_selected_chat_rows(page, qtbot, [-1001, -2002])
     page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
@@ -128,6 +151,7 @@ def test_settings_save_rejects_blank_telegram_api_hash(qtbot) -> None:
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -136,7 +160,7 @@ def test_settings_save_rejects_blank_telegram_api_hash(qtbot) -> None:
     page.applyRequested.connect(applied.append)
 
     page.api_hash_input.setText("   ")
-    page.whitelist_input.setText("-1001, -2002")
+    set_selected_chat_rows(page, qtbot, [-1001, -2002])
     page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
@@ -150,6 +174,7 @@ def test_settings_save_clears_previous_error_on_success(qtbot) -> None:
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -162,7 +187,7 @@ def test_settings_save_clears_previous_error_on_success(qtbot) -> None:
     assert "Telegram API ID must be a valid integer." in page.status_label.text()
 
     page.api_id_input.setText("123456")
-    page.whitelist_input.setText("-1001, -2002")
+    set_selected_chat_rows(page, qtbot, [-1001, -2002])
     page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
@@ -176,6 +201,7 @@ def test_settings_save_rejects_when_all_sender_rows_are_blank(qtbot) -> None:
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -185,7 +211,7 @@ def test_settings_save_rejects_when_all_sender_rows_are_blank(qtbot) -> None:
 
     page.api_id_input.setText("123456")
     page.api_hash_input.setText("new-hash")
-    page.whitelist_input.setText("-1001, -2002")
+    set_selected_chat_rows(page, qtbot, [-1001, -2002])
     page.sender_entry_inputs[0].setText("   ")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
@@ -199,6 +225,7 @@ def test_settings_save_rejects_missing_persisted_sender_rows(qtbot) -> None:
     page = SettingsPage(
         config=build_config(allowed_sender_ids=[], allowed_sender_entries=()),
         available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -212,12 +239,13 @@ def test_settings_save_rejects_missing_persisted_sender_rows(qtbot) -> None:
     assert "At least one allowed sender is required." in page.status_label.text()
 
 
-def test_settings_save_rejects_invalid_whitelist_without_crashing(qtbot) -> None:
+def test_settings_save_rejects_stale_allowed_chat_without_crashing(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
-        config=build_config(),
+        config=build_config(whitelisted_chat_ids=[-9999]),
         available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -226,12 +254,32 @@ def test_settings_save_rejects_invalid_whitelist_without_crashing(qtbot) -> None
     page.applyRequested.connect(applied.append)
 
     page.api_id_input.setText("123456")
-    page.whitelist_input.setText("-1001, nope")
     page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
 
     assert applied == []
-    assert "Chat whitelist must contain valid integers." in page.status_label.text()
+    assert "Allowed chats contain chats that are no longer available." in page.status_label.text()
+
+
+def test_settings_page_supports_adding_and_removing_chat_rows(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+
+    assert [combo.currentData() for combo in page.chat_row_combos] == [-1001]
+
+    qtbot.mouseClick(page.add_chat_button, Qt.MouseButton.LeftButton)
+    new_combo = page.chat_row_combos[1]
+    new_combo.setCurrentIndex(new_combo.findData(-2002))
+    qtbot.mouseClick(page.chat_remove_buttons[0], Qt.MouseButton.LeftButton)
+
+    assert [combo.currentData() for combo in page.chat_row_combos] == [-2002]
 
 
 def test_settings_page_supports_adding_and_removing_sender_rows(qtbot) -> None:
@@ -240,6 +288,7 @@ def test_settings_page_supports_adding_and_removing_sender_rows(qtbot) -> None:
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -253,12 +302,61 @@ def test_settings_page_supports_adding_and_removing_sender_rows(qtbot) -> None:
     assert [entry.text() for entry in page.sender_entry_inputs] == ["@delugeraidbot"]
 
 
+def test_settings_page_scan_button_emits_selected_chat_ids(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+
+    scan_requests = []
+    page.senderScanRequested.connect(
+        lambda button, chat_ids: scan_requests.append((button, chat_ids))
+    )
+    set_selected_chat_rows(page, qtbot, [-1001, -2002])
+
+    qtbot.mouseClick(page.sender_scan_buttons[0], Qt.MouseButton.LeftButton)
+
+    assert scan_requests == [(page.sender_scan_buttons[0], [-1001, -2002])]
+    assert page.sender_scan_buttons[0].text() == "Scanning..."
+    assert page.sender_scan_buttons[0].isEnabled() is False
+
+
+def test_settings_page_appends_scanned_sender_entries_without_duplicates(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+
+    page.sender_entry_inputs[0].setText("@raidar")
+
+    page.append_allowed_sender_entries(
+        ["@raidar", "@RallyGuard_Raid_Bot", "@delugeraidbot"]
+    )
+
+    assert [entry.text() for entry in page.sender_entry_inputs] == [
+        "@raidar",
+        "@RallyGuard_Raid_Bot",
+        "@delugeraidbot",
+    ]
+
+
 def test_settings_page_marks_sender_allowlist_as_required(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -266,6 +364,7 @@ def test_settings_page_marks_sender_allowlist_as_required(qtbot) -> None:
     assert page.sender_entry_inputs[0].placeholderText() == "Sender username or ID"
     assert page.allowed_senders_hint_label.text() == "Required to start the bot."
     assert page.add_sender_button.text() == "Add sender"
+    assert page.sender_scan_buttons[0].text() == "Scan"
 
 
 def test_settings_page_exposes_session_status_and_reauthorize(qtbot) -> None:
@@ -274,6 +373,7 @@ def test_settings_page_exposes_session_status_and_reauthorize(qtbot) -> None:
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -293,6 +393,7 @@ def test_settings_page_disables_reauthorize_when_unavailable(qtbot) -> None:
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3"],
+        available_chats=build_available_chats(),
         session_status="authorized",
         reauthorize_available=False,
     )
@@ -309,14 +410,21 @@ def test_settings_page_can_refresh_session_status_and_profiles(qtbot) -> None:
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Profile 3"],
+        available_chats=build_available_chats(),
         session_status="unknown",
     )
     qtbot.addWidget(page)
 
     page.set_session_status("authorized")
+    page.set_available_chats(build_available_chats()[1:])
     page.set_available_profiles(["Default", "Profile 3", "Profile 9"])
 
     assert page.session_status_label.text() == "authorized"
+    assert [page.chat_row_combos[0].itemText(index) for index in range(page.chat_row_combos[0].count())] == [
+        "Missing chat [-1001]",
+        "Alpha Team [-3003]",
+        "Launch Squad [-2002]",
+    ]
     assert [page.profile_combo.itemText(index) for index in range(page.profile_combo.count())] == [
         "Default",
         "Profile 3",
@@ -332,6 +440,7 @@ def test_settings_page_uses_grouped_sections_and_primary_save(qtbot) -> None:
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -352,6 +461,7 @@ def test_settings_page_hides_legacy_automation_controls(qtbot) -> None:
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)
@@ -374,6 +484,7 @@ def test_settings_page_preserves_apply_and_reauthorize_signals(qtbot) -> None:
     page = SettingsPage(
         config=build_config(),
         available_profiles=["Default", "Profile 3"],
+        available_chats=build_available_chats(),
         session_status="authorized",
     )
     qtbot.addWidget(page)

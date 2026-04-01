@@ -82,6 +82,7 @@ class FakeMatcher:
 class FakeInputDriver:
     def __init__(self) -> None:
         self.clicks: list[tuple[int, int]] = []
+        self.cursor_moves: list[tuple[int, int]] = []
         self.scrolls: list[int] = []
         self.pasted_text: list[str] = []
         self.pasted_images: list[Path] = []
@@ -89,6 +90,9 @@ class FakeInputDriver:
 
     def move_click(self, point: tuple[int, int], *, delay_seconds: float = 0.5) -> None:
         self.clicks.append(point)
+
+    def move_cursor(self, point: tuple[int, int]) -> None:
+        self.cursor_moves.append(point)
 
     def scroll(self, amount: int) -> None:
         self.scrolls.append(amount)
@@ -193,6 +197,7 @@ def test_runner_fails_when_template_never_appears_after_scroll_budget() -> None:
 
     assert result.status == "failed"
     assert result.failure_reason == "match_not_found"
+    assert input_driver.cursor_moves == []
     assert input_driver.scrolls == [-120]
 
 
@@ -422,6 +427,66 @@ def test_runner_can_run_without_focus_requirement_for_slot_tests() -> None:
     assert manager.ensured_handles == []
 
 
+def test_runner_does_not_require_focus_during_search_before_scroll_or_click() -> None:
+    window = _window()
+    capture = FakeCapture()
+
+    class DelayedFocusWindowManager(FakeWindowManager):
+        def ensure_interactable_window(self, candidate: WindowInfo) -> WindowInteractionOutcome:
+            self.ensured_handles.append(candidate.handle)
+            if len(self.ensured_handles) >= 2 and capture.calls == 0:
+                return WindowInteractionOutcome(success=False, reason="window_not_focusable")
+            return WindowInteractionOutcome(success=True, window=candidate)
+
+    input_driver = FakeInputDriver()
+    clock = FakeClock()
+    runner = SequenceRunner(
+        window_manager=DelayedFocusWindowManager(windows=[window]),
+        capture=capture,
+        matcher=FakeMatcher([None, _match(), None]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(_step(max_search_seconds=0.0, max_scroll_attempts=1)),
+        selected_window=window,
+    )
+
+    assert result.status == "completed"
+    assert input_driver.scrolls == [-120]
+    assert input_driver.cursor_moves == []
+    assert input_driver.clicks == [(25, 15)]
+
+
+def test_runner_can_move_cursor_into_window_before_scroll_when_enabled() -> None:
+    window = _window(bounds=(10, 20, 110, 220))
+    input_driver = FakeInputDriver()
+    clock = FakeClock()
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[window]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([None, _match(), None]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+        move_cursor_before_scroll=True,
+    )
+
+    result = runner.run_sequence(
+        _sequence(_step(max_search_seconds=0.0, max_scroll_attempts=1)),
+        selected_window=window,
+    )
+
+    assert result.status == "completed"
+    assert input_driver.cursor_moves == [(60, 120)]
+    assert input_driver.scrolls == [-120]
+    assert input_driver.clicks == [(35, 35)]
+
+
 def test_runner_performs_two_clicks_before_confirming_when_step_requires_it() -> None:
     clock = FakeClock()
     runner = SequenceRunner(
@@ -599,7 +664,42 @@ def test_runner_slot_1_clicks_main_image_then_single_finish_image(
 
     assert result.status == "completed"
     assert input_driver.clicks == [(25, 15), (45, 15)]
-    assert clock.value >= 101.0
+    assert clock.value >= 102.0
+
+
+def test_runner_slot_1_uses_configured_finish_delay(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match(), _match(40, 10), None]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                finish_template_path=finish_template_path,
+                finish_delay_seconds=4.0,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.clicks == [(25, 15), (45, 15)]
+    assert clock.value >= 104.0
 
 
 def test_runner_slot_1_waits_briefly_for_finish_image_before_scrolling(
@@ -634,7 +734,7 @@ def test_runner_slot_1_waits_briefly_for_finish_image_before_scrolling(
     assert result.status == "completed"
     assert input_driver.scrolls == []
     assert input_driver.clicks == [(25, 15), (45, 15)]
-    assert clock.value >= 101.1
+    assert clock.value >= 102.1
 
 
 def test_runner_slot_1_scrolls_down_when_finish_image_is_not_initially_visible(

@@ -35,10 +35,16 @@ class RaidDetectionResult:
     kind: str
     normalized_url: str | None = None
     job: RaidActionJob | None = None
+    reason: str | None = None
 
     @classmethod
     def job_detected(cls, job: RaidActionJob) -> "RaidDetectionResult":
-        return cls(kind="job_detected", normalized_url=job.normalized_url, job=job)
+        return cls(
+            kind="job_detected",
+            normalized_url=job.normalized_url,
+            job=job,
+            reason="job_detected",
+        )
 
 
 @dataclass(frozen=True)

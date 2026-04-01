@@ -5,6 +5,7 @@ from typing import Any
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
+from raidbot.desktop.branding import APP_NAME
 from raidbot.desktop.models import BotRuntimeState
 
 
@@ -38,6 +39,8 @@ class TrayController:
 
         self.tray = tray_icon_factory(icon, parent)
         self.menu = menu_factory()
+        if hasattr(self.tray, "setToolTip"):
+            self.tray.setToolTip(APP_NAME)
         self.show_action = self.menu.addAction("Show", self.restore_window)
         self.toggle_action = self.menu.addAction(
             self._toggle_label_for_state(self._bot_state),

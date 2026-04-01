@@ -14,7 +14,7 @@ from .windowing import WindowInfo, WindowManager, choose_window_for_rule
 _SLOT_1_FINISH_SCROLL_ATTEMPTS = 4
 _SLOT_1_FINISH_SEARCH_SECONDS = 1.0
 _SLOT_1_TEXT_TO_IMAGE_DELAY_SECONDS = 0.5
-_SLOT_1_FINISH_POST_CLICK_DELAY_SECONDS = 1.0
+_SLOT_1_FINISH_POST_CLICK_DELAY_SECONDS = 2.0
 _SCROLL_SETTLE_SECONDS = 1.0
 
 
@@ -42,6 +42,7 @@ class SequenceRunner:
         scan_interval_seconds: float = 0.05,
         click_confirmation_seconds: float = 2.0,
         require_interactable_window: bool = True,
+        move_cursor_before_scroll: bool = False,
     ) -> None:
         self.window_manager = window_manager
         self.capture = capture
@@ -54,6 +55,7 @@ class SequenceRunner:
         self.scan_interval_seconds = scan_interval_seconds
         self.click_confirmation_seconds = click_confirmation_seconds
         self.require_interactable_window = require_interactable_window
+        self.move_cursor_before_scroll = move_cursor_before_scroll
         self._stop_requested = False
 
     def request_stop(self) -> None:
@@ -177,6 +179,21 @@ class SequenceRunner:
             )
         return outcome.window
 
+    def _refresh_window_bounds(
+        self,
+        window: WindowInfo,
+        step_index: int,
+    ) -> WindowInfo | RunResult:
+        current_window = self._find_window_by_handle(window.handle)
+        if current_window is None:
+            return RunResult(
+                status="failed",
+                failure_reason="target_window_not_found",
+                window_handle=window.handle,
+                step_index=step_index,
+            )
+        return current_window
+
     def _find_window_by_handle(self, handle: int) -> WindowInfo | None:
         for candidate in self.window_manager.list_chrome_windows():
             if candidate.handle == handle:
@@ -281,7 +298,7 @@ class SequenceRunner:
                         window_handle=window.handle,
                         step_index=step_index,
                     )
-                window = self._refresh_active_window(window, step_index)
+                window = self._refresh_window_bounds(window, step_index)
                 if isinstance(window, RunResult):
                     return window
                 frame = self.capture.capture(window.bounds)
@@ -305,6 +322,12 @@ class SequenceRunner:
                 self.sleep(self.scan_interval_seconds)
 
             if scroll_attempt < step.max_scroll_attempts:
+                window = self._refresh_active_window(window, step_index)
+                if isinstance(window, RunResult):
+                    return window
+                if self.move_cursor_before_scroll:
+                    left, top, right, bottom = window.bounds
+                    self.input_driver.move_cursor(((left + right) // 2, (top + bottom) // 2))
                 self.input_driver.scroll(step.scroll_amount)
                 self.emit_event(
                     {
@@ -429,7 +452,11 @@ class SequenceRunner:
                 "point": finish_point,
             }
         )
-        self.sleep(_SLOT_1_FINISH_POST_CLICK_DELAY_SECONDS)
+        self.sleep(
+            step.finish_delay_seconds
+            if step.finish_delay_seconds is not None
+            else _SLOT_1_FINISH_POST_CLICK_DELAY_SECONDS
+        )
         confirmation = self._confirm_ui_changed_after_click(
             finish_window,
             step,

@@ -51,6 +51,27 @@ def test_build_application_stylesheet_contains_dark_surface_and_accent() -> None
     assert "background-color: #0e1e35;" in hover_block
     assert "color: #dce8ff;" in hover_block
     assert "border-color: transparent;" in hover_block
+    assert "QScrollBar:vertical" in stylesheet
+    assert "width: 10px;" in stylesheet
+    assert "border-radius: 5px;" in stylesheet
+    assert "min-height: 28px;" in stylesheet
+    assert "QPushButton#shellTabButton" in stylesheet
+    assert "min-height: 24px;" in stylesheet
+    assert "QPushButton#metricResetButton" in stylesheet
+    metric_reset_match = re.search(
+        r'QPushButton#metricResetButton \{\s*(.*?)\s*\}',
+        stylesheet,
+        re.S,
+    )
+    assert metric_reset_match is not None
+    metric_reset_block = metric_reset_match.group(1)
+    assert "max-height: 12px;" in metric_reset_block
+    assert "max-width: 12px;" in metric_reset_block
+    assert "border: 1px solid" in metric_reset_block
+    assert "QFrame#statusSummaryCard" in stylesheet
+    assert "background: transparent;" in stylesheet
+    assert "QWizardPage" in stylesheet
+    assert "QWizard > QWidget" in stylesheet
 
 
 def test_create_startup_window_uses_wizard_for_first_run() -> None:
@@ -523,4 +544,32 @@ def test_main_shows_warning_when_existing_instance_cannot_be_signaled(monkeypatc
         "app.init",
         "app.setStyleSheet",
         "duplicate.warning",
+    ]
+
+
+def test_present_window_ensures_window_is_visible_on_screen() -> None:
+    from raidbot.desktop import app as app_module
+
+    events: list[str] = []
+
+    class FakeWindow:
+        def show(self) -> None:
+            events.append("show")
+
+        def ensure_visible_on_screen(self) -> None:
+            events.append("ensure_visible_on_screen")
+
+        def raise_(self) -> None:
+            events.append("raise_")
+
+        def activateWindow(self) -> None:
+            events.append("activateWindow")
+
+    app_module._present_window(FakeWindow())
+
+    assert events == [
+        "show",
+        "ensure_visible_on_screen",
+        "raise_",
+        "activateWindow",
     ]

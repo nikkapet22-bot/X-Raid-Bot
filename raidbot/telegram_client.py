@@ -14,6 +14,7 @@ def event_to_incoming_message(event) -> IncomingMessage:
         chat_id=event.chat_id,
         sender_id=event.sender_id,
         text=event.raw_text or "",
+        has_video=bool(getattr(event, "video", None)),
     )
 
 

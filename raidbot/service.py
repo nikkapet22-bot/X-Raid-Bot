@@ -9,7 +9,7 @@ from raidbot.models import (
     RaidActionRequirements,
     RaidDetectionResult,
 )
-from raidbot.parser import parse_raid_message
+from raidbot.parser import analyze_raid_message
 
 class RaidService:
     def __init__(
@@ -40,20 +40,30 @@ class RaidService:
 
     def handle_message(self, message: IncomingMessage) -> RaidDetectionResult:
         if message.chat_id not in self.allowed_chat_ids:
-            return RaidDetectionResult(kind="chat_rejected")
+            return RaidDetectionResult(kind="chat_rejected", reason="chat_rejected")
 
         if message.sender_id not in self.allowed_sender_ids:
-            return RaidDetectionResult(kind="sender_rejected")
+            return RaidDetectionResult(
+                kind="sender_rejected",
+                reason=f"sender_id={message.sender_id} not in allowlist",
+            )
 
-        raid_match = parse_raid_message(message.text)
+        parse_outcome = analyze_raid_message(message.text)
+        raid_match = parse_outcome.match
         if raid_match is None:
-            return RaidDetectionResult(kind="not_a_raid")
+            return RaidDetectionResult(
+                kind="not_a_raid",
+                reason=parse_outcome.reason or "not_a_raid",
+            )
+        if not message.has_video:
+            return RaidDetectionResult(kind="not_a_raid", reason="missing_video")
 
         normalized_url = raid_match.normalized_url
         if self.dedupe_store.contains(normalized_url):
             return RaidDetectionResult(
                 kind="duplicate",
                 normalized_url=normalized_url,
+                reason="duplicate",
             )
 
         job = RaidActionJob(

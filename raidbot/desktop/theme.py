@@ -42,7 +42,7 @@ INPUT_RADIUS         = 8
 GROUP_BOX_RADIUS     = 10
 TAB_RADIUS           = 8
 BUTTON_RADIUS        = 8
-NAV_SIDEBAR_WIDTH    = 210
+NAV_SIDEBAR_WIDTH    = 128
 
 # ── Spacing ───────────────────────────────────────────────────────────────────
 INPUT_PADDING_Y           = 8
@@ -80,6 +80,15 @@ def build_application_stylesheet() -> str:
     QMainWindow, QDialog {{
         background-color: {WINDOW_BG};
     }}
+    QWizard {{
+        background-color: {WINDOW_BG};
+    }}
+    QWizard > QWidget {{
+        background-color: {WINDOW_BG};
+    }}
+    QWizardPage {{
+        background: transparent;
+    }}
 
     {section_selector()} {{
         background-color: {SURFACE_BG};
@@ -99,31 +108,72 @@ def build_application_stylesheet() -> str:
         background-color: {ERROR_DIM};
         border: 1px solid #5a1a1a;
     }}
+    {card_selector()}[profileStatus="paused"] {{
+        background-color: {WARNING_DIM};
+        border: 1px solid #6b3413;
+    }}
 
-    QWidget#sidebar {{
-        background-color: {SIDEBAR_BG};
-        border-right: 1px solid {BORDER};
-    }}
-    QPushButton#navButton {{
-        background-color: transparent;
-        color: {MUTED};
+    QWidget#topTabStrip,
+    QWidget#statusHeaderRow,
+    QWidget#statusSummaryColumn,
+    QWidget#profileCardsContainer,
+    QWidget#statusHeaderButtons {{
+        background: transparent;
         border: none;
-        border-radius: 8px;
-        text-align: left;
-        padding: 10px 16px;
-        font-size: 13px;
-        font-weight: 500;
-        min-height: 40px;
     }}
-    QPushButton#navButton:hover {{
-        background-color: {ELEVATED_BG};
+    QPushButton#shellTabButton {{
+        background-color: #081223;
+        color: {TEXT};
+        border: 1px solid {BORDER};
+        border-top-left-radius: 10px;
+        border-top-right-radius: 10px;
+        border-bottom-left-radius: 0px;
+        border-bottom-right-radius: 0px;
+        text-align: center;
+        padding: 5px 14px;
+        font-size: 12px;
+        font-weight: 600;
+        min-height: 24px;
+    }}
+    QPushButton#shellTabButton:hover {{
+        background-color: #0d1a31;
+        color: {TEXT};
+        border-color: {BORDER_FOCUS};
+    }}
+    QPushButton#shellTabButton[active="true"] {{
+        background-color: {SURFACE_BG};
+        color: {PRIMARY_TEXT};
+        border: 1px solid {BORDER_MED};
+        border-bottom-color: {SURFACE_BG};
+    }}
+    QLabel#raidActivityTitle {{
+        font-size: 14px;
+        font-weight: 700;
         color: {TEXT};
     }}
-    QPushButton#navButton[active="true"] {{
-        background-color: {ACCENT_DIM};
-        color: {ACCENT_HOVER};
-        border-left: 3px solid {ACCENT};
-        padding-left: 13px;
+    QLabel#raidActivitySubtitle {{
+        font-size: 11px;
+        font-weight: 500;
+        color: {MUTED};
+    }}
+    QFrame#statusSummaryCard {{
+        background: transparent;
+        border: none;
+    }}
+    QWidget#statusSummaryRow {{
+        background-color: #081223;
+        border: 1px solid #0f1b31;
+        border-radius: 10px;
+    }}
+    QLabel#statusSummaryKey {{
+        color: {MUTED};
+        font-size: 12px;
+        font-weight: 500;
+    }}
+    QLabel#statusSummaryValue {{
+        color: {TEXT};
+        font-size: 13px;
+        font-weight: 600;
     }}
 
     QLabel {{
@@ -150,6 +200,45 @@ def build_application_stylesheet() -> str:
         font-weight: 500;
         color: {MUTED};
     }}
+    QWidget#finishDelayInline {{
+        background: transparent;
+        border: none;
+    }}
+    QSpinBox#finishDelayInput {{
+        background: transparent;
+        color: {TEXT};
+        border: 1px solid {BORDER_MED};
+        border-radius: 8px;
+        padding: 0;
+        min-height: 24px;
+    }}
+    QSpinBox#finishDelayInput:focus {{
+        background: transparent;
+        border-color: {BORDER_FOCUS};
+    }}
+    QLabel#raidOnRestartLabel {{
+        font-size: 11px;
+        font-weight: 500;
+        color: {MUTED};
+    }}
+    QPushButton#profileActionConfigButton {{
+        min-height: 0;
+        max-height: 14px;
+        min-width: 0;
+        max-width: 14px;
+        padding: 0;
+        margin: 0;
+        border-radius: 4px;
+        background-color: #0b1629;
+        border: 1px solid {BORDER_MED};
+    }}
+    QPushButton#profileActionConfigButton:hover {{
+        background-color: #11253f;
+        border-color: {BORDER_FOCUS};
+    }}
+    QPushButton#profileActionConfigButton:pressed {{
+        background-color: #0a1424;
+    }}
     QLabel#pageTitle {{
         font-size: 20px;
         font-weight: 700;
@@ -166,10 +255,29 @@ def build_application_stylesheet() -> str:
         color: {MUTED};
         letter-spacing: 0.3px;
     }}
-    QLabel#appName {{
-        font-size: 14px;
-        font-weight: 700;
+    QPushButton#metricResetButton {{
+        min-height: 0;
+        max-height: 12px;
+        min-width: 0;
+        max-width: 12px;
+        padding: 0;
+        margin: 0;
+        border: 1px solid {BORDER_MED};
+        border-radius: 3px;
+        background-color: #0b1629;
         color: {TEXT};
+        font-size: 8px;
+        font-weight: 700;
+    }}
+    QPushButton#metricResetButton:hover {{
+        background-color: #11253f;
+        border-color: {BORDER_FOCUS};
+        color: {TEXT};
+    }}
+    QPushButton#metricResetButton:pressed {{
+        background-color: #091221;
+        border-color: {ACCENT};
+        color: {ACCENT_HOVER};
     }}
     QLabel#wizardHeadline {{
         font-size: 22px;
@@ -243,26 +351,46 @@ def build_application_stylesheet() -> str:
         background: transparent;
         border: none;
         padding: 0;
-        margin: 0 0 6px 0;
+        margin: 0 0 4px 0;
     }}
     QFrame#activityCard {{
         background-color: #091427;
         border: 1px solid {BORDER_MED};
-        border-radius: 10px;
+        border-radius: 9px;
     }}
     QLabel#activityTime {{
         color: {MUTED};
-        font-size: 11px;
+        font-size: 10px;
         letter-spacing: 0.2px;
     }}
     QLabel#activityUrl {{
         color: {ACCENT_HOVER};
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 500;
     }}
     QLabel#activityReason {{
         color: {MUTED};
-        font-size: 12px;
+        font-size: 11px;
+    }}
+    QFrame#raidActivityCard {{
+        background-color: #091427;
+        border: 1px solid {BORDER_MED};
+        border-radius: 12px;
+    }}
+    QWidget#raidActivityChart {{
+        background-color: #07111f;
+        border: 1px solid {BORDER};
+        border-radius: 10px;
+    }}
+    QFrame#dashboardErrorCard {{
+        background-color: #091427;
+        border: 1px solid {BORDER_MED};
+        border-radius: 10px;
+    }}
+    QLabel#dashboardErrorValue {{
+        color: {ERROR_TEXT};
+        font-size: 14px;
+        font-weight: 600;
     }}
     QLabel#activityBadge {{
         border-radius: 999px;
@@ -294,21 +422,43 @@ def build_application_stylesheet() -> str:
     }}
 
     QScrollBar:vertical {{
-        background: transparent; width: 6px; margin: 0;
+        background: #081223;
+        width: 10px;
+        margin: 2px 0 2px 0;
+        border: 1px solid {BORDER};
+        border-radius: 5px;
     }}
     QScrollBar::handle:vertical {{
-        background: {BORDER_MED}; border-radius: 3px; min-height: 20px;
+        background: #214a7d;
+        border: 1px solid #3566a6;
+        border-radius: 5px;
+        min-height: 28px;
     }}
-    QScrollBar::handle:vertical:hover {{ background: {MUTED}; }}
+    QScrollBar::handle:vertical:hover {{
+        background: {ACCENT};
+        border-color: {ACCENT_HOVER};
+    }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
     QScrollBar:horizontal {{
-        background: transparent; height: 6px;
+        background: #081223;
+        height: 10px;
+        margin: 0 2px 0 2px;
+        border: 1px solid {BORDER};
+        border-radius: 5px;
     }}
     QScrollBar::handle:horizontal {{
-        background: {BORDER_MED}; border-radius: 3px; min-width: 20px;
+        background: #214a7d;
+        border: 1px solid #3566a6;
+        border-radius: 5px;
+        min-width: 28px;
     }}
-    QScrollBar::handle:horizontal:hover {{ background: {MUTED}; }}
+    QScrollBar::handle:horizontal:hover {{
+        background: {ACCENT};
+        border-color: {ACCENT_HOVER};
+    }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
     QScrollArea {{ border: none; background: transparent; }}
 
     QGroupBox {{
@@ -371,6 +521,7 @@ def build_application_stylesheet() -> str:
     QPushButton[variant="primary"] {{
         background-color: {ACCENT}; color: {PRIMARY_TEXT};
         border-color: {ACCENT}; font-weight: 600;
+        text-align: center;
     }}
     QPushButton[variant="primary"]:hover {{
         background-color: {ACCENT_HOVER}; border-color: {ACCENT_HOVER};
@@ -379,6 +530,7 @@ def build_application_stylesheet() -> str:
     QPushButton[variant="danger"] {{
         background-color: {ERROR}; color: {PRIMARY_TEXT};
         border-color: {ERROR}; font-weight: 600;
+        text-align: center;
     }}
     QPushButton[variant="danger"]:hover  {{
         background-color: {ERROR_TEXT}; border-color: {ERROR_TEXT};
@@ -388,6 +540,13 @@ def build_application_stylesheet() -> str:
     }}
     QPushButton[variant="secondary"] {{
         background-color: {ELEVATED_BG}; color: {TEXT}; border-color: {BORDER_MED};
+    }}
+    QPushButton[dashboardActionButton="true"] {{
+        min-height: 28px;
+        border-radius: 10px;
+        padding: 0 16px;
+        font-size: 12px;
+        font-weight: 600;
     }}
     QPushButton[variant="quiet"] {{
         background-color: transparent; color: {MUTED}; border-color: transparent;
@@ -416,6 +575,10 @@ def build_application_stylesheet() -> str:
     }}
 
     {wizard_nav_button_selector()} {{ min-width: {NAV_BUTTON_MIN_WIDTH}px; }}
+    QWizard QPushButton {{
+        margin-top: 0;
+        margin-bottom: 0;
+    }}
 
     QWidget#wizardSurface {{
         background-color: {SURFACE_BG};
@@ -423,6 +586,21 @@ def build_application_stylesheet() -> str:
         border-radius: {SECTION_RADIUS}px;
     }}
     QFrame#wizardHeader {{ background: transparent; border: none; }}
+    QLabel#wizardEyebrow {{
+        color: {MUTED};
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.2px;
+    }}
+    QLabel#wizardSubtitle {{
+        color: {MUTED};
+        font-size: 13px;
+    }}
+    QLabel#wizardChecklist {{
+        color: {TEXT};
+        font-size: 13px;
+        line-height: 1.4;
+    }}
 
     QToolTip {{
         background-color: {ELEVATED_BG};

@@ -45,7 +45,18 @@ class FakeTelegramSetupService:
         self.phone_calls = 0
         self.code_calls = 0
         self.password_calls = 0
+        self.request_code_calls: list[str] = []
         self.candidate_requests: list[tuple[int, ...]] = []
+
+    async def request_code(self, phone_number: str) -> SessionStatus:
+        if not self.parent_exists:
+            raise RuntimeError("session parent missing")
+        if self.authorize_error is not None:
+            raise self.authorize_error
+        self.request_code_calls.append(phone_number)
+        if self.existing_session:
+            return SessionStatus.authorized
+        return SessionStatus.authorization_required
 
     async def authorize(
         self,
@@ -68,6 +79,11 @@ class FakeTelegramSetupService:
             self.password_calls += 1
             await password_callback()
         return SessionStatus.authorized
+
+    async def get_session_status(self) -> SessionStatus:
+        if self.existing_session:
+            return SessionStatus.authorized
+        return SessionStatus.authorization_required
 
     async def list_accessible_chats(self) -> list[AccessibleChat]:
         if self.chat_error is not None:
@@ -123,6 +139,7 @@ def test_chat_selection_page_filters_search_results(qtbot, tmp_path: Path) -> No
 
 
 def test_welcome_page_contains_structured_intro_content(qtbot, tmp_path: Path) -> None:
+    from raidbot.desktop.branding import APP_NAME, SETUP_WINDOW_TITLE
     from raidbot.desktop.wizard import SetupWizard
 
     wizard = SetupWizard(
@@ -132,8 +149,12 @@ def test_welcome_page_contains_structured_intro_content(qtbot, tmp_path: Path) -
     )
     qtbot.addWidget(wizard)
 
-    assert "Telegram access" in wizard.welcome_page.description_label.text()
-    assert "supported raid senders" in wizard.welcome_page.description_label.text()
+    assert wizard.windowTitle() == SETUP_WINDOW_TITLE
+    assert wizard.welcome_page.title() == ""
+    assert wizard.welcome_page.page_headline_label.text() == f"Set Up {APP_NAME}"
+    assert "Telegram access" in wizard.welcome_page.page_subtitle_label.text()
+    assert "supported raid senders" in wizard.welcome_page.page_subtitle_label.text()
+    assert not hasattr(wizard.welcome_page, "page_eyebrow_label")
     assert "dedicated raid browser profile" in wizard.welcome_page.description_label.text()
     assert "already be logged into X" in wizard.welcome_page.note_label.text()
     assert wizard.welcome_page.checklist_label.text()
@@ -195,7 +216,7 @@ def test_chat_and_review_pages_expose_guidance_copy(qtbot, tmp_path: Path) -> No
     assert "Review your setup" in wizard.review_page.helper_label.text()
     assert "Review details will appear once the setup data is ready." in wizard.review_page.empty_label.text()
     assert "Setup summary ready for final review." in wizard.review_page.status_label.text()
-    assert "Allowed sender IDs: 10" in wizard.review_page.summary.toPlainText()
+    assert "Allowed senders: @raidar" in wizard.review_page.summary.toPlainText()
     assert "Dedicated raid browser profile: Profile 3" in wizard.review_page.summary.toPlainText()
 
 
@@ -210,10 +231,16 @@ def test_wizard_uses_allowed_sender_and_raid_browser_profile_wording(qtbot, tmp_
     qtbot.addWidget(wizard)
 
     assert wizard.telegram_page.helper_label.text().endswith("confirm allowed raid senders.")
-    assert wizard.raidar_page.title() == "Allowed Raid Senders"
+    assert wizard.telegram_page.send_code_button.text() == "Send Code"
+    assert wizard.telegram_page.password_help_label.text() == (
+        "If you have 2FA enabled, enter your Telegram password. Otherwise skip this step."
+    )
+    assert wizard.raidar_page.title() == ""
+    assert wizard.raidar_page.page_headline_label.text() == "Allowed Raid Senders"
     assert "detected senders" in wizard.raidar_page.helper_label.text()
     assert "Allowed raid sender IDs" in wizard.raidar_page.confirm_checkbox.text()
-    assert wizard.chrome_page.title() == "Raid Browser Profile"
+    assert wizard.chrome_page.title() == ""
+    assert wizard.chrome_page.page_headline_label.text() == "Raid Browser Profile"
     assert "dedicated Chrome profile" in wizard.chrome_page.helper_label.text()
 
 
@@ -235,6 +262,77 @@ def test_telegram_page_allows_existing_session_without_phone_or_code(qtbot, tmp_
     assert wizard.telegram_page.validatePage() is True
     assert service.phone_calls == 0
     assert service.code_calls == 0
+
+
+def test_telegram_page_send_code_requests_telegram_code_before_authorize(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    from raidbot.desktop.wizard import SetupWizard
+
+    service = FakeTelegramSetupService()
+    wizard = SetupWizard(
+        storage=FakeStorage(tmp_path),
+        telegram_service_factory=lambda *_args: service,
+        chrome_environment=build_chrome_environment(),
+    )
+    qtbot.addWidget(wizard)
+
+    wizard.telegram_page.api_id_input.setText("123456")
+    wizard.telegram_page.api_hash_input.setText("hash-value")
+    wizard.telegram_page.phone_input.setText("+40123456789")
+
+    qtbot.mouseClick(wizard.telegram_page.send_code_button, Qt.MouseButton.LeftButton)
+
+    assert service.request_code_calls == ["+40123456789"]
+    assert wizard.telegram_page.code_requested is True
+    assert wizard.telegram_page.status_label.text() == "Telegram code sent."
+    assert wizard.telegram_page.send_code_button.text() == "Code Sent"
+    assert wizard.telegram_page.send_code_button.isEnabled() is True
+
+
+def test_telegram_page_requires_send_code_before_validate(qtbot, tmp_path: Path) -> None:
+    from raidbot.desktop.wizard import SetupWizard
+
+    wizard = SetupWizard(
+        storage=FakeStorage(tmp_path),
+        telegram_service_factory=lambda *_args: FakeTelegramSetupService(),
+        chrome_environment=build_chrome_environment(),
+    )
+    qtbot.addWidget(wizard)
+
+    wizard.telegram_page.api_id_input.setText("123456")
+    wizard.telegram_page.api_hash_input.setText("hash-value")
+    wizard.telegram_page.phone_input.setText("+40123456789")
+    wizard.telegram_page.code_input.setText("12345")
+
+    assert wizard.telegram_page.validatePage() is False
+    assert wizard.telegram_page.status_label.text() == "Press Send Code first."
+
+
+def test_telegram_page_typing_code_after_send_code_keeps_code_requested(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    from raidbot.desktop.wizard import SetupWizard
+
+    service = FakeTelegramSetupService()
+    wizard = SetupWizard(
+        storage=FakeStorage(tmp_path),
+        telegram_service_factory=lambda *_args: service,
+        chrome_environment=build_chrome_environment(),
+    )
+    qtbot.addWidget(wizard)
+
+    wizard.telegram_page.api_id_input.setText("123456")
+    wizard.telegram_page.api_hash_input.setText("hash-value")
+    wizard.telegram_page.phone_input.setText("+40123456789")
+
+    qtbot.mouseClick(wizard.telegram_page.send_code_button, Qt.MouseButton.LeftButton)
+    wizard.telegram_page.code_input.setText("12345")
+
+    assert wizard.telegram_page.code_requested is True
+    assert wizard.telegram_page.validatePage() is True
 
 
 def test_telegram_page_invalidates_authorized_state_when_auth_inputs_change(
@@ -371,6 +469,8 @@ def test_telegram_page_creates_session_directory_before_authorize(qtbot, tmp_pat
     wizard.telegram_page.api_hash_input.setText("hash-value")
     wizard.telegram_page.phone_input.setText("+40123456789")
     wizard.telegram_page.code_input.setText("12345")
+
+    qtbot.mouseClick(wizard.telegram_page.send_code_button, Qt.MouseButton.LeftButton)
 
     assert wizard.telegram_page.validatePage() is True
     assert captured["session_path"].parent.exists() is True
@@ -558,7 +658,7 @@ def test_review_page_saves_multi_sender_config_and_start_now_flag(qtbot, tmp_pat
     wizard.review_page.start_now_checkbox.setChecked(True)
     wizard.review_page.initializePage()
 
-    assert "Allowed sender IDs: 10, 20, 77" in wizard.review_page.summary.toPlainText()
+    assert "Allowed senders: @raidar, @delugeraidbot, 77" in wizard.review_page.summary.toPlainText()
     assert "Dedicated raid browser profile: Profile 3" in wizard.review_page.summary.toPlainText()
     assert wizard.review_page.validatePage() is True
     assert len(storage.saved_configs) == 1
@@ -569,6 +669,7 @@ def test_review_page_saves_multi_sender_config_and_start_now_flag(qtbot, tmp_pat
         telegram_phone_number="+40123456789",
         whitelisted_chat_ids=[1],
         allowed_sender_ids=[10, 20, 77],
+        allowed_sender_entries=("@raidar", "@delugeraidbot", "77"),
         chrome_profile_directory="Profile 3",
     )
     assert wizard.start_now_requested is True

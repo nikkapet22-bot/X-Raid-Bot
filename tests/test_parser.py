@@ -26,6 +26,18 @@ Bookmark 1
 https://twitter.com/some_user/status/1234567890123456789
 """
 
+SCHEMELESS_X_MESSAGE = """
+Like + Repost now
+
+x.com/i/status/1234567890123456789
+"""
+
+SCHEMELESS_TWITTER_MESSAGE = """
+Reply + Bookmark now
+
+twitter.com/some_user/status/987654321098765432
+"""
+
 QUEUE_MESSAGE = """
 Next up... (7/10 tweets)
 
@@ -68,6 +80,26 @@ def test_parse_raid_message_normalizes_singular_synonyms_and_twitter_source_url(
     assert match.normalized_url == "https://x.com/some_user/status/1234567890123456789"
     assert match.requirements.like is True
     assert match.requirements.repost is True
+    assert match.requirements.reply is True
+    assert match.requirements.bookmark is True
+
+
+def test_parse_raid_message_accepts_schemeless_x_status_url():
+    match = parse_raid_message(SCHEMELESS_X_MESSAGE)
+
+    assert match is not None
+    assert match.raw_url == "x.com/i/status/1234567890123456789"
+    assert match.normalized_url == "https://x.com/i/status/1234567890123456789"
+    assert match.requirements.like is True
+    assert match.requirements.repost is True
+
+
+def test_parse_raid_message_accepts_schemeless_twitter_status_url():
+    match = parse_raid_message(SCHEMELESS_TWITTER_MESSAGE)
+
+    assert match is not None
+    assert match.raw_url == "twitter.com/some_user/status/987654321098765432"
+    assert match.normalized_url == "https://x.com/some_user/status/987654321098765432"
     assert match.requirements.reply is True
     assert match.requirements.bookmark is True
 

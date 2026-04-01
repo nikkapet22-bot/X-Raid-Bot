@@ -15,6 +15,7 @@ class IncomingMessage:
     chat_id: int
     sender_id: int
     text: str
+    has_video: bool = False
 
 
 @dataclass(frozen=True)

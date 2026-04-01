@@ -5,6 +5,9 @@ import time
 from dataclasses import dataclass, replace
 from typing import Callable
 
+_FOCUS_RETRY_SECONDS = 0.5
+_FOCUS_RETRY_INTERVAL_SECONDS = 0.05
+
 
 Bounds = tuple[int, int, int, int]
 
@@ -78,12 +81,16 @@ class WindowManager:
         list_windows: Callable[[], list[WindowInfo]] | None = None,
         restore_window: Callable[[int], bool] | None = None,
         focus_window: Callable[[int], bool] | None = None,
+        maximize_window: Callable[[int], bool] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        wait: Callable[[float], None] = time.sleep,
     ) -> None:
         self._list_windows = list_windows or self._list_windows_win32
         self._restore_window = restore_window or self._restore_window_win32
         self._focus_window = focus_window or self._focus_window_win32
+        self._maximize_window = maximize_window or self._maximize_window_win32
         self._clock = clock
+        self._wait = wait
         self._focus_history: dict[int, float] = {}
 
     def list_chrome_windows(self) -> list[WindowInfo]:
@@ -113,17 +120,27 @@ class WindowManager:
     def ensure_interactable_window(self, window: WindowInfo) -> WindowInteractionOutcome:
         if window.is_minimized and not self._restore_window(window.handle):
             return WindowInteractionOutcome(success=False, reason="window_not_focusable")
-        if not self._focus_window(window.handle):
-            return WindowInteractionOutcome(success=False, reason="window_not_focusable")
-        return WindowInteractionOutcome(
-            success=True,
-            window=replace(window, is_minimized=False),
-        )
+        deadline = self._clock() + _FOCUS_RETRY_SECONDS
+        while True:
+            if self._focus_window(window.handle):
+                return WindowInteractionOutcome(
+                    success=True,
+                    window=replace(window, is_minimized=False),
+                )
+            if self._clock() >= deadline:
+                return WindowInteractionOutcome(
+                    success=False,
+                    reason="window_not_focusable",
+                )
+            self._wait(_FOCUS_RETRY_INTERVAL_SECONDS)
 
     def find_owned_chrome_window(self, profile_directory: str) -> WindowInfo | None:
         _ = profile_directory
         chrome_windows = self.list_chrome_windows()
         return max(chrome_windows, key=lambda window: window.last_focused_at, default=None)
+
+    def maximize_window(self, window: WindowInfo) -> bool:
+        return self._maximize_window(window.handle)
 
     def _list_windows_win32(self) -> list[WindowInfo]:
         win32gui = importlib.import_module("win32gui")
@@ -166,6 +183,15 @@ class WindowManager:
         except Exception:
             return False
         return int(win32gui.GetForegroundWindow()) == int(handle)
+
+    def _maximize_window_win32(self, handle: int) -> bool:
+        win32con = importlib.import_module("win32con")
+        win32gui = importlib.import_module("win32gui")
+        try:
+            win32gui.ShowWindow(handle, win32con.SW_MAXIMIZE)
+        except Exception:
+            return False
+        return True
 
     def _uses_foreground_sentinel(self, windows: list[WindowInfo]) -> bool:
         if not windows:

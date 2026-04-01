@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -20,19 +20,39 @@ from PySide6.QtWidgets import (
 
 from raidbot.desktop.models import BotActionSlotConfig, DesktopAppConfig
 
+_SLOT_DISPLAY_LABELS = {
+    "slot_1_r": "Reply",
+    "slot_2_l": "Like",
+    "slot_3_r": "Repost",
+    "slot_4_b": "Bookmark",
+}
 
-def _set_preview_label(preview_label: QLabel, template_path: Path | None) -> None:
+
+def _set_preview_label(
+    preview_label: QLabel,
+    template_path: Path | None,
+    *,
+    empty_text: str = "No image",
+) -> None:
     if template_path is None:
         preview_label.clear()
-        preview_label.setText("No image")
+        preview_label.setText(empty_text)
         return
 
-    pixmap = QPixmap(str(template_path))
-    if pixmap.isNull():
+    try:
+        image_bytes = Path(template_path).read_bytes()
+    except OSError:
         preview_label.clear()
         preview_label.setText("Preview unavailable")
         return
 
+    image = QImage()
+    if not image.loadFromData(image_bytes):
+        preview_label.clear()
+        preview_label.setText("Preview unavailable")
+        return
+
+    pixmap = QPixmap.fromImage(image)
     preview_label.setText("")
     preview_label.setPixmap(
         pixmap.scaled(
@@ -110,17 +130,48 @@ class SlotBox(QFrame):
         self._dot.setObjectName("statusDot")
         self._dot.setFixedSize(9, 9)
         self._dot.setProperty("stateVariant", "neutral")
-        self.slot_label = QLabel(slot.label)
+        self.slot_label = QLabel(_SLOT_DISPLAY_LABELS.get(slot.key, slot.label))
         self.slot_label.setObjectName("botActionGlyph")
         self.enabled_checkbox = ToggleSwitch()
-        self.slot_number_label = QLabel(f"Slot {index + 1}")
-        self.slot_number_label.setObjectName("botActionSlotMeta")
-        self.slot_number_label.setProperty("muted", "true")
+        self.finish_delay_widget: QWidget | None = None
+        self.finish_delay_label: QLabel | None = None
+        self.finish_delay_input: QSpinBox | None = None
+        self.finish_preview_label: QLabel | None = None
         self.header_layout.addWidget(self._dot, 0, Qt.AlignmentFlag.AlignVCenter)
         self.header_layout.addWidget(self.slot_label, 0, Qt.AlignmentFlag.AlignVCenter)
         self.header_layout.addWidget(self.enabled_checkbox, 0, Qt.AlignmentFlag.AlignVCenter)
         self.header_layout.addStretch()
-        self.header_layout.addWidget(self.slot_number_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        if self._index == 0:
+            self.finish_delay_widget = QWidget()
+            self.finish_delay_widget.setObjectName("finishDelayInline")
+            finish_delay_layout = QHBoxLayout(self.finish_delay_widget)
+            finish_delay_layout.setContentsMargins(0, 0, 0, 0)
+            finish_delay_layout.setSpacing(6)
+            self.finish_delay_label = QLabel("Finish Delay")
+            self.finish_delay_label.setObjectName("botActionSlotMeta")
+            self.finish_delay_label.setProperty("muted", "true")
+            self.finish_delay_input = QSpinBox()
+            self.finish_delay_input.setObjectName("finishDelayInput")
+            self.finish_delay_input.setRange(0, 10)
+            self.finish_delay_input.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+            self.finish_delay_input.setMinimumWidth(48)
+            self.finish_delay_input.setMaximumWidth(48)
+            self.finish_delay_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            finish_delay_layout.addWidget(
+                self.finish_delay_label,
+                0,
+                Qt.AlignmentFlag.AlignVCenter,
+            )
+            finish_delay_layout.addWidget(
+                self.finish_delay_input,
+                0,
+                Qt.AlignmentFlag.AlignVCenter,
+            )
+            self.header_layout.addWidget(
+                self.finish_delay_widget,
+                0,
+                Qt.AlignmentFlag.AlignVCenter,
+            )
         layout.addLayout(self.header_layout)
 
         # Divider
@@ -129,6 +180,11 @@ class SlotBox(QFrame):
         div.setStyleSheet("background: #1e3252; max-height: 1px; border: none;")
         layout.addWidget(div)
 
+        self.preview_row_widget = QWidget()
+        self.preview_row_layout = QHBoxLayout(self.preview_row_widget)
+        self.preview_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.preview_row_layout.setSpacing(8)
+
         self.template_preview_label = QLabel("No image")
         self.template_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.template_preview_label.setMinimumSize(120, 72)
@@ -136,7 +192,19 @@ class SlotBox(QFrame):
         self.template_preview_label.setStyleSheet(
             "border: 1px dashed #1e3252; border-radius: 6px;"
         )
-        layout.addWidget(self.template_preview_label)
+        self.preview_row_layout.addWidget(self.template_preview_label)
+
+        if self._index == 0:
+            self.finish_preview_label = QLabel("No finish image")
+            self.finish_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.finish_preview_label.setMinimumSize(120, 72)
+            self.finish_preview_label.setProperty("muted", "true")
+            self.finish_preview_label.setStyleSheet(
+                "border: 1px dashed #1e3252; border-radius: 6px;"
+            )
+            self.preview_row_layout.addWidget(self.finish_preview_label)
+
+        layout.addWidget(self.preview_row_widget)
 
         self.button_row_widget = QWidget()
         self.button_row_widget.setObjectName("botActionButtonRow")
@@ -172,10 +240,16 @@ class SlotBox(QFrame):
         self.set_slot(slot)
 
     def set_slot(self, slot: BotActionSlotConfig) -> None:
-        self.slot_label.setText(slot.label)
+        self.slot_label.setText(_SLOT_DISPLAY_LABELS.get(slot.key, slot.label))
         with QSignalBlocker(self.enabled_checkbox):
             self.enabled_checkbox.setChecked(bool(slot.enabled))
         _set_preview_label(self.template_preview_label, slot.template_path)
+        if self.finish_preview_label is not None:
+            _set_preview_label(
+                self.finish_preview_label,
+                slot.finish_template_path,
+                empty_text="No finish image",
+            )
 
         has_template = slot.template_path is not None
         variant = "running" if has_template and slot.enabled else (
@@ -198,7 +272,7 @@ class BotActionsPage(QWidget):
     slotTestRequested = Signal(int)
     slotPresetsRequested = Signal(int)
     slotEnabledChanged = Signal(int, bool)
-    settleDelayChanged = Signal(int)
+    slot1FinishDelayChanged = Signal(int)
 
     def __init__(
         self,
@@ -208,10 +282,7 @@ class BotActionsPage(QWidget):
     ) -> None:
         super().__init__(parent)
         self.slot_boxes: list[SlotBox] = []
-
-        self.settle_delay_input = QSpinBox()
-        self.settle_delay_input.setRange(0, 10000)
-        self.settle_delay_input.valueChanged.connect(self.settleDelayChanged.emit)
+        self.slot_1_finish_delay_input: QSpinBox | None = None
 
         self.page_ready_preview_label = QLabel("No image")
         self.page_ready_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -246,16 +317,18 @@ class BotActionsPage(QWidget):
         self._build_layout()
         self.set_page_ready_template_path(config.page_ready_template_path)
         self.set_slots(config.bot_action_slots)
-        self.set_settle_delay(config.auto_run_settle_ms)
+        self.set_slot_1_finish_delay_seconds(config.slot_1_finish_delay_seconds)
         self.set_status_fields(latest_status="Configure fixed bot action slots.")
 
     def set_slots(self, slots: Sequence[BotActionSlotConfig]) -> None:
         for box, slot in zip(self.slot_boxes, slots):
             box.set_slot(slot)
 
-    def set_settle_delay(self, settle_delay_ms: int) -> None:
-        with QSignalBlocker(self.settle_delay_input):
-            self.settle_delay_input.setValue(int(settle_delay_ms))
+    def set_slot_1_finish_delay_seconds(self, finish_delay_seconds: int) -> None:
+        if self.slot_1_finish_delay_input is None:
+            return
+        with QSignalBlocker(self.slot_1_finish_delay_input):
+            self.slot_1_finish_delay_input.setValue(int(finish_delay_seconds))
 
     def set_page_ready_template_path(self, template_path: Path | None) -> None:
         normalized_template_path = (
@@ -289,7 +362,7 @@ class BotActionsPage(QWidget):
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setContentsMargins(12, 24, 12, 24)
 
         page_title = QLabel("Bot Actions")
         page_title.setObjectName("pageTitle")
@@ -353,6 +426,11 @@ class BotActionsPage(QWidget):
                     lambda _checked=False, slot_index=index: self._emit_slot_presets_request(
                         slot_index
                     )
+                )
+            if index == 0 and box.finish_delay_input is not None:
+                self.slot_1_finish_delay_input = box.finish_delay_input
+                box.finish_delay_input.valueChanged.connect(
+                    self.slot1FinishDelayChanged.emit
                 )
             self.slot_boxes.append(box)
             slots_layout.addWidget(box, index // 2, index % 2)

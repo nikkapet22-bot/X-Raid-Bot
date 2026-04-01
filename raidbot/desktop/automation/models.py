@@ -23,6 +23,7 @@ class AutomationStep:
     preset_text: str | None = None
     preset_image_path: Path | None = None
     finish_template_path: Path | None = None
+    finish_delay_seconds: float | None = None
 
 
 @dataclass

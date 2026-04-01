@@ -62,6 +62,7 @@ def test_event_to_incoming_message_extracts_chat_sender_and_text(monkeypatch):
         chat_id=-1001,
         sender_id=42,
         raw_text="Likes\nhttps://x.com/i/status/123",
+        video=None,
     )
 
     message = telegram_client.event_to_incoming_message(event)
@@ -69,15 +70,31 @@ def test_event_to_incoming_message_extracts_chat_sender_and_text(monkeypatch):
     assert message.chat_id == -1001
     assert message.sender_id == 42
     assert message.text == "Likes\nhttps://x.com/i/status/123"
+    assert message.has_video is False
 
 
 def test_event_to_incoming_message_defaults_missing_text_to_empty_string(monkeypatch):
     telegram_client = load_telegram_client_module(monkeypatch)
-    event = SimpleNamespace(chat_id=-1001, sender_id=42, raw_text=None)
+    event = SimpleNamespace(chat_id=-1001, sender_id=42, raw_text=None, video=None)
 
     message = telegram_client.event_to_incoming_message(event)
 
     assert message.text == ""
+    assert message.has_video is False
+
+
+def test_event_to_incoming_message_marks_video_posts(monkeypatch):
+    telegram_client = load_telegram_client_module(monkeypatch)
+    event = SimpleNamespace(
+        chat_id=-1001,
+        sender_id=42,
+        raw_text="raid text",
+        video=object(),
+    )
+
+    message = telegram_client.event_to_incoming_message(event)
+
+    assert message.has_video is True
 
 
 def test_run_forever_registers_new_message_handler_and_awaits_async_callback(monkeypatch):
@@ -105,13 +122,19 @@ def test_run_forever_registers_new_message_handler_and_awaits_async_callback(mon
         assert listener.client.run_until_disconnected_calls == 1
         assert inspect.iscoroutinefunction(listener.client.handler)
 
-        event = SimpleNamespace(chat_id=-1001, sender_id=42, raw_text="raid text")
+        event = SimpleNamespace(
+            chat_id=-1001,
+            sender_id=42,
+            raw_text="raid text",
+            video=object(),
+        )
         await listener.client.handler(event)
 
         assert len(received_messages) == 1
         assert received_messages[0].chat_id == -1001
         assert received_messages[0].sender_id == 42
         assert received_messages[0].text == "raid text"
+        assert received_messages[0].has_video is True
 
     asyncio.run(scenario())
 

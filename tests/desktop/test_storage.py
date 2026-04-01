@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from raidbot.desktop.models import (
@@ -9,10 +9,12 @@ from raidbot.desktop.models import (
     BotActionPreset,
     ActivityEntry,
     BotRuntimeState,
+    DashboardMetricResetState,
     DesktopAppConfig,
     DesktopAppState,
     RaidProfileConfig,
     RaidProfileState,
+    SuccessfulProfileRun,
     TelegramConnectionState,
     default_bot_action_slots,
 )
@@ -112,12 +114,20 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
                 label="George",
                 enabled=True,
                 raid_on_restart=False,
+                reply_enabled=True,
+                like_enabled=False,
+                repost_enabled=True,
+                bookmark_enabled=False,
             ),
             RaidProfileConfig(
                 profile_directory="Profile 3",
                 label="Maria",
                 enabled=False,
                 raid_on_restart=True,
+                reply_enabled=False,
+                like_enabled=True,
+                repost_enabled=False,
+                bookmark_enabled=True,
             ),
         ),
     )
@@ -132,12 +142,64 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
             label="George",
             enabled=True,
             raid_on_restart=False,
+            reply_enabled=True,
+            like_enabled=False,
+            repost_enabled=True,
+            bookmark_enabled=False,
         ),
         RaidProfileConfig(
             profile_directory="Profile 3",
             label="Maria",
             enabled=False,
             raid_on_restart=True,
+            reply_enabled=False,
+            like_enabled=True,
+            repost_enabled=False,
+            bookmark_enabled=True,
+        ),
+    )
+
+
+def test_storage_defaults_raid_profile_action_overrides_for_legacy_config(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        json.dumps(
+            {
+                "telegram_api_id": 123456,
+                "telegram_api_hash": "api-hash",
+                "telegram_session_path": "sessions/raid.session",
+                "telegram_phone_number": "+15555550123",
+                "whitelisted_chat_ids": [1001],
+                "allowed_sender_ids": [424242],
+                "allowed_sender_entries": ["@raidar"],
+                "chrome_profile_directory": "Default",
+                "raid_profiles": [
+                    {
+                        "profile_directory": "Default",
+                        "label": "George",
+                        "enabled": True,
+                        "raid_on_restart": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+
+    assert loaded.raid_profiles == (
+        RaidProfileConfig(
+            profile_directory="Default",
+            label="George",
+            enabled=True,
+            raid_on_restart=False,
+            reply_enabled=True,
+            like_enabled=True,
+            repost_enabled=True,
+            bookmark_enabled=True,
         ),
     )
 
@@ -297,6 +359,206 @@ def test_state_round_trip_includes_activity_entries(tmp_path) -> None:
     assert storage.state_path.exists()
 
 
+def test_state_round_trip_includes_successful_profile_runs(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    timestamp = datetime(2026, 3, 26, 12, 45, 0)
+    state = DesktopAppState(
+        successful_profile_runs=[
+            SuccessfulProfileRun(timestamp=timestamp, duration_seconds=3.0)
+        ]
+    )
+
+    storage.save_state(state)
+
+    loaded = storage.load_state()
+
+    assert loaded.successful_profile_runs == [
+        SuccessfulProfileRun(timestamp=timestamp, duration_seconds=3.0)
+    ]
+
+
+def test_storage_resets_legacy_successful_profile_metrics_once(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    started_at = datetime.now().replace(microsecond=0) - timedelta(minutes=10)
+    completed_at = started_at + timedelta(seconds=3)
+    state = DesktopAppState(
+        activity=[
+            ActivityEntry(
+                timestamp=started_at,
+                action="automation_started",
+                url="https://x.com/i/status/123",
+                reason="automation_started",
+                profile_directory="Default",
+            ),
+            ActivityEntry(
+                timestamp=completed_at,
+                action="automation_succeeded",
+                url="https://x.com/i/status/123",
+                reason="automation_succeeded",
+                profile_directory="Default",
+            ),
+        ],
+        successful_profile_runs=[
+            SuccessfulProfileRun(timestamp=completed_at, duration_seconds=3.0)
+        ],
+        dashboard_metric_resets=DashboardMetricResetState(
+            legacy_local_time_migrated=True,
+            successful_profile_metrics_initialized=False,
+        ),
+    )
+
+    storage.save_state(state)
+
+    loaded = storage.load_state()
+
+    assert loaded.successful_profile_runs == []
+    assert loaded.dashboard_metric_resets.successful_profile_metrics_initialized is True
+
+
+def test_storage_round_trips_dashboard_metric_reset_state(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    reset_state = DashboardMetricResetState(
+        avg_completion_reset_at=datetime(2026, 3, 31, 23, 15, 0),
+        avg_raids_per_hour_reset_at=datetime(2026, 3, 31, 23, 20, 0),
+        raids_completed_offset=14,
+        raids_failed_offset=2,
+        success_rate_completed_offset=14,
+        success_rate_failed_offset=2,
+        uptime_reset_at=datetime(2026, 3, 31, 23, 25, 0),
+        legacy_local_time_migrated=True,
+    )
+    state = DesktopAppState(dashboard_metric_resets=reset_state)
+
+    storage.save_state(state)
+
+    loaded = storage.load_state()
+
+    assert loaded.dashboard_metric_resets == reset_state
+
+
+def test_storage_migrates_legacy_dashboard_timestamps_to_local_time_once(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    legacy_activity_utc = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
+        minutes=10
+    )
+    legacy_last_successful_utc = legacy_activity_utc - timedelta(minutes=5)
+    storage.save_config(
+        DesktopAppConfig(
+            telegram_api_id=123456,
+            telegram_api_hash="api-hash",
+            telegram_session_path=Path("sessions/raid.session"),
+            telegram_phone_number="+15555550123",
+            whitelisted_chat_ids=[1001],
+            allowed_sender_ids=[424242],
+            allowed_sender_entries=("@raidar",),
+            chrome_profile_directory="Default",
+        )
+    )
+    storage.state_path.write_text(
+        json.dumps(
+            {
+                "bot_state": "stopped",
+                "connection_state": "disconnected",
+                "last_successful_raid_open_at": legacy_last_successful_utc.replace(
+                    tzinfo=None
+                ).isoformat(),
+                "activity": [
+                    {
+                        "timestamp": legacy_activity_utc.replace(tzinfo=None).isoformat(),
+                        "action": "automation_succeeded",
+                        "url": "https://x.com/i/status/1",
+                        "reason": "automation_succeeded",
+                        "profile_directory": "Default",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_state()
+    expected_activity_timestamp = legacy_activity_utc.astimezone().replace(tzinfo=None)
+    expected_last_successful = (
+        legacy_last_successful_utc.astimezone().replace(tzinfo=None).isoformat()
+    )
+
+    assert loaded.dashboard_metric_resets.legacy_local_time_migrated is True
+    assert loaded.activity[0].timestamp == expected_activity_timestamp
+    assert loaded.last_successful_raid_open_at == expected_last_successful
+
+    reloaded = storage.load_state()
+
+    assert reloaded.activity[0].timestamp == expected_activity_timestamp
+    assert reloaded.last_successful_raid_open_at == expected_last_successful
+
+
+def test_storage_resets_corrupted_future_dashboard_history(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    future_time = datetime.now() + timedelta(hours=2)
+    state = DesktopAppState(
+        raids_detected=9,
+        raids_opened=7,
+        raids_completed=31,
+        raids_failed=3,
+        duplicates_skipped=2,
+        non_matching_skipped=5,
+        open_failures=1,
+        sender_rejected=4,
+        browser_session_failed=3,
+        page_ready=6,
+        executor_not_configured=2,
+        executor_succeeded=1,
+        executor_failed=5,
+        session_closed=6,
+        last_successful_raid_open_at=future_time.isoformat(),
+        activity=[
+            ActivityEntry(
+                timestamp=future_time,
+                action="automation_succeeded",
+                url="https://x.com/i/status/123",
+                reason="automation_succeeded",
+                profile_directory="Default",
+            )
+        ],
+        last_error="boom",
+        dashboard_metric_resets=DashboardMetricResetState(
+            avg_completion_reset_at=future_time,
+            avg_raids_per_hour_reset_at=future_time,
+            raids_completed_offset=10,
+            raids_failed_offset=1,
+            success_rate_completed_offset=10,
+            success_rate_failed_offset=1,
+            uptime_reset_at=future_time,
+            legacy_local_time_migrated=True,
+        ),
+    )
+
+    storage.save_state(state)
+
+    loaded = storage.load_state()
+
+    assert loaded.raids_detected == 0
+    assert loaded.raids_opened == 0
+    assert loaded.raids_completed == 0
+    assert loaded.raids_failed == 0
+    assert loaded.activity == []
+    assert loaded.last_successful_raid_open_at is None
+    assert loaded.last_error is None
+    assert loaded.dashboard_metric_resets == DashboardMetricResetState(
+        legacy_local_time_migrated=True
+    )
+
+
 def test_storage_round_trips_raid_profile_states(tmp_path) -> None:
     from raidbot.desktop.storage import DesktopStorage
 
@@ -434,6 +696,54 @@ def test_storage_loads_legacy_bot_action_slots_as_disabled_defaults(tmp_path) ->
     assert all(slot.enabled is False for slot in loaded.bot_action_slots)
     assert all(slot.template_path is None for slot in loaded.bot_action_slots)
     assert all(slot.updated_at is None for slot in loaded.bot_action_slots)
+
+
+def test_storage_round_trips_slot_1_finish_delay_seconds(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    config = DesktopAppConfig(
+        telegram_api_id=123456,
+        telegram_api_hash="api-hash",
+        telegram_session_path=Path("sessions/raid.session"),
+        telegram_phone_number="+15555550123",
+        whitelisted_chat_ids=[1001],
+        allowed_sender_ids=[424242],
+        allowed_sender_entries=("@raidar",),
+        chrome_profile_directory="Profile 1",
+        slot_1_finish_delay_seconds=4,
+    )
+
+    storage.save_config(config)
+
+    loaded = storage.load_config()
+
+    assert loaded.slot_1_finish_delay_seconds == 4
+
+
+def test_storage_defaults_missing_slot_1_finish_delay_seconds_to_two(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        json.dumps(
+            {
+                "telegram_api_id": 123456,
+                "telegram_api_hash": "api-hash",
+                "telegram_session_path": "sessions/raid.session",
+                "telegram_phone_number": "+15555550123",
+                "whitelisted_chat_ids": [1001, 1002],
+                "allowed_sender_ids": [424242],
+                "allowed_sender_entries": ["@raidar"],
+                "chrome_profile_directory": "Profile 1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+
+    assert loaded.slot_1_finish_delay_seconds == 2
 
 
 def test_storage_normalizes_malformed_bot_action_slots_to_fixed_layout(tmp_path) -> None:
@@ -644,3 +954,58 @@ def test_activity_history_is_capped_to_200_entries(tmp_path) -> None:
     ]
     assert loaded.activity[0].timestamp == base_timestamp + timedelta(minutes=5)
     assert loaded.activity[-1].timestamp == base_timestamp + timedelta(minutes=204)
+
+
+def test_storage_round_trips_activity_profile_directory(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    timestamp = datetime.now().replace(microsecond=0) - timedelta(minutes=10)
+    state = DesktopAppState(
+        activity=[
+            ActivityEntry(
+                timestamp=timestamp,
+                action="automation_started",
+                url="https://x.com/i/status/1",
+                reason="automation_started",
+                profile_directory="Profile 3",
+            )
+        ],
+        dashboard_metric_resets=DashboardMetricResetState(
+            legacy_local_time_migrated=True
+        ),
+    )
+
+    storage.save_state(state)
+    loaded = storage.load_state()
+
+    assert loaded.activity[0].profile_directory == "Profile 3"
+
+
+def test_storage_loads_legacy_activity_without_profile_directory(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    timestamp = datetime.now().replace(microsecond=0) - timedelta(minutes=10)
+    storage.state_path.write_text(
+        json.dumps(
+            {
+                "bot_state": "stopped",
+                "connection_state": "disconnected",
+                "dashboard_metric_resets": {"legacy_local_time_migrated": True},
+                "activity": [
+                    {
+                        "timestamp": timestamp.isoformat(),
+                        "action": "automation_started",
+                        "url": "https://x.com/i/status/1",
+                        "reason": "automation_started",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_state()
+
+    assert loaded.activity[0].profile_directory is None

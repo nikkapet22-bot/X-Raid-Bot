@@ -5,6 +5,8 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+import shutil
+import tempfile
 from typing import Any
 
 from telethon import TelegramClient
@@ -18,6 +20,12 @@ class AccessibleChat:
 
 @dataclass(frozen=True)
 class RaidarCandidate:
+    entity_id: int
+    label: str
+
+
+@dataclass(frozen=True)
+class ResolvedSenderEntry:
     entity_id: int
     label: str
 
@@ -44,6 +52,8 @@ class TelegramSetupService:
         self.api_hash = api_hash
         self.session_path = session_path
         self.client_factory = client_factory or TelegramClient
+        self._requested_phone_number: str | None = None
+        self._phone_code_hash: str | None = None
 
     async def get_session_status(self) -> SessionStatus:
         client = self._create_client()
@@ -66,6 +76,7 @@ class TelegramSetupService:
     ) -> SessionStatus:
         client = self._create_client()
         should_cleanup = False
+        failure: Exception | None = None
         try:
             await client.connect()
             if await client.is_user_authorized():
@@ -73,10 +84,19 @@ class TelegramSetupService:
 
             should_cleanup = True
             phone_number = await _resolve_callback(phone_number_callback)
-            await client.send_code_request(phone_number)
+            if self._requested_phone_number != phone_number:
+                code_request = await client.send_code_request(phone_number)
+                self._requested_phone_number = phone_number
+                self._phone_code_hash = getattr(code_request, "phone_code_hash", None)
             code = await _resolve_callback(code_callback)
             try:
-                await client.sign_in(phone=phone_number, code=code)
+                sign_in_kwargs = {
+                    "phone": phone_number,
+                    "code": code,
+                }
+                if self._requested_phone_number == phone_number and self._phone_code_hash:
+                    sign_in_kwargs["phone_code_hash"] = self._phone_code_hash
+                await client.sign_in(**sign_in_kwargs)
             except Exception as exc:
                 if not _requires_password(exc) or password_callback is None:
                     raise
@@ -85,11 +105,33 @@ class TelegramSetupService:
 
             if not await client.is_user_authorized():
                 raise RuntimeError("Telegram authorization did not complete")
+            self._requested_phone_number = None
+            self._phone_code_hash = None
             return SessionStatus.authorized
-        except Exception:
-            if should_cleanup:
-                self._remove_session_files()
-            raise
+        except Exception as exc:
+            self._requested_phone_number = None
+            self._phone_code_hash = None
+            failure = exc
+        finally:
+            await _maybe_await(client.disconnect())
+        if should_cleanup:
+            self._remove_session_files()
+        if failure is not None:
+            raise failure
+        return SessionStatus.authorized
+
+    async def request_code(self, phone_number: str) -> SessionStatus:
+        client = self._create_client()
+        try:
+            await client.connect()
+            if await client.is_user_authorized():
+                self._requested_phone_number = None
+                self._phone_code_hash = None
+                return SessionStatus.authorized
+            code_request = await client.send_code_request(phone_number)
+            self._requested_phone_number = phone_number
+            self._phone_code_hash = getattr(code_request, "phone_code_hash", None)
+            return SessionStatus.authorization_required
         finally:
             await _maybe_await(client.disconnect())
 
@@ -121,7 +163,8 @@ class TelegramSetupService:
         return status
 
     async def list_accessible_chats(self) -> list[AccessibleChat]:
-        client = self._create_client()
+        temp_dir, lookup_session_path = self._create_lookup_session_copy()
+        client = self.client_factory(str(lookup_session_path), self.api_id, self.api_hash)
         try:
             await client.connect()
             chats = []
@@ -132,6 +175,7 @@ class TelegramSetupService:
             return sorted(chats, key=lambda chat: chat.title.lower())
         finally:
             await _maybe_await(client.disconnect())
+            temp_dir.cleanup()
 
     async def infer_recent_sender_candidates(
         self,
@@ -139,36 +183,98 @@ class TelegramSetupService:
         *,
         message_limit: int = 50,
     ) -> list[RaidarCandidate]:
-        client = self._create_client()
+        temp_dir, lookup_session_path = self._create_lookup_session_copy()
+        client = self.client_factory(str(lookup_session_path), self.api_id, self.api_hash)
         try:
             await client.connect()
             senders: dict[int, Any] = {}
+            labels_by_sender_id: dict[int, str] = {}
             sender_counts: Counter[int] = Counter()
             for chat_id in chat_ids:
                 async for message in client.iter_messages(chat_id, limit=message_limit):
+                    runtime_sender_id = getattr(message, "sender_id", None)
                     sender = await _message_sender(message)
-                    if sender is None or not hasattr(sender, "id"):
+                    if runtime_sender_id is None and (
+                        sender is None or not hasattr(sender, "id")
+                    ):
                         continue
-                    entity_id = int(sender.id)
-                    senders[entity_id] = sender
-                    sender_counts[entity_id] += 1
+                    if runtime_sender_id is None:
+                        runtime_sender_id = getattr(sender, "id", None)
+                    if runtime_sender_id is None:
+                        continue
+                    runtime_sender_id = int(runtime_sender_id)
+                    if sender is not None:
+                        senders[runtime_sender_id] = sender
+                        labels_by_sender_id[runtime_sender_id] = _label_for_entity(sender)
+                    else:
+                        labels_by_sender_id.setdefault(
+                            runtime_sender_id, str(runtime_sender_id)
+                        )
+                    sender_counts[runtime_sender_id] += 1
 
-            strict_matches = detect_raidar_candidates(senders.values())
+            strict_matches = [
+                RaidarCandidate(
+                    entity_id=sender_id,
+                    label=labels_by_sender_id[sender_id],
+                )
+                for sender_id, sender in senders.items()
+                if _is_supported_raid_bot(sender)
+            ]
             strict_match_ids = {candidate.entity_id for candidate in strict_matches}
             fallback_candidates = [
-                RaidarCandidate(entity_id=entity_id, label=_label_for_entity(senders[entity_id]))
+                RaidarCandidate(
+                    entity_id=entity_id,
+                    label=labels_by_sender_id.get(entity_id, str(entity_id)),
+                )
                 for entity_id, _count in sorted(
                     sender_counts.items(),
-                    key=lambda item: (-item[1], _label_for_entity(senders[item[0]]).lower()),
+                    key=lambda item: (
+                        -item[1],
+                        labels_by_sender_id.get(item[0], str(item[0])).lower(),
+                    ),
                 )
                 if entity_id not in strict_match_ids
             ]
             return [*strict_matches, *fallback_candidates]
         finally:
             await _maybe_await(client.disconnect())
+            temp_dir.cleanup()
+
+    async def resolve_sender_entry_details(self, entry: str) -> ResolvedSenderEntry:
+        temp_dir, lookup_session_path = self._create_lookup_session_copy()
+        client = self.client_factory(str(lookup_session_path), self.api_id, self.api_hash)
+        try:
+            await client.connect()
+            entity = await _maybe_await(client.get_entity(entry))
+        except Exception as exc:
+            raise ValueError(f"Could not resolve sender '{entry}'.") from exc
+        finally:
+            await _maybe_await(client.disconnect())
+            temp_dir.cleanup()
+        entity_id = getattr(entity, "id", None)
+        if entity_id is None:
+            raise ValueError(f"Could not resolve sender '{entry}'.")
+        return ResolvedSenderEntry(
+            entity_id=int(entity_id),
+            label=_label_for_entity(entity),
+        )
+
+    async def resolve_sender_entry(self, entry: str) -> int:
+        return (await self.resolve_sender_entry_details(entry)).entity_id
 
     def _create_client(self) -> Any:
         return self.client_factory(str(self.session_path), self.api_id, self.api_hash)
+
+    def _create_lookup_session_copy(self) -> tuple[tempfile.TemporaryDirectory[str], Path]:
+        temp_dir = tempfile.TemporaryDirectory(prefix="raidbot-lookup-")
+        lookup_session_path = Path(temp_dir.name) / self._session_file_path(self.session_path).name
+        for source_path, destination_path in zip(
+            self._session_artifact_paths(self.session_path),
+            self._session_artifact_paths(lookup_session_path),
+        ):
+            if source_path.exists():
+                shutil.copy2(source_path, destination_path)
+        return temp_dir, lookup_session_path
 
     def _remove_session_files(self) -> None:
         for path in self._session_artifact_paths(self.session_path):

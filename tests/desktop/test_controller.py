@@ -10,21 +10,36 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
-from raidbot.desktop.models import BotActionPreset, DesktopAppConfig, RaidProfileConfig
+from raidbot.desktop.models import (
+    BotActionPreset,
+    DashboardMetricResetState,
+    DesktopAppConfig,
+    DesktopAppState,
+    RaidProfileConfig,
+)
 
 
 class FakeStorage:
     def __init__(self) -> None:
         self.saved_configs: list[DesktopAppConfig] = []
+        self.saved_states: list[DesktopAppState] = []
+        self._state = DesktopAppState()
 
     def save_config(self, config: DesktopAppConfig) -> None:
         self.saved_configs.append(config)
+
+    def save_state(self, state: DesktopAppState) -> None:
+        self._state = replace(state)
+        self.saved_states.append(self._state)
 
     def is_first_run(self) -> bool:
         return False
 
     def load_config(self) -> DesktopAppConfig:
         return build_config()
+
+    def load_state(self) -> DesktopAppState:
+        return replace(self._state)
 
 
 class FakeWorker:
@@ -38,6 +53,7 @@ class FakeWorker:
         self.clear_calls = 0
         self.manual_finished_calls = 0
         self.restart_profile_calls: list[str] = []
+        self.reset_dashboard_metric_calls: list[str] = []
 
     async def run(self) -> None:
         self.run_calls += 1
@@ -60,6 +76,9 @@ class FakeWorker:
 
     def restart_raid_profile(self, profile_directory: str) -> None:
         self.restart_profile_calls.append(profile_directory)
+
+    def reset_dashboard_metric(self, metric_key: str) -> None:
+        self.reset_dashboard_metric_calls.append(metric_key)
 
 
 class FakeRunner:
@@ -174,6 +193,24 @@ class FakeSlotTestRuntime:
         self.run_calls.append((sequence, selected_window_handle, require_interactable_window))
         return self.result
 
+    def run_sequence_with_options(
+        self,
+        sequence,
+        selected_window_handle,
+        *,
+        require_interactable_window=True,
+        move_cursor_before_scroll=False,
+    ):
+        self.run_calls.append(
+            (
+                sequence,
+                selected_window_handle,
+                require_interactable_window,
+                move_cursor_before_scroll,
+            )
+        )
+        return self.result
+
     def dry_run_step(self, sequence, step_index, selected_window_handle):
         raise AssertionError("slot test should not use dry_run_step")
 
@@ -200,21 +237,28 @@ class FailIfCalledSequenceRunner:
 
 
 class FakeSenderResolverService:
-    def __init__(self, resolved_ids_by_entry=None, failures=None) -> None:
+    def __init__(self, resolved_ids_by_entry=None, resolved_labels_by_entry=None, failures=None) -> None:
         self.resolved_ids_by_entry = resolved_ids_by_entry or {}
+        self.resolved_labels_by_entry = resolved_labels_by_entry or {}
         self.failures = set(failures or [])
         self.resolve_calls = []
 
-    async def resolve_sender_entry(self, entry: str) -> int:
+    async def resolve_sender_entry_details(self, entry: str):
         self.resolve_calls.append(entry)
-        if entry in self.failures:
+        if entry in self.failures or entry not in self.resolved_ids_by_entry:
             raise ValueError(f"Could not resolve sender '{entry}'.")
-        return int(self.resolved_ids_by_entry[entry])
+        return SimpleNamespace(
+            entity_id=int(self.resolved_ids_by_entry[entry]),
+            label=self.resolved_labels_by_entry.get(entry, entry),
+        )
 
 
 class FailIfResolveCalled:
     async def resolve_sender_entry(self, entry: str) -> int:
         raise AssertionError(f"resolve_sender_entry should not be called for {entry}")
+
+    async def resolve_sender_entry_details(self, entry: str):
+        raise AssertionError(f"resolve_sender_entry_details should not be called for {entry}")
 
 
 def build_config(**overrides) -> DesktopAppConfig:
@@ -225,7 +269,7 @@ def build_config(**overrides) -> DesktopAppConfig:
         "telegram_phone_number": "+40123456789",
         "whitelisted_chat_ids": [-1001],
         "allowed_sender_ids": [42],
-        "allowed_sender_entries": ("42",),
+        "allowed_sender_entries": ("@raidar",),
         "chrome_profile_directory": "Profile 3",
     }
     values.update(overrides)
@@ -294,6 +338,104 @@ def test_controller_add_raid_profile_appends_and_ignores_duplicates(qtbot) -> No
     assert changed_configs[-1] == controller.config
 
 
+def test_controller_sets_raid_on_restart_for_one_profile(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(
+            chrome_profile_directory="Default",
+            raid_profiles=(
+                RaidProfileConfig(
+                    profile_directory="Default",
+                    label="George",
+                    enabled=True,
+                    raid_on_restart=False,
+                ),
+                RaidProfileConfig(
+                    profile_directory="Profile 3",
+                    label="Maria",
+                    enabled=True,
+                    raid_on_restart=False,
+                ),
+            ),
+        ),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+    )
+
+    controller.set_raid_profile_raid_on_restart("Profile 3", True)
+
+    assert storage.saved_configs[-1].raid_profiles == (
+        RaidProfileConfig(
+            profile_directory="Default",
+            label="George",
+            enabled=True,
+            raid_on_restart=False,
+        ),
+        RaidProfileConfig(
+            profile_directory="Profile 3",
+            label="Maria",
+            enabled=True,
+            raid_on_restart=True,
+        ),
+    )
+    assert controller.config.raid_profiles == storage.saved_configs[-1].raid_profiles
+
+
+def test_controller_sets_profile_action_overrides_for_one_profile(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(
+            chrome_profile_directory="Default",
+            raid_profiles=(
+                RaidProfileConfig(
+                    profile_directory="Default",
+                    label="George",
+                    enabled=True,
+                ),
+                RaidProfileConfig(
+                    profile_directory="Profile 3",
+                    label="Maria",
+                    enabled=True,
+                ),
+            ),
+        ),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+    )
+
+    controller.set_raid_profile_action_overrides(
+        "Profile 3",
+        reply_enabled=False,
+        like_enabled=True,
+        repost_enabled=False,
+        bookmark_enabled=True,
+    )
+
+    assert storage.saved_configs[-1].raid_profiles == (
+        RaidProfileConfig(
+            profile_directory="Default",
+            label="George",
+            enabled=True,
+        ),
+        RaidProfileConfig(
+            profile_directory="Profile 3",
+            label="Maria",
+            enabled=True,
+            reply_enabled=False,
+            like_enabled=True,
+            repost_enabled=False,
+            bookmark_enabled=True,
+        ),
+    )
+    assert controller.config.raid_profiles == storage.saved_configs[-1].raid_profiles
+
+
 def test_controller_restart_raid_profile_submits_worker_command(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 
@@ -318,6 +460,56 @@ def test_controller_restart_raid_profile_submits_worker_command(qtbot) -> None:
 
     assert len(runner.submitted_coroutines) == 1
     assert created["worker"].restart_profile_calls == ["Profile 3"]
+
+
+def test_controller_resets_dashboard_metric_through_worker_when_running(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    runner = SubmitExecutingRunner()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=worker_factory,
+        runner_factory=lambda: runner,
+    )
+
+    controller.start_bot()
+    controller.reset_dashboard_metric("raids_completed")
+
+    assert len(runner.submitted_coroutines) == 1
+    assert created["worker"].reset_dashboard_metric_calls == ["raids_completed"]
+
+
+def test_controller_resets_dashboard_metric_directly_when_idle(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    storage._state = DesktopAppState(
+        raids_completed=17,
+        raids_failed=5,
+        dashboard_metric_resets=DashboardMetricResetState(),
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+    )
+    stats_payloads = []
+    controller.statsChanged.connect(stats_payloads.append)
+
+    controller.reset_dashboard_metric("raids_completed")
+
+    assert storage.saved_states[-1].dashboard_metric_resets.raids_completed_offset == 17
+    assert stats_payloads[-1].dashboard_metric_resets.raids_completed_offset == 17
 
 
 def test_controller_start_bot_and_forward_events(qtbot) -> None:
@@ -373,6 +565,10 @@ def test_controller_apply_config_saves_and_live_applies_when_running(qtbot) -> N
 
     storage = FakeStorage()
     created = {}
+    resolver = FakeSenderResolverService(
+        resolved_ids_by_entry={"99": 99, "101": 101},
+        resolved_labels_by_entry={"99": "@sender99", "101": "@sender101"},
+    )
 
     def worker_factory(**kwargs):
         worker = FakeWorker(**kwargs)
@@ -385,6 +581,7 @@ def test_controller_apply_config_saves_and_live_applies_when_running(qtbot) -> N
         config=build_config(),
         worker_factory=worker_factory,
         runner_factory=lambda: runner,
+        telegram_setup_service_factory=lambda _config: resolver,
     )
     controller.start_bot()
 
@@ -394,11 +591,15 @@ def test_controller_apply_config_saves_and_live_applies_when_running(qtbot) -> N
         allowed_sender_entries=("99", "101"),
         chrome_profile_directory="Profile 9",
     )
+    expected_config = replace(
+        new_config,
+        allowed_sender_entries=("@sender99", "@sender101"),
+    )
 
     controller.apply_config(new_config)
 
-    assert storage.saved_configs == [new_config]
-    assert controller.config == new_config
+    assert storage.saved_configs == [expected_config]
+    assert controller.config == expected_config
     assert len(runner.submitted_coroutines) == 1
 
 
@@ -407,7 +608,12 @@ def test_controller_resolves_sender_entries_before_saving(qtbot) -> None:
 
     storage = FakeStorage()
     resolver = FakeSenderResolverService(
-        resolved_ids_by_entry={"@delugeraidbot": 99, "raidar": 101}
+        resolved_ids_by_entry={"@delugeraidbot": 99, "raidar": 101, "123": 123},
+        resolved_labels_by_entry={
+            "@delugeraidbot": "@delugeraidbot",
+            "raidar": "@raidar",
+            "123": "@sender123",
+        },
     )
     controller = DesktopController(
         storage=storage,
@@ -424,14 +630,80 @@ def test_controller_resolves_sender_entries_before_saving(qtbot) -> None:
         )
     )
 
-    assert resolver.resolve_calls == ["@delugeraidbot", "raidar"]
+    assert resolver.resolve_calls == ["@delugeraidbot", "raidar", "123"]
     assert storage.saved_configs[-1].allowed_sender_entries == (
         "@delugeraidbot",
-        "raidar",
-        "123",
+        "@raidar",
+        "@sender123",
     )
     assert storage.saved_configs[-1].allowed_sender_ids == [99, 101, 123]
     assert controller.config.allowed_sender_ids == [99, 101, 123]
+
+
+def test_controller_reuses_existing_sender_mappings_when_adding_numeric_entry(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    existing_config = build_config(
+        allowed_sender_ids=[99, 101],
+        allowed_sender_entries=("@delugeraidbot", "@raidar"),
+    )
+    resolver = FakeSenderResolverService(
+        resolved_ids_by_entry={"5349287105": 5349287105},
+        resolved_labels_by_entry={"5349287105": "@RallyGuard_Raid_Bot"},
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=existing_config,
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: resolver,
+    )
+
+    controller.apply_config(
+        build_config(
+            allowed_sender_ids=[],
+            allowed_sender_entries=("@delugeraidbot", "@raidar", "5349287105"),
+        )
+    )
+
+    assert storage.saved_configs[-1].allowed_sender_entries == (
+        "@delugeraidbot",
+        "@raidar",
+        "@RallyGuard_Raid_Bot",
+    )
+    assert storage.saved_configs[-1].allowed_sender_ids == [99, 101, 5349287105]
+    assert controller.config.allowed_sender_ids == [99, 101, 5349287105]
+    assert resolver.resolve_calls == ["5349287105"]
+
+
+def test_controller_canonicalizes_numeric_sender_entry_to_display_label(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    resolver = FakeSenderResolverService(
+        resolved_ids_by_entry={"5349287105": 5349287105},
+        resolved_labels_by_entry={"5349287105": "@RallyGuard_Raid_Bot"},
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: resolver,
+    )
+
+    controller.apply_config(
+        build_config(
+            allowed_sender_ids=[],
+            allowed_sender_entries=("5349287105",),
+        )
+    )
+
+    assert resolver.resolve_calls == ["5349287105"]
+    assert storage.saved_configs[-1].allowed_sender_entries == ("@RallyGuard_Raid_Bot",)
+    assert storage.saved_configs[-1].allowed_sender_ids == [5349287105]
+    assert controller.config.allowed_sender_entries == ("@RallyGuard_Raid_Bot",)
 
 
 def test_controller_rejects_unresolved_sender_entries_without_saving(qtbot) -> None:
@@ -458,6 +730,41 @@ def test_controller_rejects_unresolved_sender_entries_without_saving(qtbot) -> N
         assert str(exc) == "Could not resolve sender '@missing'."
     else:
         raise AssertionError("Expected unresolved sender entry to raise ValueError.")
+
+    assert storage.saved_configs == []
+    assert controller.config == build_config()
+
+
+def test_controller_rejects_numeric_sender_id_without_username_without_saving(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    resolver = FakeSenderResolverService(
+        resolved_ids_by_entry={"5349287105": 5349287105},
+        resolved_labels_by_entry={"5349287105": "Rally Guard Raid"},
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: resolver,
+    )
+
+    try:
+        controller.apply_config(
+            build_config(
+                allowed_sender_ids=[],
+                allowed_sender_entries=("5349287105",),
+            )
+        )
+    except ValueError as exc:
+        assert (
+            str(exc)
+            == "Sender ID '5349287105' could not be converted to a @username."
+        )
+    else:
+        raise AssertionError("Expected numeric sender without username to raise ValueError.")
 
     assert storage.saved_configs == []
     assert controller.config == build_config()
@@ -518,6 +825,36 @@ def test_controller_settle_delay_persists_without_resolving_sender_entries(qtbot
     assert storage.saved_configs[-1].allowed_sender_entries == ("raidar",)
     assert storage.saved_configs[-1].allowed_sender_ids == [42]
     assert controller.config.auto_run_settle_ms == 2750
+    assert changed_configs[-1] == controller.config
+
+
+def test_controller_slot_1_finish_delay_persists_without_resolving_sender_entries(
+    qtbot,
+) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    config = build_config(
+        allowed_sender_ids=[42],
+        allowed_sender_entries=("raidar",),
+        slot_1_finish_delay_seconds=2,
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=config,
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: FailIfResolveCalled(),
+    )
+    changed_configs = []
+    controller.configChanged.connect(changed_configs.append)
+
+    controller.set_slot_1_finish_delay_seconds(4)
+
+    assert storage.saved_configs[-1].slot_1_finish_delay_seconds == 4
+    assert storage.saved_configs[-1].allowed_sender_entries == ("raidar",)
+    assert storage.saved_configs[-1].allowed_sender_ids == [42]
+    assert controller.config.slot_1_finish_delay_seconds == 4
     assert changed_configs[-1] == controller.config
 
 
@@ -924,8 +1261,38 @@ def test_controller_runs_slot_test_against_most_recent_chrome_window(qtbot, tmp_
     ]
     assert events[-1]["message"] == "Slot 2 (L): success"
     assert runtime.run_calls[0][1] == 9
-    assert runtime.run_calls[0][2] is False
+    assert runtime.run_calls[0][2] is True
+    assert runtime.run_calls[0][3] is True
     assert runtime.run_calls[0][0].steps[0].template_path == template_path
+
+
+def test_controller_waits_briefly_before_running_slot_test(qtbot, tmp_path: Path) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    template_path = tmp_path / "slot_2_l.png"
+    template_path.write_bytes(b"capture")
+    runtime = FakeSlotTestRuntime(
+        windows=[SimpleNamespace(handle=9, last_focused_at=5.0, title="Chrome 2")]
+    )
+    waits: list[float] = []
+    controller = DesktopController(
+        storage=FakeStorage(),
+        config=build_config(
+            bot_action_slots=(
+                build_config().bot_action_slots[0],
+                replace(build_config().bot_action_slots[1], template_path=template_path),
+                *build_config().bot_action_slots[2:],
+            )
+        ),
+        runner_factory=ImmediateRunner,
+        automation_runtime_probe=lambda: (True, None),
+        automation_runtime_factory=lambda _emit_event: runtime,
+        sleep=waits.append,
+    )
+
+    controller.test_bot_action_slot(1)
+
+    assert waits == [1.0]
 
 
 def test_controller_stop_bot_submits_stop_when_running(qtbot) -> None:
