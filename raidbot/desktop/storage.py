@@ -261,6 +261,7 @@ class DesktopStorage:
         config = self.load_config() if self.config_path.exists() else None
         state = self._migrate_legacy_dashboard_timestamps_to_local_time(state)
         state = self._reset_corrupted_future_dashboard_history(state)
+        state = self._initialize_per_profile_outcome_counters(state)
         state = self._initialize_successful_profile_metrics(state)
         return replace(
             state,
@@ -353,6 +354,9 @@ class DesktopStorage:
             "successful_profile_metrics_initialized": bool(
                 resets.successful_profile_metrics_initialized
             ),
+            "per_profile_outcome_counters_initialized": bool(
+                resets.per_profile_outcome_counters_initialized
+            ),
         }
 
     def _dashboard_metric_resets_from_data(
@@ -363,6 +367,7 @@ class DesktopStorage:
             return DashboardMetricResetState(
                 legacy_local_time_migrated=False,
                 successful_profile_metrics_initialized=False,
+                per_profile_outcome_counters_initialized=False,
             )
         return DashboardMetricResetState(
             avg_completion_reset_at=self._maybe_datetime(
@@ -381,6 +386,9 @@ class DesktopStorage:
             legacy_local_time_migrated=bool(data.get("legacy_local_time_migrated", False)),
             successful_profile_metrics_initialized=bool(
                 data.get("successful_profile_metrics_initialized", False)
+            ),
+            per_profile_outcome_counters_initialized=bool(
+                data.get("per_profile_outcome_counters_initialized", False)
             ),
         )
 
@@ -446,6 +454,27 @@ class DesktopStorage:
             ),
         )
 
+    def _initialize_per_profile_outcome_counters(
+        self,
+        state: DesktopAppState,
+    ) -> DesktopAppState:
+        resets = state.dashboard_metric_resets
+        if resets.per_profile_outcome_counters_initialized:
+            return state
+        return replace(
+            state,
+            raids_completed=0,
+            raids_failed=0,
+            dashboard_metric_resets=replace(
+                resets,
+                raids_completed_offset=0,
+                raids_failed_offset=0,
+                success_rate_completed_offset=0,
+                success_rate_failed_offset=0,
+                per_profile_outcome_counters_initialized=True,
+            ),
+        )
+
     def _reset_corrupted_future_dashboard_history(
         self,
         state: DesktopAppState,
@@ -473,7 +502,8 @@ class DesktopStorage:
             successful_profile_runs=[],
             last_error=None,
             dashboard_metric_resets=DashboardMetricResetState(
-                legacy_local_time_migrated=state.dashboard_metric_resets.legacy_local_time_migrated
+                legacy_local_time_migrated=state.dashboard_metric_resets.legacy_local_time_migrated,
+                per_profile_outcome_counters_initialized=True,
             ),
         )
 

@@ -24,6 +24,14 @@ from raidbot.desktop.telegram_setup import AccessibleChat
 from raidbot.desktop.theme import SECTION_OBJECT_NAME
 
 
+class RefreshingComboBox(QComboBox):
+    popupAboutToShow = Signal()
+
+    def showPopup(self) -> None:
+        self.popupAboutToShow.emit()
+        super().showPopup()
+
+
 def _parse_int_field(text: str, *, field_name: str) -> int:
     value = text.strip()
     try:
@@ -62,6 +70,7 @@ class SettingsPage(QWidget):
     senderScanRequested = Signal(object, object)
     reauthorizeRequested = Signal()
     raidProfileAddRequested = Signal(str, str)
+    raidProfileOptionsRefreshRequested = Signal()
     raidProfileRemoveRequested = Signal(str)
     raidProfileMoveRequested = Signal(str, str)
 
@@ -164,7 +173,10 @@ class SettingsPage(QWidget):
         self.add_sender_button = QPushButton("Add sender")
         self.add_sender_button.setProperty("variant", "secondary")
         self.add_sender_button.clicked.connect(self._handle_add_sender_row)
-        self.available_profile_combo = QComboBox()
+        self.available_profile_combo = RefreshingComboBox()
+        self.available_profile_combo.popupAboutToShow.connect(
+            self.raidProfileOptionsRefreshRequested.emit
+        )
         self.profile_combo = self.available_profile_combo
         self.add_profile_button = QPushButton("Add profile")
         self.add_profile_button.setProperty("variant", "secondary")
@@ -680,6 +692,14 @@ class SettingsPage(QWidget):
         if current_index < 0 or current_index >= len(self._available_profiles):
             return
         selected_profile = self._available_profiles[current_index]
+        if any(
+            profile.profile_directory == selected_profile.directory_name
+            for profile in self._config.raid_profiles
+        ):
+            self.status_label.setStyleSheet("")
+            self.status_label.setText("Profile already added")
+            return
+        self.status_label.setStyleSheet("")
         self.status_label.setText("Adding profile...")
         self.raidProfileAddRequested.emit(
             selected_profile.directory_name,

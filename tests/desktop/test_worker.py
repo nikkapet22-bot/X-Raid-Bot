@@ -908,8 +908,8 @@ def test_worker_continues_after_profile_failure_and_marks_profile_red(tmp_path) 
     assert runtime.closed_window_handles == [41, 45]
     assert worker.state.raids_detected == 1
     assert worker.state.raids_opened == 1
-    assert worker.state.raids_completed == 1
-    assert worker.state.raids_failed == 0
+    assert worker.state.raids_completed == 2
+    assert worker.state.raids_failed == 1
     assert worker.state.raid_profile_states == (
         RaidProfileState("Default", "George", "green", None),
         RaidProfileState("Profile 3", "Maria", "red", "not_logged_in"),
@@ -976,6 +976,26 @@ def test_worker_continues_after_profile_failure_and_marks_profile_red(tmp_path) 
         "Default",
         "Profile 9",
     ]
+
+
+def test_worker_per_profile_counter_whole_raid_helpers_do_not_mutate_completed_failed() -> None:
+    storage = FakeStorage()
+    events: list[dict] = []
+    worker = build_default_worker(
+        storage,
+        events,
+        datetime(2026, 4, 2, 12, 0, 0),
+        chrome_environment_factory=lambda: FakeChromeEnvironment(),
+    )
+
+    worker.state.raids_completed = 7
+    worker.state.raids_failed = 2
+
+    worker._record_whole_raid_completed()
+    worker._record_whole_raid_failed()
+
+    assert worker.state.raids_completed == 7
+    assert worker.state.raids_failed == 2
 
 
 def test_worker_marks_profile_red_when_profile_run_raises_exception(tmp_path) -> None:

@@ -559,6 +559,61 @@ def test_storage_resets_corrupted_future_dashboard_history(tmp_path) -> None:
     )
 
 
+def test_storage_resets_legacy_per_profile_counter_baseline_once(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.save_config(
+        DesktopAppConfig(
+            telegram_api_id=123456,
+            telegram_api_hash="api-hash",
+            telegram_session_path=Path("sessions/raid.session"),
+            telegram_phone_number="+15555550123",
+            whitelisted_chat_ids=[1001],
+            allowed_sender_ids=[424242],
+            allowed_sender_entries=("@raidar",),
+            chrome_profile_directory="Default",
+        )
+    )
+    storage.state_path.write_text(
+        json.dumps(
+            {
+                "bot_state": "stopped",
+                "connection_state": "disconnected",
+                "raids_completed": 14,
+                "raids_failed": 3,
+                "dashboard_metric_resets": {
+                    "raids_completed_offset": 10,
+                    "raids_failed_offset": 1,
+                    "success_rate_completed_offset": 10,
+                    "success_rate_failed_offset": 1,
+                    "legacy_local_time_migrated": True,
+                    "successful_profile_metrics_initialized": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_state()
+
+    assert loaded.raids_completed == 0
+    assert loaded.raids_failed == 0
+    assert loaded.dashboard_metric_resets.raids_completed_offset == 0
+    assert loaded.dashboard_metric_resets.raids_failed_offset == 0
+    assert loaded.dashboard_metric_resets.success_rate_completed_offset == 0
+    assert loaded.dashboard_metric_resets.success_rate_failed_offset == 0
+    assert loaded.dashboard_metric_resets.per_profile_outcome_counters_initialized is True
+
+    reloaded = storage.load_state()
+
+    assert reloaded.raids_completed == 0
+    assert reloaded.raids_failed == 0
+    assert (
+        reloaded.dashboard_metric_resets.per_profile_outcome_counters_initialized is True
+    )
+
+
 def test_storage_round_trips_raid_profile_states(tmp_path) -> None:
     from raidbot.desktop.storage import DesktopStorage
 

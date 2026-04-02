@@ -339,6 +339,7 @@ class DashboardMetricResetState:
     uptime_reset_at: datetime | None = None
     legacy_local_time_migrated: bool = True
     successful_profile_metrics_initialized: bool = True
+    per_profile_outcome_counters_initialized: bool = True
 
 
 @dataclass

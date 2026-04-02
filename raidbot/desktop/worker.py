@@ -922,6 +922,7 @@ class DesktopBotWorker:
                 duration_seconds=duration_seconds,
             )
         )
+        self.state.raids_completed += 1
         self._mark_latest_replayable_raid_profile_succeeded(profile.profile_directory)
         self._set_raid_profile_state(
             profile,
@@ -962,6 +963,7 @@ class DesktopBotWorker:
         )
         self._mark_latest_replayable_raid_profile_failed(profile.profile_directory)
         translated_reason = self._translate_automation_reason(reason) or "automation_execution_failed"
+        self.state.raids_failed += 1
         self._set_raid_profile_state(
             profile,
             status="red",
@@ -1296,11 +1298,9 @@ class DesktopBotWorker:
         self._persist_state_snapshot()
 
     def _record_whole_raid_completed(self) -> None:
-        self.state.raids_completed += 1
         self._persist_state_snapshot()
 
     def _record_whole_raid_failed(self) -> None:
-        self.state.raids_failed += 1
         self._persist_state_snapshot()
 
     def _persist_state_snapshot(self) -> None:

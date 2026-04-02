@@ -1013,6 +1013,9 @@ class MainWindow(QMainWindow):
         )
         self.settings_page.applyRequested.connect(self._apply_settings_config)
         self.settings_page.senderScanRequested.connect(self._scan_allowed_senders)
+        self.settings_page.raidProfileOptionsRefreshRequested.connect(
+            self._refresh_available_profiles_for_settings
+        )
         self.settings_page.raidProfileAddRequested.connect(self.controller.add_raid_profile)
         self.settings_page.raidProfileRemoveRequested.connect(
             self.controller.remove_raid_profile
@@ -2044,6 +2047,9 @@ class MainWindow(QMainWindow):
                 )
             )
         return profiles
+
+    def _refresh_available_profiles_for_settings(self) -> None:
+        self.settings_page.set_available_profiles(self.available_profiles_loader())
 
     def _load_session_status(self) -> str:
         try:

@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 
-from raidbot.desktop.models import DesktopAppConfig
+from raidbot.desktop.models import DesktopAppConfig, RaidProfileConfig
 from raidbot.desktop.telegram_setup import AccessibleChat
 
 
@@ -431,6 +431,32 @@ def test_settings_page_can_refresh_session_status_and_profiles(qtbot) -> None:
         "Profile 9",
     ]
     assert page.profile_combo.currentText() == "Profile 3"
+
+
+def test_settings_page_rejects_duplicate_profile_add_with_clear_status(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(
+            chrome_profile_directory="Default",
+            raid_profiles=(
+                RaidProfileConfig(profile_directory="Default", label="George", enabled=True),
+                RaidProfileConfig(profile_directory="Profile 3", label="Maria", enabled=True),
+            ),
+        ),
+        available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+    added = []
+    page.raidProfileAddRequested.connect(lambda directory, label: added.append((directory, label)))
+
+    page.available_profile_combo.setCurrentText("Profile 3")
+    qtbot.mouseClick(page.add_profile_button, Qt.MouseButton.LeftButton)
+
+    assert added == []
+    assert page.status_label.text() == "Profile already added"
 
 
 def test_settings_page_uses_grouped_sections_and_primary_save(qtbot) -> None:

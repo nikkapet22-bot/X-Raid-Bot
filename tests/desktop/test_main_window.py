@@ -795,7 +795,7 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
         assert window.bot_state_label.text() == "Running"
         assert window.connection_state_label.text() == "Connected"
         assert window.avg_raid_completion_time_label.text() == "60s"
-        assert window.average_raids_per_hour_label.text() == "12.0/hr"
+        assert window.average_raids_per_hour_label.text() == "8.0/hr"
         assert window.raids_completed_label.text() == "24"
         assert window.raids_failed_label.text() == "0"
         assert window.sidebar_success_rate_label.text() == "100.0%"
@@ -806,6 +806,21 @@ def test_main_window_initializes_from_persisted_state_and_updates_from_signals(q
         assert "Page Ready" in window.activity_list.item(1).text()
     finally:
         controller.botStateChanged.emit("stopped")
+
+
+def test_main_window_per_profile_counter_cards_render_completed_failed_and_success_rate(
+    qtbot,
+) -> None:
+    state = DesktopAppState(
+        raids_completed=3,
+        raids_failed=1,
+    )
+    window = build_window(FakeController(), FakeStorage(state=state))
+    qtbot.addWidget(window)
+
+    assert window.raids_completed_label.text() == "3"
+    assert window.raids_failed_label.text() == "1"
+    assert window.sidebar_success_rate_label.text() == "75.0%"
 
 
 def test_main_window_dashboard_exposes_metric_cards_and_panels(qtbot) -> None:
@@ -2499,6 +2514,59 @@ def test_main_window_routes_detected_raid_profile_add_and_reorder_actions(qtbot)
         "George [Default]",
         "Pasok [Profile 9]",
         "Maria [Profile 3]",
+    ]
+
+
+def test_main_window_refreshes_available_profiles_when_profile_picker_opens(qtbot) -> None:
+    from raidbot.desktop.chrome_profiles import ChromeProfile
+
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Default",
+            raid_profiles=(
+                RaidProfileConfig(
+                    profile_directory="Default",
+                    label="George",
+                    enabled=True,
+                ),
+            ),
+        )
+    )
+    available_profiles = [
+        [ChromeProfile(directory_name="Default", label="George")],
+        [
+            ChromeProfile(directory_name="Default", label="George"),
+            ChromeProfile(directory_name="Profile 12", label="Elena"),
+        ],
+    ]
+    loader_calls = []
+
+    def load_profiles():
+        loader_calls.append(True)
+        index = min(len(loader_calls) - 1, len(available_profiles) - 1)
+        return available_profiles[index]
+
+    window = build_window(
+        controller,
+        FakeStorage(config=controller.config),
+        available_profiles_loader=load_profiles,
+    )
+    qtbot.addWidget(window)
+
+    assert [window.settings_page.profile_combo.itemText(index) for index in range(window.settings_page.profile_combo.count())] == [
+        "George [Default]",
+    ]
+
+    window.settings_page.available_profile_combo.showPopup()
+    window.settings_page.available_profile_combo.hidePopup()
+    window.settings_page.available_profile_combo.setCurrentText("Elena [Profile 12]")
+    qtbot.mouseClick(window.settings_page.add_profile_button, Qt.MouseButton.LeftButton)
+
+    assert len(loader_calls) == 2
+    assert controller.raid_profile_add_calls == [("Profile 12", "Elena")]
+    assert [window.settings_page.profile_combo.itemText(index) for index in range(window.settings_page.profile_combo.count())] == [
+        "George [Default]",
+        "Elena [Profile 12]",
     ]
 
 
