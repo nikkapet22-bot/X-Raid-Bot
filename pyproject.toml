@@ -11,6 +11,7 @@ dependencies = [
     "telethon",
     "python-dotenv",
     "PySide6",
+    "playwright",
     "numpy",
     "opencv-python-headless",
     "mss",
