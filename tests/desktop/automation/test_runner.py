@@ -633,6 +633,57 @@ def test_runner_slot_1_pastes_text_and_image_without_extra_waits(
     ]
 
 
+def test_runner_slot_1_text_only_waits_briefly_before_finish_search(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+
+    class TimedTemplateMatcher:
+        def __init__(self, current_time) -> None:
+            self._current_time = current_time
+            self._finish_returned = False
+
+        def find_best_match(self, _frame, template, threshold: float):
+            if template == "template.png":
+                return _match()
+            if template == str(finish_template_path):
+                if not self._finish_returned and self._current_time() >= 101.2:
+                    self._finish_returned = True
+                    return _match(40, 10)
+                return None
+            return None
+
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=TimedTemplateMatcher(clock.now),
+        input_driver=input_driver,
+        template_loader=lambda path: str(path),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.pasted_text == ["gm"]
+    assert input_driver.file_pasted_images == []
+    assert input_driver.clicks == [(25, 15), (45, 15)]
+
+
 def test_runner_slot_1_clicks_main_image_then_single_finish_image(
     tmp_path: Path,
 ) -> None:

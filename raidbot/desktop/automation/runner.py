@@ -398,6 +398,7 @@ class SequenceRunner:
                 "point": point,
             }
         )
+        pasted_image = False
         if step.preset_text is not None:
             self.input_driver.paste_text(step.preset_text)
         if (
@@ -407,6 +408,9 @@ class SequenceRunner:
             self.sleep(_SLOT_1_TEXT_TO_IMAGE_DELAY_SECONDS)
             self.input_driver.paste_image_file(Path(step.preset_image_path))
             self.sleep(1.0)
+            pasted_image = True
+        if step.preset_text is not None and not pasted_image:
+            self.sleep(_SLOT_1_TEXT_TO_IMAGE_DELAY_SECONDS)
         finish_template_path = step.finish_template_path
         if finish_template_path is None or not Path(finish_template_path).exists():
             return RunResult(

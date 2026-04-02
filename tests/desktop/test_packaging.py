@@ -6,7 +6,7 @@ from pathlib import Path
 def test_beta_zip_name_uses_versioned_windows_artifact() -> None:
     from raidbot.desktop.packaging import beta_zip_name
 
-    assert beta_zip_name("2.1.6", "beta2") == "L8N-Raid-Bot-v2.1.6-beta2-win64.zip"
+    assert beta_zip_name("2.1.6", "beta4") == "L8N-Raid-Bot-v2.1.6-beta4-win64.zip"
 
 
 def test_bundled_folder_name_matches_executable_brand() -> None:
@@ -18,7 +18,7 @@ def test_bundled_folder_name_matches_executable_brand() -> None:
 def test_build_beta_readme_mentions_appdata_and_exe_name() -> None:
     from raidbot.desktop.packaging import build_beta_readme
 
-    text = build_beta_readme(version="2.1.6", channel="beta2")
+    text = build_beta_readme(version="2.1.6", channel="beta4")
 
     assert "L8N Raid Bot.exe" in text
     assert "%APPDATA%\\RaidBot" in text
