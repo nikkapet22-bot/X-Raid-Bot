@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from raidbot.desktop.automation.models import AutomationSequence, AutomationStep, MatchResult
-from raidbot.desktop.automation.runner import SequenceRunner
+from raidbot.desktop.automation.runner import RunResult, SequenceRunner
 from raidbot.desktop.automation.windowing import WindowInfo, WindowInteractionOutcome
 
 
@@ -716,6 +716,172 @@ def test_runner_slot_1_clicks_main_image_then_single_finish_image(
     assert result.status == "completed"
     assert input_driver.clicks == [(25, 15), (45, 15)]
     assert clock.value >= 102.0
+
+
+def test_runner_slot_1_treats_weaker_post_submit_match_as_success(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    frame = np.zeros((40, 40), dtype=np.uint8)
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    initial_finish_match = MatchResult(score=0.98, top_left_x=40, top_left_y=10, width=10, height=10)
+    weaker_finish_match = MatchResult(score=0.82, top_left_x=40, top_left_y=10, width=10, height=10)
+    find_results = iter([(_window(), frame, _match()), (_window(), frame, initial_finish_match), (_window(), frame, weaker_finish_match)])
+    monkeypatch.setattr(runner, "_find_match_for_template", lambda *args: next(find_results))
+    monkeypatch.setattr(
+        runner,
+        "_confirm_ui_changed_after_click",
+        lambda *args, **kwargs: RunResult(
+            status="completed",
+            window_handle=_window().handle,
+            step_index=0,
+        ),
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.clicks == [(25, 15), (45, 15)]
+
+
+def test_runner_slot_1_retries_when_post_submit_match_score_stays_too_similar(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    frame = np.zeros((40, 40), dtype=np.uint8)
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    initial_finish_match = MatchResult(score=0.98, top_left_x=40, top_left_y=10, width=10, height=10)
+    similar_finish_match = MatchResult(score=0.97, top_left_x=40, top_left_y=10, width=10, height=10)
+    find_results = iter(
+        [
+            (_window(), frame, _match()),
+            (_window(), frame, initial_finish_match),
+            (_window(), frame, similar_finish_match),
+            RunResult(
+                status="failed",
+                failure_reason="match_not_found",
+                window_handle=_window().handle,
+                step_index=0,
+            ),
+        ]
+    )
+    monkeypatch.setattr(runner, "_find_match_for_template", lambda *args: next(find_results))
+    monkeypatch.setattr(
+        runner,
+        "_confirm_ui_changed_after_click",
+        lambda *args, **kwargs: RunResult(
+            status="completed",
+            window_handle=_window().handle,
+            step_index=0,
+        ),
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.clicks == [(25, 15), (45, 15), (45, 15)]
+
+
+def test_runner_slot_1_fails_when_post_submit_match_score_stays_too_similar_after_retry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    frame = np.zeros((40, 40), dtype=np.uint8)
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+    initial_finish_match = MatchResult(score=0.98, top_left_x=40, top_left_y=10, width=10, height=10)
+    similar_finish_match = MatchResult(score=0.97, top_left_x=40, top_left_y=10, width=10, height=10)
+    find_results = iter(
+        [
+            (_window(), frame, _match()),
+            (_window(), frame, initial_finish_match),
+            (_window(), frame, similar_finish_match),
+            (_window(), frame, similar_finish_match),
+        ]
+    )
+    monkeypatch.setattr(runner, "_find_match_for_template", lambda *args: next(find_results))
+    monkeypatch.setattr(
+        runner,
+        "_confirm_ui_changed_after_click",
+        lambda *args, **kwargs: RunResult(
+            status="completed",
+            window_handle=_window().handle,
+            step_index=0,
+        ),
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "failed"
+    assert result.failure_reason == "reply_submit_not_confirmed"
+    assert input_driver.clicks == [(25, 15), (45, 15), (45, 15)]
 
 
 def test_runner_slot_1_uses_configured_finish_delay(

@@ -15,6 +15,10 @@ _SLOT_1_FINISH_SCROLL_ATTEMPTS = 4
 _SLOT_1_FINISH_SEARCH_SECONDS = 1.0
 _SLOT_1_TEXT_TO_IMAGE_DELAY_SECONDS = 0.5
 _SLOT_1_FINISH_POST_CLICK_DELAY_SECONDS = 2.0
+_SLOT_1_REPLY_SUBMIT_RECHECK_SECONDS = 0.0
+_SLOT_1_REPLY_SUBMIT_RETRY_DELAY_SECONDS = 2.0
+_SLOT_1_REPLY_ACTIVE_MATCH_FLOOR = 0.9
+_SLOT_1_REPLY_ACTIVE_MATCH_DELTA = 0.03
 _SCROLL_SETTLE_SECONDS = 1.0
 
 
@@ -471,6 +475,15 @@ class SequenceRunner:
         )
         if isinstance(confirmation, RunResult):
             if confirmation.status == "completed":
+                submission_check = self._verify_slot_1_reply_submission(
+                    finish_window,
+                    step,
+                    step_index,
+                    finish_template,
+                    finish_match,
+                )
+                if submission_check is not None:
+                    return submission_check
                 self.emit_event(
                     {
                         "type": "step_succeeded",
@@ -481,6 +494,15 @@ class SequenceRunner:
                 return None
             return confirmation
         if self._step_succeeded(finish_match, confirmation):
+            submission_check = self._verify_slot_1_reply_submission(
+                finish_window,
+                step,
+                step_index,
+                finish_template,
+                finish_match,
+            )
+            if submission_check is not None:
+                return submission_check
             self.emit_event(
                 {
                     "type": "step_succeeded",
@@ -494,6 +516,88 @@ class SequenceRunner:
             failure_reason="ui_did_not_change",
             window_handle=finish_window.handle,
             step_index=step_index,
+        )
+
+    def _verify_slot_1_reply_submission(
+        self,
+        window: WindowInfo,
+        step: AutomationStep,
+        step_index: int,
+        finish_template: Any,
+        original_finish_match: MatchResult,
+    ) -> RunResult | None:
+        reply_check_step = replace(
+            step,
+            max_search_seconds=_SLOT_1_REPLY_SUBMIT_RECHECK_SECONDS,
+            max_scroll_attempts=0,
+        )
+        finish_still_visible = self._find_match_for_template(
+            window,
+            reply_check_step,
+            step_index,
+            finish_template,
+        )
+        if isinstance(finish_still_visible, RunResult):
+            if finish_still_visible.failure_reason == "match_not_found":
+                return None
+            return finish_still_visible
+        retry_window, _retry_frame, retry_match = finish_still_visible
+        if not self._slot_1_match_still_looks_active(
+            original_finish_match.score,
+            retry_match.score,
+        ):
+            return None
+        retry_window = self._refresh_active_window(retry_window, step_index)
+        if isinstance(retry_window, RunResult):
+            return retry_window
+        retry_point = self._resolve_click_point(
+            retry_window,
+            step,
+            step_index,
+            retry_match,
+        )
+        if isinstance(retry_point, RunResult):
+            return retry_point
+        self.input_driver.move_click(retry_point, delay_seconds=1.0)
+        self.emit_event(
+            {
+                "type": "step_clicked",
+                "step_index": step_index,
+                "point": retry_point,
+            }
+        )
+        self.sleep(_SLOT_1_REPLY_SUBMIT_RETRY_DELAY_SECONDS)
+        finish_after_retry = self._find_match_for_template(
+            retry_window,
+            reply_check_step,
+            step_index,
+            finish_template,
+        )
+        if isinstance(finish_after_retry, RunResult):
+            if finish_after_retry.failure_reason == "match_not_found":
+                return None
+            return finish_after_retry
+        _final_window, _final_frame, final_match = finish_after_retry
+        if not self._slot_1_match_still_looks_active(
+            original_finish_match.score,
+            final_match.score,
+        ):
+            return None
+        return RunResult(
+            status="failed",
+            failure_reason="reply_submit_not_confirmed",
+            window_handle=retry_window.handle,
+            step_index=step_index,
+        )
+
+    def _slot_1_match_still_looks_active(
+        self,
+        original_score: float,
+        current_score: float,
+    ) -> bool:
+        return current_score >= max(
+            _SLOT_1_REPLY_ACTIVE_MATCH_FLOOR,
+            original_score - _SLOT_1_REPLY_ACTIVE_MATCH_DELTA,
         )
 
     def _step_succeeded(self, previous_match: MatchResult, next_match: MatchResult | None) -> bool:
