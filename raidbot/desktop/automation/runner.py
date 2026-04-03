@@ -17,8 +17,6 @@ _SLOT_1_TEXT_TO_IMAGE_DELAY_SECONDS = 0.5
 _SLOT_1_FINISH_POST_CLICK_DELAY_SECONDS = 2.0
 _SLOT_1_REPLY_SUBMIT_RECHECK_SECONDS = 0.0
 _SLOT_1_REPLY_SUBMIT_RETRY_DELAY_SECONDS = 2.0
-_SLOT_1_REPLY_ACTIVE_MATCH_FLOOR = 0.9
-_SLOT_1_REPLY_ACTIVE_MATCH_DELTA = 0.03
 _SCROLL_SETTLE_SECONDS = 1.0
 
 
@@ -480,6 +478,7 @@ class SequenceRunner:
                     step,
                     step_index,
                     finish_template,
+                    finish_frame,
                     finish_match,
                 )
                 if submission_check is not None:
@@ -499,6 +498,7 @@ class SequenceRunner:
                 step,
                 step_index,
                 finish_template,
+                finish_frame,
                 finish_match,
             )
             if submission_check is not None:
@@ -524,6 +524,7 @@ class SequenceRunner:
         step: AutomationStep,
         step_index: int,
         finish_template: Any,
+        original_finish_frame: Any,
         original_finish_match: MatchResult,
     ) -> RunResult | None:
         reply_check_step = replace(
@@ -541,10 +542,11 @@ class SequenceRunner:
             if finish_still_visible.failure_reason == "match_not_found":
                 return None
             return finish_still_visible
-        retry_window, _retry_frame, retry_match = finish_still_visible
-        if not self._slot_1_match_still_looks_active(
-            original_finish_match.score,
-            retry_match.score,
+        retry_window, retry_frame, retry_match = finish_still_visible
+        if self._did_match_region_change(
+            original_finish_frame,
+            retry_frame,
+            original_finish_match,
         ):
             return None
         retry_window = self._refresh_active_window(retry_window, step_index)
@@ -577,10 +579,11 @@ class SequenceRunner:
             if finish_after_retry.failure_reason == "match_not_found":
                 return None
             return finish_after_retry
-        _final_window, _final_frame, final_match = finish_after_retry
-        if not self._slot_1_match_still_looks_active(
-            original_finish_match.score,
-            final_match.score,
+        _final_window, final_frame, _final_match = finish_after_retry
+        if self._did_match_region_change(
+            original_finish_frame,
+            final_frame,
+            original_finish_match,
         ):
             return None
         return RunResult(
@@ -588,16 +591,6 @@ class SequenceRunner:
             failure_reason="reply_submit_not_confirmed",
             window_handle=retry_window.handle,
             step_index=step_index,
-        )
-
-    def _slot_1_match_still_looks_active(
-        self,
-        original_score: float,
-        current_score: float,
-    ) -> bool:
-        return current_score >= max(
-            _SLOT_1_REPLY_ACTIVE_MATCH_FLOOR,
-            original_score - _SLOT_1_REPLY_ACTIVE_MATCH_DELTA,
         )
 
     def _step_succeeded(self, previous_match: MatchResult, next_match: MatchResult | None) -> bool:

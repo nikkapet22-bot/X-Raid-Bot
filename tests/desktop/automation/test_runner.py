@@ -718,7 +718,7 @@ def test_runner_slot_1_clicks_main_image_then_single_finish_image(
     assert clock.value >= 102.0
 
 
-def test_runner_slot_1_treats_weaker_post_submit_match_as_success(
+def test_runner_slot_1_treats_changed_post_submit_region_as_success_even_when_match_score_stays_high(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -726,7 +726,10 @@ def test_runner_slot_1_treats_weaker_post_submit_match_as_success(
     input_driver = FakeInputDriver()
     finish_template_path = tmp_path / "finish.png"
     finish_template_path.write_bytes(b"finish image")
-    frame = np.zeros((40, 40), dtype=np.uint8)
+    frame = np.zeros((60, 60), dtype=np.uint8)
+    frame[10:20, 40:50] = 255
+    gray_frame = frame.copy()
+    gray_frame[10:20, 40:50] = 170
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
@@ -738,8 +741,14 @@ def test_runner_slot_1_treats_weaker_post_submit_match_as_success(
     )
 
     initial_finish_match = MatchResult(score=0.98, top_left_x=40, top_left_y=10, width=10, height=10)
-    weaker_finish_match = MatchResult(score=0.82, top_left_x=40, top_left_y=10, width=10, height=10)
-    find_results = iter([(_window(), frame, _match()), (_window(), frame, initial_finish_match), (_window(), frame, weaker_finish_match)])
+    equally_strong_gray_match = MatchResult(score=0.98, top_left_x=40, top_left_y=10, width=10, height=10)
+    find_results = iter(
+        [
+            (_window(), frame, _match()),
+            (_window(), frame, initial_finish_match),
+            (_window(), gray_frame, equally_strong_gray_match),
+        ]
+    )
     monkeypatch.setattr(runner, "_find_match_for_template", lambda *args: next(find_results))
     monkeypatch.setattr(
         runner,
@@ -767,7 +776,7 @@ def test_runner_slot_1_treats_weaker_post_submit_match_as_success(
     assert input_driver.clicks == [(25, 15), (45, 15)]
 
 
-def test_runner_slot_1_retries_when_post_submit_match_score_stays_too_similar(
+def test_runner_slot_1_retries_when_post_submit_region_stays_visually_identical(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -775,7 +784,7 @@ def test_runner_slot_1_retries_when_post_submit_match_score_stays_too_similar(
     input_driver = FakeInputDriver()
     finish_template_path = tmp_path / "finish.png"
     finish_template_path.write_bytes(b"finish image")
-    frame = np.zeros((40, 40), dtype=np.uint8)
+    frame = np.zeros((60, 60), dtype=np.uint8)
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
@@ -787,7 +796,8 @@ def test_runner_slot_1_retries_when_post_submit_match_score_stays_too_similar(
     )
 
     initial_finish_match = MatchResult(score=0.98, top_left_x=40, top_left_y=10, width=10, height=10)
-    similar_finish_match = MatchResult(score=0.97, top_left_x=40, top_left_y=10, width=10, height=10)
+    frame[10:20, 40:50] = 255
+    similar_finish_match = MatchResult(score=0.98, top_left_x=40, top_left_y=10, width=10, height=10)
     find_results = iter(
         [
             (_window(), frame, _match()),
@@ -828,7 +838,7 @@ def test_runner_slot_1_retries_when_post_submit_match_score_stays_too_similar(
     assert input_driver.clicks == [(25, 15), (45, 15), (45, 15)]
 
 
-def test_runner_slot_1_fails_when_post_submit_match_score_stays_too_similar_after_retry(
+def test_runner_slot_1_fails_when_post_submit_region_stays_visually_identical_after_retry(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -836,7 +846,7 @@ def test_runner_slot_1_fails_when_post_submit_match_score_stays_too_similar_afte
     input_driver = FakeInputDriver()
     finish_template_path = tmp_path / "finish.png"
     finish_template_path.write_bytes(b"finish image")
-    frame = np.zeros((40, 40), dtype=np.uint8)
+    frame = np.zeros((60, 60), dtype=np.uint8)
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
@@ -847,7 +857,8 @@ def test_runner_slot_1_fails_when_post_submit_match_score_stays_too_similar_afte
         sleep=clock.sleep,
     )
     initial_finish_match = MatchResult(score=0.98, top_left_x=40, top_left_y=10, width=10, height=10)
-    similar_finish_match = MatchResult(score=0.97, top_left_x=40, top_left_y=10, width=10, height=10)
+    frame[10:20, 40:50] = 255
+    similar_finish_match = MatchResult(score=0.98, top_left_x=40, top_left_y=10, width=10, height=10)
     find_results = iter(
         [
             (_window(), frame, _match()),
