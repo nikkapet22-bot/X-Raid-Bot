@@ -1191,6 +1191,58 @@ def test_controller_rejects_slot_1_test_when_no_presets_configured(
     assert runtime.run_calls == []
 
 
+def test_controller_formats_reply_submit_not_confirmed_slot_test_reason(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    from raidbot.desktop.automation.runner import RunResult
+    from raidbot.desktop.controller import DesktopController
+
+    template_path = tmp_path / "slot_1_r.png"
+    template_path.write_bytes(b"capture")
+    finish_template_path = tmp_path / "slot_1_r_finish.png"
+    finish_template_path.write_bytes(b"finish")
+    runtime = FakeSlotTestRuntime(
+        windows=[SimpleNamespace(handle=9, last_focused_at=1.0, title="Chrome 1")],
+        result=RunResult(status="failed", failure_reason="reply_submit_not_confirmed"),
+    )
+    controller = DesktopController(
+        storage=FakeStorage(),
+        config=build_config(
+            bot_action_slots=(
+                replace(
+                    build_config().bot_action_slots[0],
+                    template_path=template_path,
+                    finish_template_path=finish_template_path,
+                    presets=(BotActionPreset(id="preset-1", text="gm"),),
+                ),
+                *build_config().bot_action_slots[1:],
+            )
+        ),
+        runner_factory=ImmediateRunner,
+        automation_runtime_probe=lambda: (True, None),
+        automation_runtime_factory=lambda _emit_event: runtime,
+    )
+    events = []
+    controller.botActionRunEvent.connect(events.append)
+
+    controller.test_bot_action_slot(0)
+
+    assert events == [
+        {
+            "type": "slot_test_started",
+            "slot_index": 0,
+            "message": "Slot 1 (R): testing",
+        },
+        {
+            "type": "slot_test_failed",
+            "slot_index": 0,
+            "reason": "reply_submit_not_confirmed",
+            "message": "Slot 1 (R): reply submit not confirmed",
+        },
+    ]
+
+
 def test_controller_rejects_slot_test_when_no_chrome_window_exists(qtbot, tmp_path: Path) -> None:
     from raidbot.desktop.controller import DesktopController
 
