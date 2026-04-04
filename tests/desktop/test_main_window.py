@@ -161,9 +161,8 @@ class FakeController(QObject):
         self.raid_profile_add_calls = []
         self.raid_profile_remove_calls = []
         self.raid_profile_move_calls = []
-        self.raid_profile_raid_on_restart_updates = []
         self.raid_profile_action_override_updates = []
-        self.restart_raid_profile_calls = []
+        self.raid_now_profile_calls = []
         self.dashboard_metric_reset_requests = []
         self.sender_candidate_scan_calls = []
         self.sender_candidate_results = [RaidarCandidate(entity_id=42, label="@raidar")]
@@ -397,22 +396,8 @@ class FakeController(QObject):
             )
         )
 
-    def restart_raid_profile(self, profile_directory: str) -> None:
-        self.restart_raid_profile_calls.append(profile_directory)
-
-    def set_raid_profile_raid_on_restart(
-        self,
-        profile_directory: str,
-        enabled: bool,
-    ) -> None:
-        self.raid_profile_raid_on_restart_updates.append((profile_directory, enabled))
-        updated_profiles = tuple(
-            replace(profile, raid_on_restart=enabled)
-            if profile.profile_directory == profile_directory
-            else profile
-            for profile in self.config.raid_profiles
-        )
-        self.apply_config(replace(self.config, raid_profiles=updated_profiles))
+    def run_raid_now_for_profile(self, profile_directory: str) -> None:
+        self.raid_now_profile_calls.append(profile_directory)
 
     def set_raid_profile_action_overrides(
         self,
@@ -2676,10 +2661,12 @@ def test_main_window_renders_raid_profile_cards_from_state(qtbot) -> None:
     assert list(window.raid_profile_cards) == ["Default", "Profile 3"]
     assert window.raid_profile_cards["Default"].title_label.text() == "George"
     assert window.raid_profile_cards["Default"].property("profileStatus") == "green"
-    assert window.raid_profile_cards["Default"].restart_button.isHidden() is True
+    assert window.raid_profile_cards["Default"].raid_now_button.isHidden() is False
+    assert window.raid_profile_cards["Default"].raid_now_button.isEnabled() is False
     assert window.raid_profile_cards["Profile 3"].title_label.text() == "Maria"
     assert window.raid_profile_cards["Profile 3"].property("profileStatus") == "red"
-    assert window.raid_profile_cards["Profile 3"].restart_button.isHidden() is False
+    assert window.raid_profile_cards["Profile 3"].raid_now_button.isHidden() is False
+    assert window.raid_profile_cards["Profile 3"].raid_now_button.isEnabled() is False
     assert (
         window.raid_profile_cards["Profile 3"].reason_label.text() == "login required"
     )
@@ -2745,7 +2732,7 @@ def test_main_window_profile_card_click_toggles_failure_reason(qtbot) -> None:
     assert card.reason_label.isHidden() is True
 
 
-def test_main_window_profile_card_restart_routes_to_controller(qtbot) -> None:
+def test_main_window_profile_card_raid_now_routes_to_controller(qtbot) -> None:
     controller = FakeController(
         config=build_config(
             chrome_profile_directory="Profile 3",
@@ -2762,22 +2749,23 @@ def test_main_window_profile_card_restart_routes_to_controller(qtbot) -> None:
     )
     window = build_window(controller, storage)
     qtbot.addWidget(window)
+    controller.connectionStateChanged.emit("connected")
 
     qtbot.mouseClick(
-        window.raid_profile_cards["Profile 3"].restart_button,
+        window.raid_profile_cards["Profile 3"].raid_now_button,
         Qt.MouseButton.LeftButton,
     )
 
-    assert controller.restart_raid_profile_calls == ["Profile 3"]
+    assert controller.raid_now_profile_calls == ["Profile 3"]
 
 
-def test_main_window_profile_card_renders_raid_on_restart_toggle(qtbot) -> None:
+def test_main_window_profile_card_renders_raid_now_button(qtbot) -> None:
     controller = FakeController(
         config=build_config(
             chrome_profile_directory="Profile 3",
             raid_profiles=(
-                RaidProfileConfig("Default", "George", True, False),
-                RaidProfileConfig("Profile 3", "Maria", True, True),
+                RaidProfileConfig("Default", "George", True),
+                RaidProfileConfig("Profile 3", "Maria", True),
             ),
         )
     )
@@ -2796,18 +2784,19 @@ def test_main_window_profile_card_renders_raid_on_restart_toggle(qtbot) -> None:
     default_card = window.raid_profile_cards["Default"]
     maria_card = window.raid_profile_cards["Profile 3"]
 
-    assert default_card.raid_on_restart_label.text() == "Raid on Restart"
-    assert default_card.raid_on_restart_toggle.isChecked() is False
-    assert maria_card.raid_on_restart_toggle.isChecked() is True
+    assert default_card.raid_now_button.text() == "Raid NOW!"
+    assert maria_card.raid_now_button.text() == "Raid NOW!"
+    assert not hasattr(default_card, "restart_button")
+    assert not hasattr(default_card, "raid_on_restart_toggle")
 
 
-def test_main_window_profile_card_raid_on_restart_toggle_routes_to_controller(
+def test_main_window_profile_card_raid_now_button_only_enables_when_connected(
     qtbot,
 ) -> None:
     controller = FakeController(
         config=build_config(
             chrome_profile_directory="Profile 3",
-            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True, False),),
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
         )
     )
     storage = FakeStorage(
@@ -2820,13 +2809,13 @@ def test_main_window_profile_card_raid_on_restart_toggle_routes_to_controller(
     )
     window = build_window(controller, storage)
     qtbot.addWidget(window)
+    card = window.raid_profile_cards["Profile 3"]
 
-    qtbot.mouseClick(
-        window.raid_profile_cards["Profile 3"].raid_on_restart_toggle,
-        Qt.MouseButton.LeftButton,
-    )
-
-    assert controller.raid_profile_raid_on_restart_updates == [("Profile 3", True)]
+    assert card.raid_now_button.isEnabled() is False
+    controller.connectionStateChanged.emit("connected")
+    assert card.raid_now_button.isEnabled() is True
+    controller.connectionStateChanged.emit("reconnecting")
+    assert card.raid_now_button.isEnabled() is False
 
 
 def test_main_window_profile_card_renders_paused_when_all_actions_disabled(qtbot) -> None:
@@ -2838,11 +2827,10 @@ def test_main_window_profile_card_renders_paused_when_all_actions_disabled(qtbot
                     "Profile 3",
                     "Maria",
                     True,
-                    False,
-                    False,
-                    False,
-                    False,
-                    False,
+                    reply_enabled=False,
+                    like_enabled=False,
+                    repost_enabled=False,
+                    bookmark_enabled=False,
                 ),
             ),
         )
@@ -2862,7 +2850,7 @@ def test_main_window_profile_card_renders_paused_when_all_actions_disabled(qtbot
 
     assert card.property("profileStatus") == "paused"
     assert card.status_label.text() == "Paused"
-    assert card.restart_button.isHidden() is True
+    assert card.raid_now_button.isHidden() is False
 
 
 def test_main_window_profile_action_cog_routes_overrides_to_controller(qtbot) -> None:

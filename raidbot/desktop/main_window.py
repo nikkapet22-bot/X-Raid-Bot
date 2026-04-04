@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QDateTime, QMargins, QPointF, QRect, QRectF, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtCore import QDateTime, QMargins, QPointF, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtCharts import (
     QAreaSeries,
     QChart,
@@ -54,7 +54,6 @@ from PySide6.QtWidgets import (
 )
 
 from raidbot.desktop.bot_actions import BotActionsPage
-from raidbot.desktop.bot_actions.page import ToggleSwitch
 from raidbot.desktop.bot_actions.capture import SlotCaptureService
 from raidbot.desktop.bot_actions.presets_dialog import Slot1PresetsDialog
 from raidbot.desktop.branding import APP_NAME, APP_VERSION_BADGE
@@ -448,8 +447,7 @@ def _paint_line_relative_fill(
 # ── Profile card ──────────────────────────────────────────────────────────────
 
 class RaidProfileCard(QFrame):
-    restartRequested = Signal(str)
-    raidOnRestartChanged = Signal(str, bool)
+    raidNowRequested = Signal(str)
     actionOverridesRequested = Signal(str)
 
     def __init__(self, profile_directory: str, *, parent: QWidget | None = None) -> None:
@@ -499,33 +497,15 @@ class RaidProfileCard(QFrame):
         self.reason_label.setProperty("muted", "true")
         self.reason_label.hide()
 
-        self.restart_button = QPushButton("Restart")
-        self.restart_button.setProperty("variant", "secondary")
-        self.restart_button.clicked.connect(
-            lambda: self.restartRequested.emit(self.profile_directory)
+        self.raid_now_button = QPushButton("Raid NOW!")
+        self.raid_now_button.setProperty("variant", "secondary")
+        self.raid_now_button.clicked.connect(
+            lambda: self.raidNowRequested.emit(self.profile_directory)
         )
-        footer_row = QHBoxLayout()
-        footer_row.setSpacing(8)
-        footer_row.setContentsMargins(0, 0, 0, 0)
-        self.raid_on_restart_label = QLabel("Raid on Restart")
-        self.raid_on_restart_label.setObjectName("raidOnRestartLabel")
-        self.raid_on_restart_label.setProperty("muted", "true")
-        self.raid_on_restart_toggle = ToggleSwitch(self)
-        self.raid_on_restart_toggle.setAccessibleName("Raid on Restart")
-        self.raid_on_restart_toggle.toggled.connect(
-            lambda checked: self.raidOnRestartChanged.emit(
-                self.profile_directory,
-                bool(checked),
-            )
-        )
-        footer_row.addWidget(self.raid_on_restart_label)
-        footer_row.addStretch()
-        footer_row.addWidget(self.raid_on_restart_toggle, 0, Qt.AlignmentFlag.AlignRight)
 
         layout.addWidget(self.status_label)
         layout.addWidget(self.reason_label)
-        layout.addWidget(self.restart_button)
-        layout.addLayout(footer_row)
+        layout.addWidget(self.raid_now_button)
         layout.addStretch()
 
     def apply_state(self, profile, state: RaidProfileState) -> None:
@@ -549,10 +529,10 @@ class RaidProfileCard(QFrame):
         if not is_error:
             self._details_visible = False
         self.reason_label.setVisible(is_error and self._details_visible)
-        self.restart_button.setVisible(is_error and not is_paused)
-        blocker = QSignalBlocker(self.raid_on_restart_toggle)
-        self.raid_on_restart_toggle.setChecked(bool(getattr(profile, "raid_on_restart", False)))
-        del blocker
+        self.raid_now_button.setVisible(True)
+
+    def set_raid_now_enabled(self, enabled: bool) -> None:
+        self.raid_now_button.setEnabled(bool(enabled))
 
     def mousePressEvent(self, event) -> None:
         if self.property("profileStatus") == "red":
@@ -1413,6 +1393,7 @@ class MainWindow(QMainWindow):
             label.setText(display_state)
             _apply_variant(label, variant)
         _apply_variant(self._conn_dot, variant)
+        self._update_raid_now_buttons_enabled_state()
 
     def _set_button_variant(self, button: QPushButton, variant: str) -> None:
         if button.property("variant") == variant:
@@ -2401,10 +2382,7 @@ class MainWindow(QMainWindow):
             card = RaidProfileCard(
                 profile.profile_directory, parent=self.profile_cards_container
             )
-            card.restartRequested.connect(self.controller.restart_raid_profile)
-            card.raidOnRestartChanged.connect(
-                self.controller.set_raid_profile_raid_on_restart
-            )
+            card.raidNowRequested.connect(self.controller.run_raid_now_for_profile)
             card.actionOverridesRequested.connect(
                 self._configure_profile_action_overrides
             )
@@ -2420,9 +2398,15 @@ class MainWindow(QMainWindow):
                     ),
                 )
             )
+            card.set_raid_now_enabled(self.connection_state == "connected")
             self.raid_profile_cards[profile.profile_directory] = card
             self._raid_profile_card_widgets.append(card)
         self._reflow_raid_profile_cards()
+
+    def _update_raid_now_buttons_enabled_state(self) -> None:
+        enabled = self.connection_state == "connected"
+        for card in self.raid_profile_cards.values():
+            card.set_raid_now_enabled(enabled)
 
     def _reflow_raid_profile_cards(self) -> None:
         if not hasattr(self, "profile_cards_layout"):
