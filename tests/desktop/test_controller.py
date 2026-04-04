@@ -53,6 +53,7 @@ class FakeWorker:
         self.clear_calls = 0
         self.manual_finished_calls = 0
         self.restart_profile_calls: list[str] = []
+        self.run_raid_now_calls: list[str] = []
         self.reset_dashboard_metric_calls: list[str] = []
 
     async def run(self) -> None:
@@ -76,6 +77,9 @@ class FakeWorker:
 
     def restart_raid_profile(self, profile_directory: str) -> None:
         self.restart_profile_calls.append(profile_directory)
+
+    def run_raid_now_for_profile(self, profile_directory: str) -> None:
+        self.run_raid_now_calls.append(profile_directory)
 
     def reset_dashboard_metric(self, metric_key: str) -> None:
         self.reset_dashboard_metric_calls.append(metric_key)
@@ -460,6 +464,53 @@ def test_controller_restart_raid_profile_submits_worker_command(qtbot) -> None:
 
     assert len(runner.submitted_coroutines) == 1
     assert created["worker"].restart_profile_calls == ["Profile 3"]
+
+
+def test_controller_run_raid_now_submits_worker_command_when_connected(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    runner = SubmitExecutingRunner()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=worker_factory,
+        runner_factory=lambda: runner,
+    )
+
+    controller.start_bot()
+    controller._handle_worker_event({"type": "connection_state_changed", "state": "connected"})
+    controller.run_raid_now_for_profile("Profile 3")
+
+    assert len(runner.submitted_coroutines) == 1
+    assert created["worker"].run_raid_now_calls == ["Profile 3"]
+
+
+def test_controller_rejects_raid_now_when_telegram_not_connected(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: SubmitExecutingRunner(),
+    )
+    errors = []
+    controller.errorRaised.connect(errors.append)
+
+    controller.start_bot()
+    controller._handle_worker_event({"type": "connection_state_changed", "state": "connecting"})
+    controller.run_raid_now_for_profile("Profile 3")
+
+    assert errors == ["Telegram must be connected"]
 
 
 def test_controller_resets_dashboard_metric_through_worker_when_running(qtbot) -> None:

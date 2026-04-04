@@ -134,6 +134,7 @@ class DesktopController(QObject):
         self._automation_run_state = "idle"
         self._automation_queue_state = "idle"
         self._automation_queue_length = 0
+        self._connection_state = "disconnected"
         self._workerEventReceived.connect(self._handle_worker_event)
         self._submissionFailed.connect(self.errorRaised.emit)
         self._automationEventReceived.connect(self._handle_automation_event)
@@ -325,6 +326,21 @@ class DesktopController(QObject):
         ):
             return
         self._submit_to_runner(lambda: self._worker.restart_raid_profile(profile_directory))
+
+    def run_raid_now_for_profile(self, profile_directory: str) -> None:
+        if self._worker is None or self._runner is None or not self._runner.is_running():
+            self.errorRaised.emit("Bot is not running")
+            return
+        if self._connection_state != "connected":
+            self.errorRaised.emit("Telegram must be connected")
+            return
+        if self._automation_queue_blocks_manual_actions():
+            self.errorRaised.emit(self._QUEUE_OWNS_SLOT_ERROR)
+            return
+        if self._manual_automation_running():
+            self.errorRaised.emit("Automation already running")
+            return
+        self._submit_to_runner(lambda: self._worker.run_raid_now_for_profile(profile_directory))
 
     def reset_dashboard_metric(self, metric_key: str) -> None:
         if (
@@ -713,7 +729,8 @@ class DesktopController(QObject):
                 self._clear_automation_queue_snapshot()
             self.botStateChanged.emit(state)
         elif event_type == "connection_state_changed":
-            self.connectionStateChanged.emit(str(event.get("state", "")))
+            self._connection_state = str(event.get("state", ""))
+            self.connectionStateChanged.emit(self._connection_state)
         elif event_type == "stats_changed":
             self.statsChanged.emit(event.get("state"))
         elif event_type == "activity_added":
