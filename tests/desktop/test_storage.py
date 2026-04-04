@@ -113,7 +113,6 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
                 profile_directory="Default",
                 label="George",
                 enabled=True,
-                raid_on_restart=False,
                 reply_enabled=True,
                 like_enabled=False,
                 repost_enabled=True,
@@ -123,7 +122,6 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
                 profile_directory="Profile 3",
                 label="Maria",
                 enabled=False,
-                raid_on_restart=True,
                 reply_enabled=False,
                 like_enabled=True,
                 repost_enabled=False,
@@ -141,7 +139,6 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
             profile_directory="Default",
             label="George",
             enabled=True,
-            raid_on_restart=False,
             reply_enabled=True,
             like_enabled=False,
             repost_enabled=True,
@@ -151,7 +148,6 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
             profile_directory="Profile 3",
             label="Maria",
             enabled=False,
-            raid_on_restart=True,
             reply_enabled=False,
             like_enabled=True,
             repost_enabled=False,
@@ -195,11 +191,49 @@ def test_storage_defaults_raid_profile_action_overrides_for_legacy_config(tmp_pa
             profile_directory="Default",
             label="George",
             enabled=True,
-            raid_on_restart=False,
             reply_enabled=True,
             like_enabled=True,
             repost_enabled=True,
             bookmark_enabled=True,
+        ),
+    )
+
+
+def test_storage_ignores_legacy_raid_on_restart_field(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        json.dumps(
+            {
+                "telegram_api_id": 123456,
+                "telegram_api_hash": "api-hash",
+                "telegram_session_path": "sessions/raid.session",
+                "telegram_phone_number": "+15555550123",
+                "whitelisted_chat_ids": [1001],
+                "allowed_sender_ids": [424242],
+                "allowed_sender_entries": ["@raidar"],
+                "chrome_profile_directory": "Profile 3",
+                "raid_profiles": [
+                    {
+                        "profile_directory": "Profile 3",
+                        "label": "Maria",
+                        "enabled": True,
+                        "raid_on_restart": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+
+    assert loaded.raid_profiles == (
+        RaidProfileConfig(
+            profile_directory="Profile 3",
+            label="Maria",
+            enabled=True,
         ),
     )
 

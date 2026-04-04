@@ -47,7 +47,6 @@ class RaidProfileConfig:
     profile_directory: str
     label: str
     enabled: bool = True
-    raid_on_restart: bool = False
     reply_enabled: bool = True
     like_enabled: bool = True
     repost_enabled: bool = True
@@ -294,7 +293,6 @@ class DesktopAppConfig:
                     profile_directory=profile_directory,
                     label=label or profile_directory,
                     enabled=bool(getattr(profile, "enabled", True)),
-                    raid_on_restart=bool(getattr(profile, "raid_on_restart", False)),
                     reply_enabled=bool(getattr(profile, "reply_enabled", True)),
                     like_enabled=bool(getattr(profile, "like_enabled", True)),
                     repost_enabled=bool(getattr(profile, "repost_enabled", True)),
