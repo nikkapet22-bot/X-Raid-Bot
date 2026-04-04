@@ -163,6 +163,7 @@ class FakeController(QObject):
         self.raid_profile_move_calls = []
         self.raid_profile_action_override_updates = []
         self.raid_now_profile_calls = []
+        self.reset_raid_profile_calls = []
         self.dashboard_metric_reset_requests = []
         self.sender_candidate_scan_calls = []
         self.sender_candidate_results = [RaidarCandidate(entity_id=42, label="@raidar")]
@@ -398,6 +399,9 @@ class FakeController(QObject):
 
     def run_raid_now_for_profile(self, profile_directory: str) -> None:
         self.raid_now_profile_calls.append(profile_directory)
+
+    def reset_raid_profile(self, profile_directory: str) -> None:
+        self.reset_raid_profile_calls.append(profile_directory)
 
     def set_raid_profile_action_overrides(
         self,
@@ -2790,6 +2794,61 @@ def test_main_window_profile_card_renders_raid_now_button(qtbot) -> None:
     assert not hasattr(default_card, "raid_on_restart_toggle")
 
 
+def test_main_window_profile_card_shows_restart_icon_only_for_red_profiles(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(
+                RaidProfileConfig("Default", "George", True),
+                RaidProfileConfig("Profile 3", "Maria", True),
+            ),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Default", "George", "green", None),
+                RaidProfileState("Profile 3", "Maria", "red", "login required"),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    default_card = window.raid_profile_cards["Default"]
+    maria_card = window.raid_profile_cards["Profile 3"]
+
+    assert default_card.reset_profile_button.isHidden() is True
+    assert maria_card.reset_profile_button.isHidden() is False
+
+
+def test_main_window_profile_card_restart_icon_routes_to_controller(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "red", "login required"),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(
+        window.raid_profile_cards["Profile 3"].reset_profile_button,
+        Qt.MouseButton.LeftButton,
+    )
+
+    assert controller.reset_raid_profile_calls == ["Profile 3"]
+
+
 def test_main_window_profile_card_raid_now_button_only_enables_when_connected(
     qtbot,
 ) -> None:
@@ -2816,6 +2875,80 @@ def test_main_window_profile_card_raid_now_button_only_enables_when_connected(
     assert card.raid_now_button.isEnabled() is True
     controller.connectionStateChanged.emit("reconnecting")
     assert card.raid_now_button.isEnabled() is False
+
+
+def test_main_window_profile_card_raid_now_button_shows_busy_feedback_and_error(
+    qtbot,
+) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "green", None),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+    controller.connectionStateChanged.emit("connected")
+    card = window.raid_profile_cards["Profile 3"]
+
+    qtbot.mouseClick(card.raid_now_button, Qt.MouseButton.LeftButton)
+
+    assert card.raid_now_button.text() == "Fetching..."
+    assert card.raid_now_button.isEnabled() is False
+
+    controller.errorRaised.emit("No recent valid raid found")
+
+    assert card.raid_now_button.text() == "Raid NOW!"
+    assert card.raid_now_button.isEnabled() is True
+    assert card.raid_now_feedback_label.text() == "No recent valid raid found"
+    assert card.raid_now_feedback_label.isHidden() is False
+
+
+def test_main_window_profile_card_raid_now_button_transitions_to_raiding_until_completion(
+    qtbot,
+) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "green", None),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+    controller.connectionStateChanged.emit("connected")
+    card = window.raid_profile_cards["Profile 3"]
+
+    qtbot.mouseClick(card.raid_now_button, Qt.MouseButton.LeftButton)
+    controller.botActionRunEvent.emit(
+        {"type": "automation_run_started", "profile_directory": "Profile 3"}
+    )
+
+    assert card.raid_now_button.text() == "Raiding..."
+    assert card.raid_now_button.isEnabled() is False
+
+    controller.botActionRunEvent.emit(
+        {"type": "automation_run_succeeded", "profile_directory": "Profile 3"}
+    )
+
+    assert card.raid_now_button.text() == "Raid NOW!"
+    assert card.raid_now_button.isEnabled() is True
+    assert card.raid_now_feedback_label.isHidden() is True
 
 
 def test_main_window_profile_card_renders_paused_when_all_actions_disabled(qtbot) -> None:
@@ -2888,8 +3021,10 @@ def test_main_window_profile_action_cog_routes_overrides_to_controller(qtbot) ->
 
     assert button.text() == ""
     assert button.icon().isNull() is False
-    assert button.height() == 14
-    assert button.width() == 14
+    assert button.iconSize().width() == 15
+    assert button.iconSize().height() == 15
+    assert button.height() == 21
+    assert button.width() == 21
 
     qtbot.mouseClick(
         button,

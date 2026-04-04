@@ -40,7 +40,10 @@ def test_build_application_stylesheet_contains_dark_surface_and_accent() -> None
     assert "QPushButton" in stylesheet
     assert "QWizard QPushButton" in stylesheet
     assert 'QPushButton[variant="secondary"]' in stylesheet
+    assert 'QPushButton[variant="secondary"]:disabled' in stylesheet
     assert 'QPushButton[variant="quiet"]' in stylesheet
+    assert "QPushButton#profileActionConfigButton" in stylesheet
+    assert "QPushButton#profileResetButton" in stylesheet
     match = re.search(
         r'QPushButton\[variant="quiet"\]:hover \{\s*(.*?)\s*\}',
         stylesheet,

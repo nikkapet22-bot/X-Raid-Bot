@@ -37,6 +37,7 @@ from raidbot.desktop.models import (
 )
 from raidbot.desktop.storage import DesktopStorage
 from raidbot.models import (
+    IncomingMessage,
     MessageOutcome,
     RaidActionRequirements,
     RaidDetectionResult,
@@ -645,7 +646,7 @@ class DesktopBotWorker:
             )
             self._active_auto_sequence_id = None
 
-    def run_raid_now_for_profile(self, profile_directory: str) -> None:
+    async def run_raid_now_for_profile(self, profile_directory: str) -> None:
         profile = next(
             (
                 item
@@ -665,7 +666,7 @@ class DesktopBotWorker:
         if runtime is None:
             raise RuntimeError("Automation runtime unavailable")
 
-        detection = self._find_latest_valid_recent_raid()
+        detection = await self._find_latest_valid_recent_raid()
         if detection is None or detection.job is None:
             raise ValueError("No recent valid raid found")
 
@@ -707,6 +708,22 @@ class DesktopBotWorker:
             now=self.now(),
         )
         self._persist_state_snapshot()
+
+    def reset_raid_profile(self, profile_directory: str) -> None:
+        normalized_directory = str(profile_directory).strip()
+        if not normalized_directory:
+            return
+        profile = next(
+            (
+                configured_profile
+                for configured_profile in self.config.raid_profiles
+                if configured_profile.profile_directory == normalized_directory
+            ),
+            None,
+        )
+        if profile is None:
+            return
+        self._set_raid_profile_state(profile, status="green", last_error=None)
 
     def _eligible_raid_profiles(self) -> tuple[RaidProfileConfig, ...]:
         profile_states_by_directory = {
@@ -1459,21 +1476,47 @@ class DesktopBotWorker:
             session_path=config.telegram_session_path,
         )
 
-    def _list_recent_allowed_messages(self, *, message_limit: int = 50):
-        service = self.telegram_setup_service_factory(self.config)
-        try:
-            return asyncio.run(
-                service.list_recent_incoming_messages(
-                    self.config.whitelisted_chat_ids,
-                    message_limit=message_limit,
+    async def _list_recent_allowed_messages(
+        self,
+        *,
+        message_limit: int = 50,
+    ) -> list[IncomingMessage]:
+        listener = self._listener
+        client = getattr(listener, "client", None)
+        if client is None or not hasattr(client, "iter_messages"):
+            raise RuntimeError("Telegram recent lookup unavailable")
+        ordered_messages: list[tuple[float, int, IncomingMessage]] = []
+        insertion_index = 0
+        for chat_id in self.config.whitelisted_chat_ids:
+            normalized_chat_id = int(chat_id)
+            async for message in client.iter_messages(normalized_chat_id, limit=message_limit):
+                sender_id = getattr(message, "sender_id", None)
+                if sender_id is None:
+                    continue
+                message_date = getattr(message, "date", None)
+                if isinstance(message_date, datetime):
+                    sort_key = float(message_date.timestamp())
+                else:
+                    sort_key = float("-inf")
+                ordered_messages.append(
+                    (
+                        sort_key,
+                        insertion_index,
+                        IncomingMessage(
+                            chat_id=int(getattr(message, "chat_id", normalized_chat_id)),
+                            sender_id=int(sender_id),
+                            text=str(getattr(message, "raw_text", "") or ""),
+                            has_video=bool(getattr(message, "video", None)),
+                        ),
+                    )
                 )
-            )
-        except Exception as exc:
-            raise RuntimeError("Telegram recent lookup failed") from exc
+                insertion_index += 1
+        ordered_messages.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+        return [message for _sort_key, _index, message in ordered_messages]
 
-    def _find_latest_valid_recent_raid(self) -> RaidDetectionResult | None:
+    async def _find_latest_valid_recent_raid(self) -> RaidDetectionResult | None:
         lookup_service = self._build_recent_raid_lookup_service()
-        for message in self._list_recent_allowed_messages():
+        for message in await self._list_recent_allowed_messages():
             detection = lookup_service.handle_message(message)
             if detection.kind == "job_detected":
                 return detection

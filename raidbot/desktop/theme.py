@@ -216,23 +216,32 @@ def build_application_stylesheet() -> str:
         background: transparent;
         border-color: {BORDER_FOCUS};
     }}
-    QPushButton#profileActionConfigButton {{
+    QPushButton#profileActionConfigButton,
+    QPushButton#profileResetButton {{
         min-height: 0;
-        max-height: 14px;
+        max-height: 21px;
         min-width: 0;
-        max-width: 14px;
+        max-width: 21px;
         padding: 0;
         margin: 0;
-        border-radius: 4px;
-        background-color: #0b1629;
-        border: 1px solid {BORDER_MED};
+        border-radius: 6px;
+        background-color: transparent;
+        border: 1px solid transparent;
     }}
-    QPushButton#profileActionConfigButton:hover {{
-        background-color: #11253f;
+    QPushButton#profileActionConfigButton:hover,
+    QPushButton#profileResetButton:hover {{
+        background-color: rgba(17, 37, 63, 0.82);
         border-color: {BORDER_FOCUS};
     }}
-    QPushButton#profileActionConfigButton:pressed {{
-        background-color: #0a1424;
+    QPushButton#profileActionConfigButton:pressed,
+    QPushButton#profileResetButton:pressed {{
+        background-color: rgba(10, 20, 36, 0.92);
+        border-color: {ACCENT};
+    }}
+    QPushButton#profileActionConfigButton:disabled,
+    QPushButton#profileResetButton:disabled {{
+        background-color: transparent;
+        border-color: transparent;
     }}
     QLabel#pageTitle {{
         font-size: 20px;
@@ -535,6 +544,11 @@ def build_application_stylesheet() -> str:
     }}
     QPushButton[variant="secondary"] {{
         background-color: {ELEVATED_BG}; color: {TEXT}; border-color: {BORDER_MED};
+    }}
+    QPushButton[variant="secondary"]:disabled {{
+        color: {MUTED};
+        border-color: {BORDER};
+        background-color: {SURFACE_BG};
     }}
     QPushButton[dashboardActionButton="true"] {{
         min-height: 28px;

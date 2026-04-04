@@ -127,6 +127,32 @@ def _build_profile_action_icon(size: int = 12, *, color: str = TEXT) -> QIcon:
     return QIcon(pixmap)
 
 
+def _build_profile_reset_icon(size: int = 12, *, color: str = TEXT) -> QIcon:
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(QColor(color))
+    pen.setWidthF(max(1.4, size * 0.12))
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    arc_rect = QRectF(size * 0.18, size * 0.18, size * 0.54, size * 0.54)
+    painter.drawArc(arc_rect, 35 * 16, 290 * 16)
+
+    arrow_path = QPainterPath()
+    arrow_tip = QPointF(size * 0.78, size * 0.24)
+    arrow_path.moveTo(arrow_tip)
+    arrow_path.lineTo(QPointF(size * 0.58, size * 0.24))
+    arrow_path.lineTo(QPointF(size * 0.68, size * 0.40))
+    arrow_path.closeSubpath()
+    painter.fillPath(arrow_path, QColor(color))
+    painter.end()
+    return QIcon(pixmap)
+
+
 def _bot_state_variant(state: str) -> str:
     if state == "running":
         return "running"
@@ -448,12 +474,14 @@ def _paint_line_relative_fill(
 
 class RaidProfileCard(QFrame):
     raidNowRequested = Signal(str)
+    resetProfileRequested = Signal(str)
     actionOverridesRequested = Signal(str)
 
     def __init__(self, profile_directory: str, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.profile_directory = profile_directory
         self._details_visible = False
+        self._raid_now_enabled = False
         self.setObjectName(CARD_OBJECT_NAME)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumWidth(140)
@@ -470,12 +498,23 @@ class RaidProfileCard(QFrame):
         self.dot_label.setFixedSize(10, 10)
         self.title_label = QLabel(profile_directory)
         self.title_label.setObjectName("sectionTitle")
+        self.reset_profile_button = QPushButton("")
+        self.reset_profile_button.setObjectName("profileResetButton")
+        self.reset_profile_button.setProperty("variant", "secondary")
+        self.reset_profile_button.setFixedSize(21, 21)
+        self.reset_profile_button.setIcon(_build_profile_reset_icon(size=15))
+        self.reset_profile_button.setIconSize(QSize(15, 15))
+        self.reset_profile_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reset_profile_button.setToolTip("Reset profile status")
+        self.reset_profile_button.clicked.connect(
+            lambda: self.resetProfileRequested.emit(self.profile_directory)
+        )
         self.action_config_button = QPushButton("")
         self.action_config_button.setObjectName("profileActionConfigButton")
         self.action_config_button.setProperty("variant", "secondary")
-        self.action_config_button.setFixedSize(14, 14)
-        self.action_config_button.setIcon(_build_profile_action_icon())
-        self.action_config_button.setIconSize(QSize(10, 10))
+        self.action_config_button.setFixedSize(21, 21)
+        self.action_config_button.setIcon(_build_profile_action_icon(size=15))
+        self.action_config_button.setIconSize(QSize(15, 15))
         self.action_config_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.action_config_button.setToolTip("Configure profile actions")
         self.action_config_button.clicked.connect(
@@ -483,6 +522,11 @@ class RaidProfileCard(QFrame):
         )
         header_row.addWidget(self.dot_label, 0, Qt.AlignmentFlag.AlignVCenter)
         header_row.addWidget(self.title_label, 1)
+        header_row.addWidget(
+            self.reset_profile_button,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
         header_row.addWidget(
             self.action_config_button,
             0,
@@ -502,10 +546,15 @@ class RaidProfileCard(QFrame):
         self.raid_now_button.clicked.connect(
             lambda: self.raidNowRequested.emit(self.profile_directory)
         )
+        self.raid_now_feedback_label = QLabel("")
+        self.raid_now_feedback_label.setWordWrap(True)
+        self.raid_now_feedback_label.setProperty("muted", "true")
+        self.raid_now_feedback_label.hide()
 
         layout.addWidget(self.status_label)
         layout.addWidget(self.reason_label)
         layout.addWidget(self.raid_now_button)
+        layout.addWidget(self.raid_now_feedback_label)
         layout.addStretch()
 
     def apply_state(self, profile, state: RaidProfileState) -> None:
@@ -529,10 +578,30 @@ class RaidProfileCard(QFrame):
         if not is_error:
             self._details_visible = False
         self.reason_label.setVisible(is_error and self._details_visible)
+        self.reset_profile_button.setVisible(is_error)
         self.raid_now_button.setVisible(True)
 
     def set_raid_now_enabled(self, enabled: bool) -> None:
-        self.raid_now_button.setEnabled(bool(enabled))
+        self._raid_now_enabled = bool(enabled)
+        if self.raid_now_button.text() == "Raid NOW!":
+            self.raid_now_button.setEnabled(self._raid_now_enabled)
+
+    def set_raid_now_busy(self, text: str) -> None:
+        self.raid_now_button.setText(str(text))
+        self.raid_now_button.setEnabled(False)
+        self.raid_now_feedback_label.hide()
+
+    def reset_raid_now_button(self) -> None:
+        self.raid_now_button.setText("Raid NOW!")
+        self.raid_now_button.setEnabled(self._raid_now_enabled)
+
+    def show_raid_now_feedback(self, message: str) -> None:
+        self.raid_now_feedback_label.setText(str(message))
+        self.raid_now_feedback_label.setVisible(bool(message))
+
+    def clear_raid_now_feedback(self) -> None:
+        self.raid_now_feedback_label.clear()
+        self.raid_now_feedback_label.hide()
 
     def mousePressEvent(self, event) -> None:
         if self.property("profileStatus") == "red":
@@ -909,6 +978,8 @@ class MainWindow(QMainWindow):
         self._bot_actions_run_slots_snapshot: tuple[tuple[int, str], ...] = ()
         self._slot_1_presets_dialog: Slot1PresetsDialog | None = None
         self._latest_state = DesktopAppState()
+        self._raid_now_pending_profile_directory: str | None = None
+        self._raid_now_started_profile_directory: str | None = None
         self.raid_profile_cards: dict[str, RaidProfileCard] = {}
         self._raid_profile_card_widgets: list[RaidProfileCard] = []
         self._profile_card_columns = 0
@@ -1363,8 +1434,7 @@ class MainWindow(QMainWindow):
         self.controller.connectionStateChanged.connect(self._update_connection_state)
         self.controller.statsChanged.connect(self._apply_stats_state)
         self.controller.activityAdded.connect(self._append_activity_entry)
-        self.controller.errorRaised.connect(self.last_error_label.setText)
-        self.controller.errorRaised.connect(self._show_bot_actions_error)
+        self.controller.errorRaised.connect(self._handle_controller_error)
         self.controller.configChanged.connect(self._sync_config)
         self.controller.automationQueueStateChanged.connect(
             self._update_bot_actions_queue_state
@@ -1394,6 +1464,18 @@ class MainWindow(QMainWindow):
             _apply_variant(label, variant)
         _apply_variant(self._conn_dot, variant)
         self._update_raid_now_buttons_enabled_state()
+
+    def _handle_controller_error(self, message: str) -> None:
+        self.last_error_label.setText(message)
+        self._show_bot_actions_error(message)
+        pending_profile_directory = self._raid_now_pending_profile_directory
+        if pending_profile_directory is None or self._raid_now_started_profile_directory is not None:
+            return
+        card = self.raid_profile_cards.get(pending_profile_directory)
+        if card is not None:
+            card.reset_raid_now_button()
+            card.show_raid_now_feedback(message)
+        self._raid_now_pending_profile_directory = None
 
     def _set_button_variant(self, button: QPushButton, variant: str) -> None:
         if button.property("variant") == variant:
@@ -2382,7 +2464,8 @@ class MainWindow(QMainWindow):
             card = RaidProfileCard(
                 profile.profile_directory, parent=self.profile_cards_container
             )
-            card.raidNowRequested.connect(self.controller.run_raid_now_for_profile)
+            card.raidNowRequested.connect(self._handle_raid_now_requested)
+            card.resetProfileRequested.connect(self.controller.reset_raid_profile)
             card.actionOverridesRequested.connect(
                 self._configure_profile_action_overrides
             )
@@ -2407,6 +2490,15 @@ class MainWindow(QMainWindow):
         enabled = self.connection_state == "connected"
         for card in self.raid_profile_cards.values():
             card.set_raid_now_enabled(enabled)
+
+    def _handle_raid_now_requested(self, profile_directory: str) -> None:
+        self._raid_now_pending_profile_directory = str(profile_directory)
+        self._raid_now_started_profile_directory = None
+        card = self.raid_profile_cards.get(profile_directory)
+        if card is not None:
+            card.clear_raid_now_feedback()
+            card.set_raid_now_busy("Fetching...")
+        self.controller.run_raid_now_for_profile(profile_directory)
 
     def _reflow_raid_profile_cards(self) -> None:
         if not hasattr(self, "profile_cards_layout"):
@@ -2452,6 +2544,27 @@ class MainWindow(QMainWindow):
 
     def _handle_bot_actions_run_event(self, event: dict[str, object]) -> None:
         event_type = str(event.get("type", ""))
+        event_profile_directory = event.get("profile_directory")
+        if isinstance(event_profile_directory, str):
+            if (
+                event_type == "automation_run_started"
+                and event_profile_directory == self._raid_now_pending_profile_directory
+            ):
+                self._raid_now_started_profile_directory = event_profile_directory
+                card = self.raid_profile_cards.get(event_profile_directory)
+                if card is not None:
+                    card.set_raid_now_busy("Raiding...")
+            elif event_type in {"automation_run_succeeded", "automation_run_failed"} and (
+                event_profile_directory == self._raid_now_pending_profile_directory
+                or event_profile_directory == self._raid_now_started_profile_directory
+            ):
+                card = self.raid_profile_cards.get(event_profile_directory)
+                if card is not None:
+                    card.reset_raid_now_button()
+                    if event_type == "automation_run_succeeded":
+                        card.clear_raid_now_feedback()
+                self._raid_now_pending_profile_directory = None
+                self._raid_now_started_profile_directory = None
         if event_type in {"slot_test_started", "slot_test_succeeded", "slot_test_failed"}:
             self._bot_actions_status_text = str(event.get("message", "Idle"))
             self._bot_actions_current_slot_text = None

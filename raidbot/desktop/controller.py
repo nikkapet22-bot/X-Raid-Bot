@@ -314,6 +314,34 @@ class DesktopController(QObject):
             return
         self._submit_to_runner(lambda: self._worker.run_raid_now_for_profile(profile_directory))
 
+    def reset_raid_profile(self, profile_directory: str) -> None:
+        normalized_directory = str(profile_directory).strip()
+        if not normalized_directory:
+            return
+        if self._worker is not None and self._runner is not None and self._runner.is_running():
+            self._submit_to_runner(lambda: self._worker.reset_raid_profile(normalized_directory))
+            return
+        state = self.storage.load_state()
+        updated_states = []
+        updated = False
+        for profile_state in state.raid_profile_states:
+            if profile_state.profile_directory != normalized_directory:
+                updated_states.append(profile_state)
+                continue
+            updated = True
+            updated_states.append(
+                replace(
+                    profile_state,
+                    status="green",
+                    last_error=None,
+                )
+            )
+        if not updated:
+            return
+        updated_state = replace(state, raid_profile_states=tuple(updated_states))
+        self.storage.save_state(updated_state)
+        self.statsChanged.emit(updated_state)
+
     def reset_dashboard_metric(self, metric_key: str) -> None:
         if (
             self._worker is not None

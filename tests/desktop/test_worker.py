@@ -118,22 +118,36 @@ class FakePipeline:
         return self.execution_result
 
 
-class FakeTelegramRecentLookupService:
-    def __init__(self, messages=None, error: Exception | None = None) -> None:
-        self.messages = list(messages or [])
-        self.error = error
-        self.calls: list[tuple[list[int], int]] = []
-
-    async def list_recent_incoming_messages(
+class FakeRecentMessage:
+    def __init__(
         self,
-        chat_ids,
         *,
-        message_limit: int = 50,
-    ):
-        self.calls.append((list(chat_ids), int(message_limit)))
-        if self.error is not None:
-            raise self.error
-        return list(self.messages)
+        chat_id: int,
+        sender_id: int,
+        text: str,
+        has_video: bool,
+        date: datetime | None = None,
+    ) -> None:
+        self.chat_id = chat_id
+        self.sender_id = sender_id
+        self.raw_text = text
+        self.video = object() if has_video else None
+        self.date = date or datetime(2026, 4, 4, 18, 0, 0)
+
+
+class FakeRecentMessagesClient:
+    def __init__(self, messages_by_chat=None) -> None:
+        self.messages_by_chat = {
+            int(chat_id): list(messages)
+            for chat_id, messages in (messages_by_chat or {}).items()
+        }
+        self.iter_calls: list[tuple[int, int]] = []
+
+    async def iter_messages(self, chat_id: int, limit: int = 50):
+        normalized_chat_id = int(chat_id)
+        self.iter_calls.append((normalized_chat_id, int(limit)))
+        for message in self.messages_by_chat.get(normalized_chat_id, ())[:limit]:
+            yield message
 
 
 class FakeWindowManager:
@@ -425,8 +439,9 @@ class FlakyChromeOpener:
 
 
 class FakeListener:
-    def __init__(self, on_connection_state_change=None) -> None:
+    def __init__(self, on_connection_state_change=None, client=None) -> None:
         self.on_connection_state_change = on_connection_state_change
+        self.client = client
         self.stop_calls = 0
         self.run_calls = 0
 
@@ -4020,7 +4035,8 @@ def test_worker_ignores_messages_after_stop_is_requested() -> None:
     assert storage.saved_states == []
 
 
-def test_worker_run_raid_now_for_profile_executes_latest_valid_recent_raid(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_worker_run_raid_now_for_profile_executes_latest_valid_recent_raid(tmp_path) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 4, 4, 18, 0, 0)
     storage = FakeStorage(base_dir=tmp_path)
@@ -4035,22 +4051,27 @@ def test_worker_run_raid_now_for_profile_executes_latest_valid_recent_raid(tmp_p
             )
         ]
     )
-    lookup_service = FakeTelegramRecentLookupService(
-        messages=[
-            IncomingMessage(
-                chat_id=-1001,
-                sender_id=42,
-                text="not a raid",
-                has_video=True,
-            ),
-            IncomingMessage(
-                chat_id=-1001,
-                sender_id=42,
-                text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/777",
-                has_video=True,
-            ),
-        ]
+    recent_messages_client = FakeRecentMessagesClient(
+        messages_by_chat={
+            -1001: [
+                FakeRecentMessage(
+                    chat_id=-1001,
+                    sender_id=42,
+                    text="not a raid",
+                    has_video=True,
+                    date=datetime(2026, 4, 4, 17, 58, 0),
+                ),
+                FakeRecentMessage(
+                    chat_id=-1001,
+                    sender_id=42,
+                    text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/777",
+                    has_video=True,
+                    date=datetime(2026, 4, 4, 17, 59, 0),
+                ),
+            ]
+        }
     )
+    listener = FakeListener(client=recent_messages_client)
 
     worker, _services, _pipelines, _listeners = build_worker(
         storage,
@@ -4072,13 +4093,14 @@ def test_worker_run_raid_now_for_profile_executes_latest_valid_recent_raid(tmp_p
         ),
         automation_runtime_factory=lambda _emit_event: runtime,
         chrome_opener_factory=lambda **kwargs: opener,
-        telegram_setup_service_factory=lambda _config: lookup_service,
+        listener_factory=lambda **kwargs: listener,
     )
     worker._service = worker._build_service(worker.config)
+    worker._listener = listener
 
-    worker.run_raid_now_for_profile("Profile 3")
+    await worker.run_raid_now_for_profile("Profile 3")
 
-    assert lookup_service.calls == [([-1001], 50)]
+    assert recent_messages_client.iter_calls == [(-1001, 50)]
     assert opener.profile_directory == "Profile 3"
     assert opener.open_raid_window_calls == ["https://x.com/i/status/777"]
     assert runtime.run_calls == [("bot-actions", 31)]
@@ -4086,7 +4108,8 @@ def test_worker_run_raid_now_for_profile_executes_latest_valid_recent_raid(tmp_p
     assert worker.state.raids_completed == 1
 
 
-def test_worker_run_raid_now_for_profile_allows_currently_red_profile(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_worker_run_raid_now_for_profile_allows_currently_red_profile(tmp_path) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 4, 4, 18, 2, 0)
     storage = FakeStorage(
@@ -4108,16 +4131,19 @@ def test_worker_run_raid_now_for_profile_allows_currently_red_profile(tmp_path) 
             )
         ]
     )
-    lookup_service = FakeTelegramRecentLookupService(
-        messages=[
-            IncomingMessage(
-                chat_id=-1001,
-                sender_id=42,
-                text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/778",
-                has_video=True,
-            ),
-        ]
+    recent_messages_client = FakeRecentMessagesClient(
+        messages_by_chat={
+            -1001: [
+                FakeRecentMessage(
+                    chat_id=-1001,
+                    sender_id=42,
+                    text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/778",
+                    has_video=True,
+                ),
+            ]
+        }
     )
+    listener = FakeListener(client=recent_messages_client)
 
     worker, _services, _pipelines, _listeners = build_worker(
         storage,
@@ -4135,11 +4161,12 @@ def test_worker_run_raid_now_for_profile_allows_currently_red_profile(tmp_path) 
         ),
         automation_runtime_factory=lambda _emit_event: runtime,
         chrome_opener_factory=lambda **kwargs: opener,
-        telegram_setup_service_factory=lambda _config: lookup_service,
+        listener_factory=lambda **kwargs: listener,
     )
     worker._service = worker._build_service(worker.config)
+    worker._listener = listener
 
-    worker.run_raid_now_for_profile("Profile 3")
+    await worker.run_raid_now_for_profile("Profile 3")
 
     assert opener.open_raid_window_calls == ["https://x.com/i/status/778"]
     assert runtime.run_calls == [("bot-actions", 31)]
@@ -4148,22 +4175,26 @@ def test_worker_run_raid_now_for_profile_allows_currently_red_profile(tmp_path) 
     )
 
 
-def test_worker_run_raid_now_for_profile_fails_when_no_recent_valid_raid_found(
+@pytest.mark.asyncio
+async def test_worker_run_raid_now_for_profile_fails_when_no_recent_valid_raid_found(
     tmp_path,
 ) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 4, 4, 18, 5, 0)
     storage = FakeStorage(base_dir=tmp_path)
-    lookup_service = FakeTelegramRecentLookupService(
-        messages=[
-            IncomingMessage(
-                chat_id=-1001,
-                sender_id=42,
-                text="not a raid",
-                has_video=True,
-            )
-        ]
+    recent_messages_client = FakeRecentMessagesClient(
+        messages_by_chat={
+            -1001: [
+                FakeRecentMessage(
+                    chat_id=-1001,
+                    sender_id=42,
+                    text="not a raid",
+                    has_video=True,
+                )
+            ]
+        }
     )
+    listener = FakeListener(client=recent_messages_client)
 
     worker, _services, _pipelines, _listeners = build_worker(
         storage,
@@ -4180,9 +4211,38 @@ def test_worker_run_raid_now_for_profile_fails_when_no_recent_valid_raid_found(
                 reason="missing_status_url",
             ),
         ),
-        telegram_setup_service_factory=lambda _config: lookup_service,
+        listener_factory=lambda **kwargs: listener,
     )
     worker._service = worker._build_service(worker.config)
+    worker._listener = listener
 
     with pytest.raises(ValueError, match="No recent valid raid found"):
-        worker.run_raid_now_for_profile("Profile 3")
+        await worker.run_raid_now_for_profile("Profile 3")
+
+
+def test_worker_reset_raid_profile_turns_red_profile_green(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 4, 4, 19, 0, 0)
+    storage = FakeStorage(
+        DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "red", "login required"),
+            )
+        ),
+        base_dir=tmp_path,
+    )
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        ),
+    )
+
+    worker.reset_raid_profile("Profile 3")
+
+    assert worker.state.raid_profile_states == (
+        RaidProfileState("Profile 3", "Maria", "green", None),
+    )
+    assert events[-1]["type"] == "stats_changed"
