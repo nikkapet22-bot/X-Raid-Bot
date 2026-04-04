@@ -52,7 +52,6 @@ class FakeWorker:
         self.resume_calls = 0
         self.clear_calls = 0
         self.manual_finished_calls = 0
-        self.restart_profile_calls: list[str] = []
         self.run_raid_now_calls: list[str] = []
         self.reset_dashboard_metric_calls: list[str] = []
 
@@ -74,9 +73,6 @@ class FakeWorker:
 
     def notify_manual_automation_finished(self) -> None:
         self.manual_finished_calls += 1
-
-    def restart_raid_profile(self, profile_directory: str) -> None:
-        self.restart_profile_calls.append(profile_directory)
 
     def run_raid_now_for_profile(self, profile_directory: str) -> None:
         self.run_raid_now_calls.append(profile_directory)
@@ -342,52 +338,6 @@ def test_controller_add_raid_profile_appends_and_ignores_duplicates(qtbot) -> No
     assert changed_configs[-1] == controller.config
 
 
-def test_controller_sets_raid_on_restart_for_one_profile(qtbot) -> None:
-    from raidbot.desktop.controller import DesktopController
-
-    storage = FakeStorage()
-    controller = DesktopController(
-        storage=storage,
-        config=build_config(
-            chrome_profile_directory="Default",
-            raid_profiles=(
-                RaidProfileConfig(
-                    profile_directory="Default",
-                    label="George",
-                    enabled=True,
-                    raid_on_restart=False,
-                ),
-                RaidProfileConfig(
-                    profile_directory="Profile 3",
-                    label="Maria",
-                    enabled=True,
-                    raid_on_restart=False,
-                ),
-            ),
-        ),
-        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
-        runner_factory=lambda: FakeRunner(),
-    )
-
-    controller.set_raid_profile_raid_on_restart("Profile 3", True)
-
-    assert storage.saved_configs[-1].raid_profiles == (
-        RaidProfileConfig(
-            profile_directory="Default",
-            label="George",
-            enabled=True,
-            raid_on_restart=False,
-        ),
-        RaidProfileConfig(
-            profile_directory="Profile 3",
-            label="Maria",
-            enabled=True,
-            raid_on_restart=True,
-        ),
-    )
-    assert controller.config.raid_profiles == storage.saved_configs[-1].raid_profiles
-
-
 def test_controller_sets_profile_action_overrides_for_one_profile(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 
@@ -438,32 +388,6 @@ def test_controller_sets_profile_action_overrides_for_one_profile(qtbot) -> None
         ),
     )
     assert controller.config.raid_profiles == storage.saved_configs[-1].raid_profiles
-
-
-def test_controller_restart_raid_profile_submits_worker_command(qtbot) -> None:
-    from raidbot.desktop.controller import DesktopController
-
-    storage = FakeStorage()
-    created = {}
-
-    def worker_factory(**kwargs):
-        worker = FakeWorker(**kwargs)
-        created["worker"] = worker
-        return worker
-
-    runner = SubmitExecutingRunner()
-    controller = DesktopController(
-        storage=storage,
-        config=build_config(),
-        worker_factory=worker_factory,
-        runner_factory=lambda: runner,
-    )
-
-    controller.start_bot()
-    controller.restart_raid_profile("Profile 3")
-
-    assert len(runner.submitted_coroutines) == 1
-    assert created["worker"].restart_profile_calls == ["Profile 3"]
 
 
 def test_controller_run_raid_now_submits_worker_command_when_connected(qtbot) -> None:

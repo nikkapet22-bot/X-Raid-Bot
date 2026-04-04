@@ -2716,7 +2716,6 @@ def test_worker_skips_failed_profile_until_restarted(tmp_path) -> None:
 
     first_outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/123"))
     second_outcome = worker._handle_message(second_message)
-    worker.restart_raid_profile("Profile 3")
     third_outcome = worker._handle_message(third_message)
 
     assert first_outcome.kind == "job_detected"
@@ -2737,7 +2736,7 @@ def test_worker_skips_failed_profile_until_restarted(tmp_path) -> None:
     assert worker.state.automation_current_url is None
     assert worker.state.automation_last_error is None
     assert worker.state.raid_profile_states == (
-        RaidProfileState("Profile 3", "Profile 3", "green", None),
+        RaidProfileState("Profile 3", "Profile 3", "red", "not_logged_in"),
     )
 
 
@@ -2802,278 +2801,6 @@ def test_worker_opens_fresh_raid_window_and_runs_against_detected_opened_handle(
     assert opener.open_raid_window_calls == ["https://x.com/i/status/777"]
     assert runtime is not None
     assert runtime.run_calls == [("bot-actions", 9)]
-
-
-def test_worker_restart_raid_profile_clears_failed_state(tmp_path) -> None:
-    events: list[dict] = []
-    timestamp = datetime(2026, 3, 27, 10, 11, 45)
-    storage = FakeStorage(
-        DesktopAppState(
-            raid_profile_states=(
-                RaidProfileState("Profile 3", "Profile 3", "red", "not_logged_in"),
-            )
-        ),
-        base_dir=tmp_path,
-    )
-    worker, _services, _pipelines, _listeners = build_worker(storage, events, timestamp)
-
-    worker.restart_raid_profile("Profile 3")
-
-    assert worker.state.raid_profile_states == (
-        RaidProfileState("Profile 3", "Profile 3", "green", None),
-    )
-    assert events[-1]["type"] == "stats_changed"
-
-
-def test_worker_restart_raid_profile_with_raid_on_restart_disabled_does_not_replay_latest_raid(
-    tmp_path,
-) -> None:
-    events: list[dict] = []
-    timestamp = datetime(2026, 3, 30, 17, 10, 0)
-    storage = FakeStorage(
-        DesktopAppState(
-            raid_profile_states=(
-                RaidProfileState("Default", "George", "green", None),
-                RaidProfileState("Profile 3", "Maria", "red", "not_logged_in"),
-            )
-        ),
-        base_dir=tmp_path,
-    )
-    runtime = MultiProfileRuntime(
-        run_results=[
-            RunResult(status="completed", window_handle=41),
-        ]
-    )
-    handle_by_profile = {"Default": 41, "Profile 3": 43}
-
-    worker, _services, _pipelines, _listeners = build_worker(
-        storage,
-        events,
-        timestamp,
-        config=build_config(
-            chrome_profile_directory="Default",
-            auto_run_enabled=True,
-            raid_profiles=(
-                RaidProfileConfig("Default", "George", True, False),
-                RaidProfileConfig("Profile 3", "Maria", True, False),
-            ),
-            bot_action_slots=build_bot_action_slots(),
-        ),
-        service_factory=lambda config: FakeService(
-            config,
-            detection_result_factory=detect_job_from_message,
-        ),
-        automation_runtime_factory=lambda _emit_event: runtime,
-        chrome_opener_factory=lambda **kwargs: WindowSpawningChromeOpener(
-            runtime=runtime,
-            handle_by_profile=handle_by_profile,
-            **kwargs,
-        ),
-    )
-    worker._service = worker._build_service(worker.config)
-
-    worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/333"))
-    worker.restart_raid_profile("Profile 3")
-
-    assert runtime.run_calls == [("bot-actions", 41)]
-    assert worker.state.raid_profile_states == (
-        RaidProfileState("Default", "George", "green", None),
-        RaidProfileState("Profile 3", "Maria", "green", None),
-    )
-
-
-def test_worker_restart_raid_profile_with_raid_on_restart_enabled_replays_latest_raid(
-    tmp_path,
-) -> None:
-    events: list[dict] = []
-    timestamp = datetime(2026, 3, 30, 17, 15, 0)
-    storage = FakeStorage(
-        DesktopAppState(
-            raid_profile_states=(
-                RaidProfileState("Default", "George", "green", None),
-                RaidProfileState("Profile 3", "Maria", "red", "not_logged_in"),
-            )
-        ),
-        base_dir=tmp_path,
-    )
-    runtime = MultiProfileRuntime(
-        run_results=[
-            RunResult(status="completed", window_handle=41),
-            RunResult(status="completed", window_handle=43),
-        ]
-    )
-    handle_by_profile = {"Default": 41, "Profile 3": 43}
-
-    worker, _services, _pipelines, _listeners = build_worker(
-        storage,
-        events,
-        timestamp,
-        config=build_config(
-            chrome_profile_directory="Default",
-            auto_run_enabled=True,
-            raid_profiles=(
-                RaidProfileConfig("Default", "George", True, False),
-                RaidProfileConfig("Profile 3", "Maria", True, True),
-            ),
-            bot_action_slots=build_bot_action_slots(),
-        ),
-        service_factory=lambda config: FakeService(
-            config,
-            detection_result_factory=detect_job_from_message,
-        ),
-        automation_runtime_factory=lambda _emit_event: runtime,
-        chrome_opener_factory=lambda **kwargs: WindowSpawningChromeOpener(
-            runtime=runtime,
-            handle_by_profile=handle_by_profile,
-            **kwargs,
-        ),
-    )
-    worker._service = worker._build_service(worker.config)
-
-    worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/444"))
-    worker.restart_raid_profile("Profile 3")
-
-    assert runtime.run_calls == [
-        ("bot-actions", 41),
-        ("bot-actions", 43),
-    ]
-    assert worker._latest_replayable_raid.succeeded_profiles == {"Default", "Profile 3"}
-    assert worker._latest_replayable_raid.failed_profiles == set()
-
-
-def test_worker_replay_latest_raid_skips_succeeded_and_still_red_profiles(
-    tmp_path,
-) -> None:
-    events: list[dict] = []
-    timestamp = datetime(2026, 3, 30, 17, 20, 0)
-    storage = FakeStorage(
-        DesktopAppState(
-            raid_profile_states=(
-                RaidProfileState("Default", "George", "green", None),
-                RaidProfileState("Profile 3", "Maria", "red", "not_logged_in"),
-                RaidProfileState("Profile 9", "Pasok", "red", "challenge_required"),
-            )
-        ),
-        base_dir=tmp_path,
-    )
-    runtime = MultiProfileRuntime(
-        run_results=[
-            RunResult(status="completed", window_handle=41),
-            RunResult(status="completed", window_handle=43),
-        ]
-    )
-    handle_by_profile = {"Default": 41, "Profile 3": 43, "Profile 9": 45}
-
-    worker, _services, _pipelines, _listeners = build_worker(
-        storage,
-        events,
-        timestamp,
-        config=build_config(
-            chrome_profile_directory="Default",
-            auto_run_enabled=True,
-            raid_profiles=(
-                RaidProfileConfig("Default", "George", True, False),
-                RaidProfileConfig("Profile 3", "Maria", True, True),
-                RaidProfileConfig("Profile 9", "Pasok", True, True),
-            ),
-            bot_action_slots=build_bot_action_slots(),
-        ),
-        service_factory=lambda config: FakeService(
-            config,
-            detection_result_factory=detect_job_from_message,
-        ),
-        automation_runtime_factory=lambda _emit_event: runtime,
-        chrome_opener_factory=lambda **kwargs: WindowSpawningChromeOpener(
-            runtime=runtime,
-            handle_by_profile=handle_by_profile,
-            **kwargs,
-        ),
-    )
-    worker._service = worker._build_service(worker.config)
-
-    worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/555"))
-    worker.state.raid_profile_states = (
-        RaidProfileState("Default", "George", "green", None),
-        RaidProfileState("Profile 3", "Maria", "green", None),
-        RaidProfileState("Profile 9", "Pasok", "red", "challenge_required"),
-    )
-    worker._replay_latest_raid_for_restart()
-
-    assert runtime.run_calls == [
-        ("bot-actions", 41),
-        ("bot-actions", 43),
-    ]
-
-
-def test_worker_replay_latest_raid_continues_after_profile_failure(tmp_path) -> None:
-    events: list[dict] = []
-    timestamp = datetime(2026, 3, 30, 17, 25, 0)
-    storage = FakeStorage(
-        DesktopAppState(
-            raid_profile_states=(
-                RaidProfileState("Default", "George", "green", None),
-                RaidProfileState("Profile 3", "Maria", "red", "not_logged_in"),
-                RaidProfileState("Profile 9", "Pasok", "red", "challenge_required"),
-            )
-        ),
-        base_dir=tmp_path,
-    )
-    runtime = MultiProfileRuntime(
-        run_results=[
-            RunResult(status="completed", window_handle=41),
-            RunResult(status="failed", window_handle=43, failure_reason="not_logged_in"),
-            RunResult(status="completed", window_handle=45),
-        ]
-    )
-    handle_by_profile = {"Default": 41, "Profile 3": 43, "Profile 9": 45}
-
-    worker, _services, _pipelines, _listeners = build_worker(
-        storage,
-        events,
-        timestamp,
-        config=build_config(
-            chrome_profile_directory="Default",
-            auto_run_enabled=True,
-            raid_profiles=(
-                RaidProfileConfig("Default", "George", True, False),
-                RaidProfileConfig("Profile 3", "Maria", True, True),
-                RaidProfileConfig("Profile 9", "Pasok", True, True),
-            ),
-            bot_action_slots=build_bot_action_slots(),
-        ),
-        service_factory=lambda config: FakeService(
-            config,
-            detection_result_factory=detect_job_from_message,
-        ),
-        automation_runtime_factory=lambda _emit_event: runtime,
-        chrome_opener_factory=lambda **kwargs: WindowSpawningChromeOpener(
-            runtime=runtime,
-            handle_by_profile=handle_by_profile,
-            **kwargs,
-        ),
-    )
-    worker._service = worker._build_service(worker.config)
-
-    worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/666"))
-    worker.state.raid_profile_states = (
-        RaidProfileState("Default", "George", "green", None),
-        RaidProfileState("Profile 3", "Maria", "green", None),
-        RaidProfileState("Profile 9", "Pasok", "green", None),
-    )
-    worker._replay_latest_raid_for_restart()
-
-    assert runtime.run_calls == [
-        ("bot-actions", 41),
-        ("bot-actions", 43),
-        ("bot-actions", 45),
-    ]
-    assert worker.state.raid_profile_states == (
-        RaidProfileState("Default", "George", "green", None),
-        RaidProfileState("Profile 3", "Maria", "red", "not_logged_in"),
-        RaidProfileState("Profile 9", "Pasok", "green", None),
-    )
-
-
 def test_worker_skips_red_profile_and_continues_remaining_profiles_on_future_raids(
     tmp_path,
 ) -> None:
@@ -4357,6 +4084,68 @@ def test_worker_run_raid_now_for_profile_executes_latest_valid_recent_raid(tmp_p
     assert runtime.run_calls == [("bot-actions", 31)]
     assert worker.state.raids_opened == 1
     assert worker.state.raids_completed == 1
+
+
+def test_worker_run_raid_now_for_profile_allows_currently_red_profile(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 4, 4, 18, 2, 0)
+    storage = FakeStorage(
+        DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "red", "not_logged_in"),
+            )
+        ),
+        base_dir=tmp_path,
+    )
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime = FakeAutomationRuntime(
+        windows=[
+            WindowInfo(
+                handle=31,
+                title="RaidBot - Chrome",
+                bounds=(0, 0, 100, 100),
+                last_focused_at=1.0,
+            )
+        ]
+    )
+    lookup_service = FakeTelegramRecentLookupService(
+        messages=[
+            IncomingMessage(
+                chat_id=-1001,
+                sender_id=42,
+                text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/778",
+                has_video=True,
+            ),
+        ]
+    )
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            page_ready_template_path=None,
+            bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=lambda _emit_event: runtime,
+        chrome_opener_factory=lambda **kwargs: opener,
+        telegram_setup_service_factory=lambda _config: lookup_service,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    worker.run_raid_now_for_profile("Profile 3")
+
+    assert opener.open_raid_window_calls == ["https://x.com/i/status/778"]
+    assert runtime.run_calls == [("bot-actions", 31)]
+    assert worker.state.raid_profile_states == (
+        RaidProfileState("Profile 3", "Maria", "green", None),
+    )
 
 
 def test_worker_run_raid_now_for_profile_fails_when_no_recent_valid_raid_found(

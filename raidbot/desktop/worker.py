@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 import time
@@ -66,13 +66,6 @@ _DEDUPED_ACTIVITY_ACTIONS = {
 _SUCCESSFUL_PROFILE_RUN_LIMIT = 5000
 
 
-@dataclass
-class _LatestReplayableRaid:
-    url: str
-    succeeded_profiles: set[str]
-    failed_profiles: set[str]
-
-
 class DesktopBotWorker:
     def __init__(
         self,
@@ -122,7 +115,6 @@ class DesktopBotWorker:
         self._automation_failure_already_recorded = False
         self._restart_requested = False
         self._stop_requested = False
-        self._latest_replayable_raid: _LatestReplayableRaid | None = None
         self._pending_profile_run_starts: dict[tuple[str, str], datetime] = {}
         self._sync_raid_profile_states(save=False, emit=False)
 
@@ -418,12 +410,6 @@ class DesktopBotWorker:
                     "reason": warning.reason,
                 },
             )
-        all_enabled_profiles = tuple(
-            profile
-            for profile in self.config.raid_profiles
-            if profile.enabled and raid_profile_has_any_actions_enabled(profile)
-        )
-        self._begin_latest_replayable_raid(item.normalized_url, all_enabled_profiles)
         eligible_profiles = self._eligible_raid_profiles()
         if not eligible_profiles:
             return False, "all_profiles_blocked"
@@ -477,37 +463,6 @@ class DesktopBotWorker:
         self._record_whole_raid_failed()
         self._automation_failure_already_recorded = failure_recorded
         return False, last_failure_reason or "automation_execution_failed"
-
-    def _begin_latest_replayable_raid(
-        self,
-        url: str,
-        profiles: tuple[RaidProfileConfig, ...],
-    ) -> None:
-        self._latest_replayable_raid = _LatestReplayableRaid(
-            url=url,
-            succeeded_profiles=set(),
-            failed_profiles={profile.profile_directory for profile in profiles},
-        )
-
-    def _mark_latest_replayable_raid_profile_succeeded(
-        self,
-        profile_directory: str,
-    ) -> None:
-        replayable_raid = self._latest_replayable_raid
-        if replayable_raid is None:
-            return
-        replayable_raid.succeeded_profiles.add(profile_directory)
-        replayable_raid.failed_profiles.discard(profile_directory)
-
-    def _mark_latest_replayable_raid_profile_failed(
-        self,
-        profile_directory: str,
-    ) -> None:
-        replayable_raid = self._latest_replayable_raid
-        if replayable_raid is None:
-            return
-        replayable_raid.succeeded_profiles.discard(profile_directory)
-        replayable_raid.failed_profiles.add(profile_directory)
 
     def _execute_raid_for_profile(
         self,
@@ -690,46 +645,6 @@ class DesktopBotWorker:
             )
             self._active_auto_sequence_id = None
 
-    def restart_raid_profile(self, profile_directory: str) -> None:
-        profile_config = next(
-            (
-                profile
-                for profile in self.config.raid_profiles
-                if profile.profile_directory == profile_directory
-            ),
-            None,
-        )
-        updated_states: list[RaidProfileState] = []
-        updated = False
-        for profile_state in self.state.raid_profile_states:
-            if profile_state.profile_directory != profile_directory:
-                updated_states.append(profile_state)
-                continue
-            updated = True
-            updated_states.append(
-                replace(
-                    profile_state,
-                    status="green",
-                    last_error=None,
-                )
-            )
-        if not updated:
-            return
-        self.state.raid_profile_states = tuple(updated_states)
-        self.storage.save_state(self.state)
-        self._emit("stats_changed", state=self.state)
-        processor = self._automation_processor
-        if processor is not None and processor.state == "paused":
-            processor.clear()
-            self._sync_automation_status()
-        if (
-            profile_config is None
-            or not profile_config.raid_on_restart
-            or self._latest_replayable_raid is None
-        ):
-            return
-        self._replay_latest_raid_for_restart()
-
     def run_raid_now_for_profile(self, profile_directory: str) -> None:
         profile = next(
             (
@@ -767,7 +682,6 @@ class DesktopBotWorker:
             normalized_url=detection.job.normalized_url,
             trace_id=detection.job.trace_id,
         )
-        self._begin_latest_replayable_raid(item.normalized_url, (profile,))
         outcome, opened, failure_reason = self._execute_raid_for_profile(
             item,
             profile,
@@ -793,70 +707,6 @@ class DesktopBotWorker:
             now=self.now(),
         )
         self._persist_state_snapshot()
-
-    def _replay_latest_raid_for_restart(self) -> None:
-        latest_replayable_raid = self._latest_replayable_raid
-        if latest_replayable_raid is None or not latest_replayable_raid.failed_profiles:
-            return
-        if not self._auto_run_requested() or self._is_inactive():
-            return
-        runtime = self._automation_runtime
-        if runtime is None:
-            self._ensure_automation_processor()
-            runtime = self._automation_runtime
-        if runtime is None:
-            return
-        preset_chooser = build_slot_1_preset_chooser()
-        build_result = self._build_active_bot_action_sequence_result()
-        if build_result is None:
-            return
-        replay_profiles = tuple(
-            profile
-            for profile in self.config.raid_profiles
-            if profile.enabled
-            and raid_profile_has_any_actions_enabled(profile)
-            and any(
-                slot.enabled and raid_profile_allows_slot(profile, slot.key)
-                for slot in self.config.bot_action_slots
-            )
-            and profile.raid_on_restart
-            and profile.profile_directory in latest_replayable_raid.failed_profiles
-            and profile.profile_directory not in latest_replayable_raid.succeeded_profiles
-            and any(
-                profile_state.profile_directory == profile.profile_directory
-                and profile_state.status == "green"
-                for profile_state in self.state.raid_profile_states
-            )
-        )
-        if not replay_profiles:
-            return
-        item = PendingRaidWorkItem(
-            normalized_url=latest_replayable_raid.url,
-            trace_id="raid-on-restart",
-        )
-        sequence_id = build_result.sequence.id
-        for profile in replay_profiles:
-            profile_sequence = self._build_active_bot_action_sequence_result(
-                choose_preset=preset_chooser,
-                profile=profile,
-            )
-            sequence = profile_sequence.sequence if profile_sequence is not None else None
-            if sequence is None:
-                self._record_raid_profile_failure(
-                    item,
-                    profile,
-                    self._translate_automation_reason("default_sequence_missing")
-                    or "bot_action_not_configured",
-                    sequence_id=sequence_id,
-                )
-                continue
-            self._execute_raid_for_profile(
-                item,
-                profile,
-                sequence=sequence,
-                runtime=runtime,
-                sequence_id=sequence_id,
-            )
 
     def _eligible_raid_profiles(self) -> tuple[RaidProfileConfig, ...]:
         profile_states_by_directory = {
@@ -1109,7 +959,6 @@ class DesktopBotWorker:
             )
         )
         self.state.raids_completed += 1
-        self._mark_latest_replayable_raid_profile_succeeded(profile.profile_directory)
         self._set_raid_profile_state(
             profile,
             status="green",
@@ -1144,7 +993,6 @@ class DesktopBotWorker:
             item.normalized_url,
             profile.profile_directory,
         )
-        self._mark_latest_replayable_raid_profile_succeeded(profile.profile_directory)
         self._set_raid_profile_state(
             profile,
             status="green",
@@ -1169,7 +1017,6 @@ class DesktopBotWorker:
             item.normalized_url,
             profile.profile_directory,
         )
-        self._mark_latest_replayable_raid_profile_failed(profile.profile_directory)
         translated_reason = self._translate_automation_reason(reason) or "automation_execution_failed"
         self.state.raids_failed += 1
         self._set_raid_profile_state(

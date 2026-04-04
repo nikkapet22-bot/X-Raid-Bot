@@ -271,24 +271,6 @@ class DesktopController(QObject):
         )
         self._persist_raid_profiles(tuple(profiles))
 
-    def set_raid_profile_raid_on_restart(
-        self,
-        profile_directory: str,
-        enabled: bool,
-    ) -> None:
-        if self.config is None:
-            raise ValueError("No desktop configuration is available")
-        normalized_directory = str(profile_directory).strip()
-        updated_profiles = tuple(
-            replace(profile, raid_on_restart=bool(enabled))
-            if profile.profile_directory == normalized_directory
-            else profile
-            for profile in self.config.raid_profiles
-        )
-        if updated_profiles == self.config.raid_profiles:
-            return
-        self._persist_raid_profiles(updated_profiles)
-
     def set_raid_profile_action_overrides(
         self,
         profile_directory: str,
@@ -316,16 +298,6 @@ class DesktopController(QObject):
         if updated_profiles == self.config.raid_profiles:
             return
         self._persist_raid_profiles(updated_profiles)
-
-    def restart_raid_profile(self, profile_directory: str) -> None:
-        if (
-            self._worker is None
-            or self._runner is None
-            or not self._runner.is_running()
-            or not hasattr(self._worker, "restart_raid_profile")
-        ):
-            return
-        self._submit_to_runner(lambda: self._worker.restart_raid_profile(profile_directory))
 
     def run_raid_now_for_profile(self, profile_directory: str) -> None:
         if self._worker is None or self._runner is None or not self._runner.is_running():

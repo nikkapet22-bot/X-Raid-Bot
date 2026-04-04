@@ -216,11 +216,6 @@ def build_application_stylesheet() -> str:
         background: transparent;
         border-color: {BORDER_FOCUS};
     }}
-    QLabel#raidOnRestartLabel {{
-        font-size: 11px;
-        font-weight: 500;
-        color: {MUTED};
-    }}
     QPushButton#profileActionConfigButton {{
         min-height: 0;
         max-height: 14px;
