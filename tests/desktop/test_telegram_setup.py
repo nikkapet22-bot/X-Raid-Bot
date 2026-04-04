@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,6 +35,18 @@ class FakeMessage:
     sender: FakeEntity | None
 
     sender_id: int | None = None
+    text: str = ""
+    has_video: bool = False
+    chat_id: int | None = None
+    date: datetime | None = None
+
+    @property
+    def raw_text(self) -> str:
+        return self.text
+
+    @property
+    def video(self):
+        return object() if self.has_video else None
 
     async def get_sender(self):
         return self.sender
@@ -654,3 +667,51 @@ async def test_infer_recent_sender_candidates_uses_runtime_sender_id_with_resolv
 
     assert [candidate.entity_id for candidate in candidates] == [5349287105]
     assert [candidate.label for candidate in candidates] == ["@RallyGuard_Raid_Bot"]
+
+
+@pytest.mark.asyncio
+async def test_list_recent_incoming_messages_returns_newest_first_across_allowed_chats(
+    tmp_path: Path,
+) -> None:
+    from raidbot.desktop.telegram_setup import TelegramSetupService
+
+    now = datetime(2026, 4, 4, 15, 0, 0)
+    raidar = FakeEntity(42, username="raidar")
+    state = {
+        "authorized": True,
+        "messages": {
+            1001: [
+                FakeMessage(
+                    sender=raidar,
+                    sender_id=42,
+                    chat_id=1001,
+                    text="oldest",
+                    has_video=True,
+                    date=now - timedelta(minutes=10),
+                ),
+            ],
+            2002: [
+                FakeMessage(
+                    sender=raidar,
+                    sender_id=42,
+                    chat_id=2002,
+                    text="newest",
+                    has_video=False,
+                    date=now - timedelta(minutes=1),
+                ),
+            ],
+        },
+    }
+    service = TelegramSetupService(
+        api_id=123456,
+        api_hash="hash-value",
+        session_path=tmp_path / "raidbot.session",
+        client_factory=build_client_factory(state),
+    )
+
+    messages = await service.list_recent_incoming_messages([1001, 2002])
+
+    assert [(message.chat_id, message.sender_id, message.text, message.has_video) for message in messages] == [
+        (2002, 42, "newest", False),
+        (1001, 42, "oldest", True),
+    ]

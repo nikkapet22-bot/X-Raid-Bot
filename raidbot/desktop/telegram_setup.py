@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 import shutil
@@ -10,6 +11,7 @@ import tempfile
 from typing import Any
 
 from telethon import TelegramClient
+from raidbot.models import IncomingMessage
 
 
 @dataclass(frozen=True)
@@ -261,6 +263,51 @@ class TelegramSetupService:
 
     async def resolve_sender_entry(self, entry: str) -> int:
         return (await self.resolve_sender_entry_details(entry)).entity_id
+
+    async def list_recent_incoming_messages(
+        self,
+        chat_ids: Iterable[int],
+        *,
+        message_limit: int = 50,
+    ) -> list[IncomingMessage]:
+        temp_dir, lookup_session_path = self._create_lookup_session_copy()
+        client = self.client_factory(str(lookup_session_path), self.api_id, self.api_hash)
+        try:
+            await client.connect()
+            ordered_messages: list[tuple[float, int, IncomingMessage]] = []
+            insertion_index = 0
+            for chat_id in chat_ids:
+                normalized_chat_id = int(chat_id)
+                async for message in client.iter_messages(normalized_chat_id, limit=message_limit):
+                    sender_id = getattr(message, "sender_id", None)
+                    if sender_id is None:
+                        sender = await _message_sender(message)
+                        sender_id = getattr(sender, "id", None)
+                    if sender_id is None:
+                        continue
+                    message_date = getattr(message, "date", None)
+                    if isinstance(message_date, datetime):
+                        sort_key = float(message_date.timestamp())
+                    else:
+                        sort_key = float("-inf")
+                    ordered_messages.append(
+                        (
+                            sort_key,
+                            insertion_index,
+                            IncomingMessage(
+                                chat_id=int(getattr(message, "chat_id", normalized_chat_id)),
+                                sender_id=int(sender_id),
+                                text=str(getattr(message, "raw_text", "") or ""),
+                                has_video=bool(getattr(message, "video", None)),
+                            ),
+                        )
+                    )
+                    insertion_index += 1
+            ordered_messages.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+            return [message for _sort_key, _index, message in ordered_messages]
+        finally:
+            await _maybe_await(client.disconnect())
+            temp_dir.cleanup()
 
     def _create_client(self) -> Any:
         return self.client_factory(str(self.session_path), self.api_id, self.api_hash)
