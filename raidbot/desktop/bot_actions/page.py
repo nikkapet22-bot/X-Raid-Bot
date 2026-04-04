@@ -266,6 +266,88 @@ class SlotBox(QFrame):
     def label_text(self) -> str:
         return self.slot_label.text()
 
+
+class TroubleshootBox(QFrame):
+    def __init__(
+        self,
+        *,
+        label: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._label = str(label)
+        self.setObjectName("card")
+        self.setMinimumWidth(180)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(14, 14, 14, 14)
+
+        self.header_layout = QHBoxLayout()
+        self.header_layout.setSpacing(8)
+        self.header_label = QLabel(self._label)
+        self.header_label.setObjectName("botActionGlyph")
+        self.header_layout.addWidget(self.header_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.header_layout.addStretch()
+        layout.addLayout(self.header_layout)
+
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet("background: #1e3252; max-height: 1px; border: none;")
+        layout.addWidget(divider)
+
+        self.preview_row_widget = QWidget()
+        self.preview_row_layout = QHBoxLayout(self.preview_row_widget)
+        self.preview_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.preview_row_layout.setSpacing(8)
+
+        self.template_preview_label = QLabel("No image")
+        self.template_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.template_preview_label.setMinimumSize(120, 72)
+        self.template_preview_label.setProperty("muted", "true")
+        self.template_preview_label.setStyleSheet(
+            "border: 1px dashed #1e3252; border-radius: 6px;"
+        )
+        self.preview_row_layout.addWidget(self.template_preview_label)
+        layout.addWidget(self.preview_row_widget)
+
+        self.button_row_widget = QWidget()
+        self.button_row_widget.setObjectName("botActionButtonRow")
+        self.button_row_layout = QHBoxLayout(self.button_row_widget)
+        self.button_row_layout.setSpacing(8)
+        self.button_row_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.capture_button = QPushButton("Capture")
+        self.capture_button.setProperty("variant", "secondary")
+        self.capture_button.setProperty("botActionButton", "true")
+        self.button_row_layout.addWidget(self.capture_button)
+
+        self.test_button = QPushButton("Test")
+        self.test_button.setProperty("variant", "secondary")
+        self.test_button.setProperty("botActionButton", "true")
+        self.button_row_layout.addWidget(self.test_button)
+        layout.addWidget(self.button_row_widget)
+
+        self.template_status_label = QLabel("No template captured.")
+        self.template_status_label.setWordWrap(True)
+        self.template_status_label.setProperty("muted", "true")
+        layout.addWidget(self.template_status_label)
+        layout.addStretch()
+
+    def set_template_path(self, template_path: Path | None) -> None:
+        normalized_template_path = (
+            Path(template_path) if template_path is not None else None
+        )
+        _set_preview_label(self.template_preview_label, normalized_template_path)
+        if normalized_template_path is None:
+            self.template_status_label.setText("No template captured.")
+        else:
+            self.template_status_label.setText(str(normalized_template_path))
+
+    def label_text(self) -> str:
+        return self._label
+
+
 class BotActionsPage(QWidget):
     pageReadyCaptureRequested = Signal()
     slotCaptureRequested = Signal(int)
@@ -273,6 +355,8 @@ class BotActionsPage(QWidget):
     slotPresetsRequested = Signal(int)
     slotEnabledChanged = Signal(int, bool)
     slot1FinishDelayChanged = Signal(int)
+    troubleshootCaptureRequested = Signal(str, int)
+    troubleshootTestRequested = Signal(str, int)
 
     def __init__(
         self,
@@ -282,6 +366,8 @@ class BotActionsPage(QWidget):
     ) -> None:
         super().__init__(parent)
         self.slot_boxes: list[SlotBox] = []
+        self.cldf_boxes: list[TroubleshootBox] = []
+        self.troubleshoot_groups: dict[str, list[TroubleshootBox]] = {}
         self.slot_1_finish_delay_input: QSpinBox | None = None
 
         self.page_ready_preview_label = QLabel("No image")
@@ -329,6 +415,17 @@ class BotActionsPage(QWidget):
             return
         with QSignalBlocker(self.slot_1_finish_delay_input):
             self.slot_1_finish_delay_input.setValue(int(finish_delay_seconds))
+
+    def set_troubleshoot_template_path(
+        self,
+        group_key: str,
+        item_index: int,
+        template_path: Path | None,
+    ) -> None:
+        group_boxes = self.troubleshoot_groups.get(str(group_key).lower())
+        if group_boxes is None or not (0 <= item_index < len(group_boxes)):
+            return
+        group_boxes[item_index].set_template_path(template_path)
 
     def set_page_ready_template_path(self, template_path: Path | None) -> None:
         normalized_template_path = (
@@ -436,6 +533,33 @@ class BotActionsPage(QWidget):
             slots_layout.addWidget(box, index // 2, index % 2)
         layout.addWidget(slots_group)
 
+        troubleshoot_group = QGroupBox("Troubleshoot")
+        troubleshoot_layout = QVBoxLayout(troubleshoot_group)
+        troubleshoot_layout.setSpacing(12)
+        cldf_group = QGroupBox("CLDF")
+        cldf_layout = QHBoxLayout(cldf_group)
+        cldf_layout.setSpacing(12)
+        self.cldf_boxes = []
+        for index, label in enumerate(("1", "2", "3")):
+            box = TroubleshootBox(label=label)
+            box.capture_button.clicked.connect(
+                lambda _checked=False, item_index=index: self._emit_troubleshoot_capture_request(
+                    "cldf",
+                    item_index,
+                )
+            )
+            box.test_button.clicked.connect(
+                lambda _checked=False, item_index=index: self._emit_troubleshoot_test_request(
+                    "cldf",
+                    item_index,
+                )
+            )
+            self.cldf_boxes.append(box)
+            cldf_layout.addWidget(box)
+        self.troubleshoot_groups["cldf"] = self.cldf_boxes
+        troubleshoot_layout.addWidget(cldf_group)
+        layout.addWidget(troubleshoot_group)
+
         # Status
         status_group = QGroupBox("Status")
         status_layout = QVBoxLayout(status_group)
@@ -478,7 +602,22 @@ class BotActionsPage(QWidget):
         self.show_status(f"{self._format_slot_name(slot_index)}: presets")
         self.slotPresetsRequested.emit(slot_index)
 
+    def _emit_troubleshoot_capture_request(self, group_key: str, item_index: int) -> None:
+        self.show_status(
+            f"{self._format_troubleshoot_name(group_key, item_index)}: capturing"
+        )
+        self.troubleshootCaptureRequested.emit(group_key, item_index)
+
+    def _emit_troubleshoot_test_request(self, group_key: str, item_index: int) -> None:
+        self.show_status(
+            f"{self._format_troubleshoot_name(group_key, item_index)}: testing"
+        )
+        self.troubleshootTestRequested.emit(group_key, item_index)
+
     def _format_slot_name(self, slot_index: int) -> str:
         if 0 <= slot_index < len(self.slot_boxes):
             return f"Slot {slot_index + 1} ({self.slot_boxes[slot_index].label_text()})"
         return f"Slot {slot_index + 1}"
+
+    def _format_troubleshoot_name(self, group_key: str, item_index: int) -> str:
+        return f"Troubleshoot {str(group_key).upper()} {item_index + 1}"
