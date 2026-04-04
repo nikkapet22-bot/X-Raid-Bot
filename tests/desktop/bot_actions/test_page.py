@@ -406,3 +406,75 @@ def test_bot_actions_page_shows_empty_slot_1_finish_preview_state(qtbot) -> None
 
     assert finish_preview_label is not None
     assert finish_preview_label.text() == "No finish image"
+
+
+def test_bot_actions_page_renders_troubleshoot_cldf_section(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+
+    titles = {group.title() for group in page.findChildren(QGroupBox)}
+
+    assert "Troubleshoot" in titles
+    assert "CLDF" in titles
+
+
+def test_bot_actions_page_renders_three_cldf_troubleshoot_cards(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+
+    assert [box.label_text() for box in page.cldf_boxes] == ["1", "2", "3"]
+
+
+def test_bot_actions_page_troubleshoot_cards_only_show_preview_capture_and_test(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+
+    for box in page.cldf_boxes:
+        assert box.template_preview_label is not None
+        assert box.capture_button.text() == "Capture"
+        assert box.test_button.text() == "Test"
+        assert not hasattr(box, "enabled_checkbox")
+        assert not hasattr(box, "presets_button")
+        assert not hasattr(box, "finish_delay_input")
+
+
+def test_bot_actions_page_troubleshoot_capture_emits_group_and_index(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+    page.show()
+    captured = []
+    page.troubleshootCaptureRequested.connect(
+        lambda group_key, item_index: captured.append((group_key, item_index))
+    )
+
+    qtbot.mouseClick(page.cldf_boxes[1].capture_button, Qt.MouseButton.LeftButton)
+
+    assert captured == [("cldf", 1)]
+    assert page.status_label.text() == "Troubleshoot CLDF 2: capturing"
+    assert page.status_latest_value_label.text() == "Troubleshoot CLDF 2: capturing"
+
+
+def test_bot_actions_page_troubleshoot_test_emits_group_and_index(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+    page.show()
+    captured = []
+    page.troubleshootTestRequested.connect(
+        lambda group_key, item_index: captured.append((group_key, item_index))
+    )
+
+    qtbot.mouseClick(page.cldf_boxes[2].test_button, Qt.MouseButton.LeftButton)
+
+    assert captured == [("cldf", 2)]
+    assert page.status_label.text() == "Troubleshoot CLDF 3: testing"
+    assert page.status_latest_value_label.text() == "Troubleshoot CLDF 3: testing"
