@@ -880,9 +880,12 @@ def test_main_window_metric_cards_expose_reset_buttons(qtbot) -> None:
     reset_buttons = window.findChildren(QPushButton, "metricResetButton")
 
     assert len(reset_buttons) == 6
-    assert all(button.text() == "R" for button in reset_buttons)
-    assert all(button.height() == 12 for button in reset_buttons)
-    assert all(button.width() == 12 for button in reset_buttons)
+    assert all(button.text() == "" for button in reset_buttons)
+    assert all(button.icon().isNull() is False for button in reset_buttons)
+    assert all(button.height() == 18 for button in reset_buttons)
+    assert all(button.width() == 18 for button in reset_buttons)
+    assert all(button.iconSize().width() == 13 for button in reset_buttons)
+    assert all(button.iconSize().height() == 13 for button in reset_buttons)
     assert set(window.metric_reset_buttons) == {
         "avg_raid_completion_time",
         "avg_raids_per_hour",
@@ -3323,6 +3326,7 @@ def test_hidden_window_close_confirmation_centers_dialog_on_screen(
     controller = FakeController()
     controller.active = True
     dialog_calls: list[tuple[object | None, tuple[int, int] | None]] = []
+    restore_calls: list[str] = []
 
     class FakeMessageBox:
         class StandardButton:
@@ -3367,6 +3371,11 @@ def test_hidden_window_close_confirmation_centers_dialog_on_screen(
     window.hide()
     monkeypatch.setattr(
         window,
+        "restore_from_tray",
+        lambda: restore_calls.append("restore_from_tray"),
+    )
+    monkeypatch.setattr(
+        window,
         "_primary_screen_geometry",
         lambda: QRect(100, 100, 800, 600),
     )
@@ -3374,7 +3383,8 @@ def test_hidden_window_close_confirmation_centers_dialog_on_screen(
     event = QCloseEvent()
     window.closeEvent(event)
 
-    assert dialog_calls == [(None, (380, 340))]
+    assert restore_calls == ["restore_from_tray"]
+    assert dialog_calls == [(window, (380, 340))]
     assert event.isAccepted() is False
 
 

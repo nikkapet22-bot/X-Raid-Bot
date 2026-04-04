@@ -94,37 +94,18 @@ def _build_profile_action_icon(size: int = 12, *, color: str = TEXT) -> QIcon:
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    painter.translate(size / 2, size / 2)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor(color))
-
-    tooth_width = max(1.2, size * 0.14)
-    tooth_height = max(2.0, size * 0.24)
-    tooth_radius = tooth_width / 2
-    tooth_offset = size * 0.28
-    for index in range(8):
-        painter.save()
-        painter.rotate(index * 45.0)
-        painter.drawRoundedRect(
-            QRectF(
-                -tooth_width / 2,
-                -(tooth_offset + tooth_height),
-                tooth_width,
-                tooth_height,
-            ),
-            tooth_radius,
-            tooth_radius,
-        )
-        painter.restore()
-
-    outer_radius = size * 0.24
-    inner_radius = size * 0.10
-    painter.drawEllipse(QPointF(0.0, 0.0), outer_radius, outer_radius)
-    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-    painter.drawEllipse(QPointF(0.0, 0.0), inner_radius, inner_radius)
+    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+    font = QFont("Segoe UI Symbol")
+    font.setPixelSize(max(8, int(size * 0.95)))
+    painter.setFont(font)
+    painter.setPen(QColor(color))
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "\u2699")
     painter.end()
     return QIcon(pixmap)
+
+
+def _build_metric_reset_icon(size: int = 10, *, color: str = TEXT) -> QIcon:
+    return _build_profile_reset_icon(size=size, color=color)
 
 
 def _build_profile_reset_icon(size: int = 12, *, color: str = TEXT) -> QIcon:
@@ -522,6 +503,7 @@ class RaidProfileCard(QFrame):
         )
         header_row.addWidget(self.dot_label, 0, Qt.AlignmentFlag.AlignVCenter)
         header_row.addWidget(self.title_label, 1)
+        header_row.addSpacing(6)
         header_row.addWidget(
             self.reset_profile_button,
             0,
@@ -1279,10 +1261,12 @@ class MainWindow(QMainWindow):
         title_label = QLabel(title)
         title_label.setObjectName("metricTitle")
         value_label.setObjectName("metricValue")
-        reset_button = QPushButton("R")
+        reset_button = QPushButton("")
         reset_button.setObjectName("metricResetButton")
-        reset_button.setFixedSize(12, 12)
+        reset_button.setFixedSize(18, 18)
         reset_button.setFlat(True)
+        reset_button.setIcon(_build_metric_reset_icon(size=13))
+        reset_button.setIconSize(QSize(13, 13))
         reset_button.clicked.connect(
             lambda _checked=False, key=metric_key: self.controller.reset_dashboard_metric(key)
         )
@@ -2061,10 +2045,20 @@ class MainWindow(QMainWindow):
                 )
                 == QMessageBox.StandardButton.Yes
             )
+        self._prepare_close_confirmation_window()
         return self._show_centered_close_confirmation()
 
+    def _prepare_close_confirmation_window(self) -> None:
+        if hasattr(self, "restore_from_tray"):
+            self.restore_from_tray()
+            return
+        self.show()
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
     def _show_centered_close_confirmation(self) -> bool:
-        message_box = QMessageBox(None)
+        message_box = QMessageBox(self)
         message_box.setWindowTitle("Stop bot and exit")
         message_box.setText("The bot is still running. Stop it and close the app?")
         message_box.setStandardButtons(
