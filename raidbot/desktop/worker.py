@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -83,6 +84,7 @@ class DesktopBotWorker:
         listener_factory: Callable[..., Any] | None = None,
         automation_runtime_factory: Callable[[EmitEvent], Any] | None = None,
         chrome_opener_factory: Callable[..., Any] | None = None,
+        telegram_setup_service_factory: Callable[[DesktopAppConfig], Any] | None = None,
         chrome_environment_factory: Callable[[], Any] = detect_chrome_environment,
         manual_run_active: Callable[[], bool] | None = None,
         auto_run_wait: Callable[[float], None] | None = None,
@@ -96,6 +98,9 @@ class DesktopBotWorker:
         self.listener_factory = listener_factory or TelegramRaidListener
         self.automation_runtime_factory = automation_runtime_factory
         self.chrome_opener_factory = chrome_opener_factory
+        self.telegram_setup_service_factory = (
+            telegram_setup_service_factory or self._default_telegram_setup_service_factory
+        )
         self.chrome_environment_factory = chrome_environment_factory
         self.manual_run_active = manual_run_active or (lambda: False)
         self.auto_run_wait = auto_run_wait or time.sleep
@@ -724,6 +729,62 @@ class DesktopBotWorker:
         ):
             return
         self._replay_latest_raid_for_restart()
+
+    def run_raid_now_for_profile(self, profile_directory: str) -> None:
+        profile = next(
+            (
+                item
+                for item in self.config.raid_profiles
+                if item.profile_directory == profile_directory
+            ),
+            None,
+        )
+        if profile is None:
+            raise ValueError(f"Unknown raid profile: {profile_directory}")
+        if not raid_profile_has_any_actions_enabled(profile):
+            raise ValueError("Profile has no enabled actions configured")
+        runtime = self._automation_runtime
+        if runtime is None:
+            self._ensure_automation_processor()
+            runtime = self._automation_runtime
+        if runtime is None:
+            raise RuntimeError("Automation runtime unavailable")
+
+        detection = self._find_latest_valid_recent_raid()
+        if detection is None or detection.job is None:
+            raise ValueError("No recent valid raid found")
+
+        preset_chooser = build_slot_1_preset_chooser()
+        profile_sequence = self._build_active_bot_action_sequence_result(
+            choose_preset=preset_chooser,
+            profile=profile,
+        )
+        sequence = profile_sequence.sequence if profile_sequence is not None else None
+        if sequence is None:
+            raise ValueError("Bot actions are not configured for this profile")
+
+        item = PendingRaidWorkItem(
+            normalized_url=detection.job.normalized_url,
+            trace_id=detection.job.trace_id,
+        )
+        self._begin_latest_replayable_raid(item.normalized_url, (profile,))
+        outcome, opened, failure_reason = self._execute_raid_for_profile(
+            item,
+            profile,
+            sequence=sequence,
+            runtime=runtime,
+            sequence_id=sequence.id,
+        )
+        if opened:
+            self._record_whole_raid_opened()
+        if outcome == "failed":
+            self._record_whole_raid_failed()
+            raise RuntimeError(
+                self._translate_automation_reason(failure_reason)
+                or failure_reason
+                or "automation_execution_failed"
+            )
+        self._record_whole_raid_completed()
 
     def reset_dashboard_metric(self, metric_key: str) -> None:
         self.state = apply_dashboard_metric_reset(
@@ -1469,6 +1530,15 @@ class DesktopBotWorker:
             default_requirements=self._default_requirements(config),
         )
 
+    def _build_recent_raid_lookup_service(self) -> RaidService:
+        return RaidService(
+            allowed_chat_ids=set(self.config.whitelisted_chat_ids),
+            allowed_sender_ids=set(self.config.allowed_sender_ids),
+            dedupe_store=InMemoryOpenedUrlStore(),
+            preset_replies=self.config.preset_replies,
+            default_requirements=self._default_requirements(self.config),
+        )
+
     def _build_pipeline(self, config: DesktopAppConfig) -> Any:
         if self.pipeline_factory is not None:
             return self.pipeline_factory(config)
@@ -1532,6 +1602,35 @@ class DesktopBotWorker:
         if hasattr(listener, "on_connection_state_change"):
             listener.on_connection_state_change = self._handle_connection_state_change
         return listener
+
+    def _default_telegram_setup_service_factory(self, config: DesktopAppConfig) -> Any:
+        from raidbot.desktop.telegram_setup import TelegramSetupService
+
+        return TelegramSetupService(
+            api_id=config.telegram_api_id,
+            api_hash=config.telegram_api_hash,
+            session_path=config.telegram_session_path,
+        )
+
+    def _list_recent_allowed_messages(self, *, message_limit: int = 50):
+        service = self.telegram_setup_service_factory(self.config)
+        try:
+            return asyncio.run(
+                service.list_recent_incoming_messages(
+                    self.config.whitelisted_chat_ids,
+                    message_limit=message_limit,
+                )
+            )
+        except Exception as exc:
+            raise RuntimeError("Telegram recent lookup failed") from exc
+
+    def _find_latest_valid_recent_raid(self) -> RaidDetectionResult | None:
+        lookup_service = self._build_recent_raid_lookup_service()
+        for message in self._list_recent_allowed_messages():
+            detection = lookup_service.handle_message(message)
+            if detection.kind == "job_detected":
+                return detection
+        return None
 
     def _telegram_config_changed(self, config: DesktopAppConfig) -> bool:
         return (

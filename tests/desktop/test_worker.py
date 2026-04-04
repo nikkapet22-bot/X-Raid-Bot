@@ -118,6 +118,24 @@ class FakePipeline:
         return self.execution_result
 
 
+class FakeTelegramRecentLookupService:
+    def __init__(self, messages=None, error: Exception | None = None) -> None:
+        self.messages = list(messages or [])
+        self.error = error
+        self.calls: list[tuple[list[int], int]] = []
+
+    async def list_recent_incoming_messages(
+        self,
+        chat_ids,
+        *,
+        message_limit: int = 50,
+    ):
+        self.calls.append((list(chat_ids), int(message_limit)))
+        if self.error is not None:
+            raise self.error
+        return list(self.messages)
+
+
 class FakeWindowManager:
     def __init__(
         self,
@@ -495,6 +513,7 @@ def build_worker(
     listener_factory=None,
     automation_runtime_factory=None,
     chrome_opener_factory=None,
+    telegram_setup_service_factory=None,
     manual_run_active=None,
     auto_run_wait=None,
 ):
@@ -531,6 +550,7 @@ def build_worker(
         listener_factory=listener_factory or default_listener_factory,
         automation_runtime_factory=automation_runtime_factory,
         chrome_opener_factory=chrome_opener_factory,
+        telegram_setup_service_factory=telegram_setup_service_factory,
         manual_run_active=manual_run_active,
         auto_run_wait=auto_run_wait,
         now=lambda: now,
@@ -548,6 +568,7 @@ def build_default_worker(
     listener_factory=None,
     automation_runtime_factory=None,
     chrome_opener_factory=None,
+    telegram_setup_service_factory=None,
     manual_run_active=None,
     auto_run_wait=None,
 ):
@@ -562,6 +583,7 @@ def build_default_worker(
         listener_factory=listener_factory or (lambda **kwargs: FakeListener()),
         automation_runtime_factory=automation_runtime_factory,
         chrome_opener_factory=chrome_opener_factory,
+        telegram_setup_service_factory=telegram_setup_service_factory,
         manual_run_active=manual_run_active,
         auto_run_wait=auto_run_wait,
         now=lambda: now,
@@ -4269,3 +4291,109 @@ def test_worker_ignores_messages_after_stop_is_requested() -> None:
     assert handled_messages == []
     assert events == []
     assert storage.saved_states == []
+
+
+def test_worker_run_raid_now_for_profile_executes_latest_valid_recent_raid(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 4, 4, 18, 0, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime = FakeAutomationRuntime(
+        windows=[
+            WindowInfo(
+                handle=31,
+                title="RaidBot - Chrome",
+                bounds=(0, 0, 100, 100),
+                last_focused_at=1.0,
+            )
+        ]
+    )
+    lookup_service = FakeTelegramRecentLookupService(
+        messages=[
+            IncomingMessage(
+                chat_id=-1001,
+                sender_id=42,
+                text="not a raid",
+                has_video=True,
+            ),
+            IncomingMessage(
+                chat_id=-1001,
+                sender_id=42,
+                text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/777",
+                has_video=True,
+            ),
+        ]
+    )
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            page_ready_template_path=None,
+            bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=lambda message: (
+                detect_job_from_message(message)
+                if "status/" in message.text
+                else RaidDetectionResult(kind="not_a_raid", reason="missing_status_url")
+            ),
+        ),
+        automation_runtime_factory=lambda _emit_event: runtime,
+        chrome_opener_factory=lambda **kwargs: opener,
+        telegram_setup_service_factory=lambda _config: lookup_service,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    worker.run_raid_now_for_profile("Profile 3")
+
+    assert lookup_service.calls == [([-1001], 50)]
+    assert opener.profile_directory == "Profile 3"
+    assert opener.open_raid_window_calls == ["https://x.com/i/status/777"]
+    assert runtime.run_calls == [("bot-actions", 31)]
+    assert worker.state.raids_opened == 1
+    assert worker.state.raids_completed == 1
+
+
+def test_worker_run_raid_now_for_profile_fails_when_no_recent_valid_raid_found(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 4, 4, 18, 5, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    lookup_service = FakeTelegramRecentLookupService(
+        messages=[
+            IncomingMessage(
+                chat_id=-1001,
+                sender_id=42,
+                text="not a raid",
+                has_video=True,
+            )
+        ]
+    )
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=lambda _message: RaidDetectionResult(
+                kind="not_a_raid",
+                reason="missing_status_url",
+            ),
+        ),
+        telegram_setup_service_factory=lambda _config: lookup_service,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    with pytest.raises(ValueError, match="No recent valid raid found"):
+        worker.run_raid_now_for_profile("Profile 3")
