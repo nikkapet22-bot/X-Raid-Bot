@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from raidbot.desktop.automation import runtime as automation_runtime
 from raidbot.desktop.models import (
+    BotActionSlotConfig,
     BotActionPreset,
     RaidProfileConfig,
     apply_dashboard_metric_reset,
@@ -442,6 +443,42 @@ class DesktopController(QObject):
     def test_bot_action_slot(self, slot_index: int) -> None:
         if self.config is None:
             raise ValueError("No desktop configuration is available")
+        slot = self.config.bot_action_slots[slot_index]
+        self._start_bot_action_template_test(
+            slot=slot,
+            display_name=self._format_bot_action_slot(slot_index, slot.label),
+            event_slot_index=slot_index,
+        )
+
+    def test_troubleshoot_template(
+        self,
+        group_key: str,
+        item_index: int,
+        template_path: Path | None,
+    ) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        normalized_group_key = str(group_key).strip().lower() or "troubleshoot"
+        display_name = f"Troubleshoot {normalized_group_key.upper()} {item_index + 1}"
+        slot = BotActionSlotConfig(
+            key=f"troubleshoot_{normalized_group_key}_{item_index + 1}",
+            label=display_name,
+            enabled=True,
+            template_path=Path(template_path) if template_path is not None else None,
+        )
+        self._start_bot_action_template_test(
+            slot=slot,
+            display_name=display_name,
+            event_slot_index=item_index,
+        )
+
+    def _start_bot_action_template_test(
+        self,
+        *,
+        slot: BotActionSlotConfig,
+        display_name: str,
+        event_slot_index: int,
+    ) -> None:
         if self._automation_queue_blocks_manual_actions():
             self.errorRaised.emit(self._QUEUE_OWNS_SLOT_ERROR)
             return
@@ -449,25 +486,24 @@ class DesktopController(QObject):
             self.errorRaised.emit("Automation already running")
             return
 
-        slot = self.config.bot_action_slots[slot_index]
         template_path = slot.template_path
         if template_path is None or not Path(template_path).exists():
             self.botActionRunEvent.emit(
                 self._build_slot_test_event(
                     "slot_test_failed",
-                    slot_index=slot_index,
+                    slot_index=event_slot_index,
                     reason="template_missing",
-                    message=f"{self._format_bot_action_slot(slot_index, slot.label)}: template missing",
+                    message=f"{display_name}: template missing",
                 )
             )
             return
-        if slot_index == 0 and not slot.presets:
+        if slot.key == "slot_1_r" and not slot.presets:
             self.botActionRunEvent.emit(
                 self._build_slot_test_event(
                     "slot_test_failed",
-                    slot_index=slot_index,
+                    slot_index=event_slot_index,
                     reason="no_presets_configured",
-                    message=f"{self._format_bot_action_slot(slot_index, slot.label)}: no presets configured",
+                    message=f"{display_name}: no presets configured",
                 )
             )
             return
@@ -486,9 +522,9 @@ class DesktopController(QObject):
             self.botActionRunEvent.emit(
                 self._build_slot_test_event(
                     "slot_test_failed",
-                    slot_index=slot_index,
+                    slot_index=event_slot_index,
                     reason="target_window_not_found",
-                    message=f"{self._format_bot_action_slot(slot_index, slot.label)}: no Chrome window found",
+                    message=f"{display_name}: no Chrome window found",
                 )
             )
             return
@@ -496,14 +532,14 @@ class DesktopController(QObject):
         from raidbot.desktop.bot_actions.sequence import build_slot_test_sequence
 
         self._bot_action_slot_test_context = {
-            "slot_index": slot_index,
-            "slot_label": slot.label,
+            "slot_index": event_slot_index,
+            "display_name": display_name,
         }
         self.botActionRunEvent.emit(
             self._build_slot_test_event(
                 "slot_test_started",
-                slot_index=slot_index,
-                message=f"{self._format_bot_action_slot(slot_index, slot.label)}: testing",
+                slot_index=event_slot_index,
+                message=f"{display_name}: testing",
             )
         )
         self._automation_runner = self.runner_factory()
@@ -992,15 +1028,14 @@ class DesktopController(QObject):
         result: Any,
     ) -> dict[str, Any]:
         slot_index = int(context["slot_index"])
-        slot_label = str(context["slot_label"])
-        slot_name = self._format_bot_action_slot(slot_index, slot_label)
+        display_name = str(context.get("display_name") or f"Slot {slot_index + 1}")
 
         if result is None:
             return self._build_slot_test_event(
                 "slot_test_failed",
                 slot_index=slot_index,
                 reason="runtime_error",
-                message=f"{slot_name}: runtime error",
+                message=f"{display_name}: runtime error",
             )
 
         status = getattr(result, "status", None)
@@ -1009,7 +1044,7 @@ class DesktopController(QObject):
             return self._build_slot_test_event(
                 "slot_test_succeeded",
                 slot_index=slot_index,
-                message=f"{slot_name}: success",
+                message=f"{display_name}: success",
             )
 
         reason_messages = {
@@ -1029,5 +1064,5 @@ class DesktopController(QObject):
             "slot_test_failed",
             slot_index=slot_index,
             reason=normalized_reason,
-            message=f"{slot_name}: {reason_messages.get(normalized_reason, normalized_reason)}",
+            message=f"{display_name}: {reason_messages.get(normalized_reason, normalized_reason)}",
         )

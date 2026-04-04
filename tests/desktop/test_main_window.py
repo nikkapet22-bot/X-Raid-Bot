@@ -154,6 +154,7 @@ class FakeController(QObject):
         self.bot_action_slot_template_updates = []
         self.bot_action_slot_1_presets_updates = []
         self.bot_action_slot_test_calls = []
+        self.troubleshoot_test_calls = []
         self.bot_action_slot_enabled_updates = []
         self.auto_run_settle_ms_updates = []
         self.slot_1_finish_delay_seconds_updates = []
@@ -334,6 +335,14 @@ class FakeController(QObject):
 
     def test_bot_action_slot(self, slot_index: int) -> None:
         self.bot_action_slot_test_calls.append(slot_index)
+
+    def test_troubleshoot_template(
+        self,
+        group_key: str,
+        item_index: int,
+        template_path: Path | None,
+    ) -> None:
+        self.troubleshoot_test_calls.append((group_key, item_index, template_path))
 
     def add_raid_profile(self, profile_directory: str, label: str) -> None:
         self.raid_profile_add_calls.append((profile_directory, label))
@@ -1950,6 +1959,58 @@ def test_main_window_capture_updates_page_ready_template_via_controller(qtbot) -
     assert window.bot_actions_page.status_label.text() == "Status: Page Ready: image saved"
 
 
+def test_main_window_capture_updates_cldf_troubleshoot_template(qtbot) -> None:
+    captured_path = Path("bot_actions/troubleshoot/cldf_1.png")
+    capture_service = FakeSlotCaptureService(captured_path)
+    controller = FakeController()
+    window = build_window(
+        controller,
+        FakeStorage(),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(
+        window.bot_actions_page.cldf_boxes[0].capture_button,
+        Qt.MouseButton.LeftButton,
+    )
+
+    assert capture_service.capture_to_path_calls == [
+        (Path("bot_actions/troubleshoot/cldf_1.png"), None)
+    ]
+    assert (
+        window.bot_actions_page.cldf_boxes[0].template_status_label.text()
+        == str(captured_path)
+    )
+    assert (
+        window.bot_actions_page.status_label.text()
+        == "Status: Troubleshoot CLDF 1: image saved"
+    )
+
+
+def test_main_window_loads_existing_cldf_troubleshoot_template_from_disk(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "bot_actions" / "troubleshoot" / "cldf_1.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_solid_image(image_path, "#00ff00")
+
+    controller = FakeController()
+    storage = FakeStorage(base_dir=tmp_path)
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    assert (
+        window.bot_actions_page.cldf_boxes[0].template_status_label.text()
+        == str(image_path)
+    )
+    assert (
+        _label_center_hex(window.bot_actions_page.cldf_boxes[0].template_preview_label)
+        == "#00ff00"
+    )
+
+
 def test_main_window_capture_refreshes_slot_preview_when_same_path_is_overwritten(
     qtbot,
     tmp_path,
@@ -2157,6 +2218,26 @@ def test_main_window_test_button_calls_controller_slot_test(qtbot) -> None:
     qtbot.mouseClick(window.bot_actions_page.slot_boxes[0].test_button, Qt.MouseButton.LeftButton)
 
     assert controller.bot_action_slot_test_calls == [0]
+
+
+def test_main_window_troubleshoot_test_button_calls_controller_template_test(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "bot_actions" / "troubleshoot" / "cldf_1.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"capture")
+
+    controller = FakeController()
+    window = build_window(controller, FakeStorage(base_dir=tmp_path))
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(
+        window.bot_actions_page.cldf_boxes[0].test_button,
+        Qt.MouseButton.LeftButton,
+    )
+
+    assert controller.troubleshoot_test_calls == [("cldf", 0, image_path)]
 
 
 def test_main_window_slot_test_events_show_simple_status(qtbot) -> None:

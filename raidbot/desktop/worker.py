@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
+from pathlib import Path
 import time
 from typing import Any
 
@@ -17,7 +18,7 @@ from raidbot.desktop.bot_actions.sequence import (
 )
 from raidbot.desktop.chrome_profiles import detect_chrome_environment
 from raidbot.desktop.automation.autorun import AutoRunProcessor, PendingRaidWorkItem
-from raidbot.desktop.automation.models import AutomationStep
+from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
 from raidbot.desktop.automation.runtime import AutomationRuntime
 from raidbot.desktop.automation.windowing import find_opened_raid_window
 from raidbot.desktop.models import (
@@ -42,6 +43,9 @@ from raidbot.models import (
 )
 
 _PAGE_READY_POST_MATCH_DELAY_SECONDS = 0.5
+_PAGE_READY_MAX_SEARCH_SECONDS = 5.0
+_TROUBLESHOOT_STEP_SEARCH_SECONDS = 5.0
+_TROUBLESHOOT_STEP_SETTLE_SECONDS = 5.0
 from raidbot.service import RaidService
 from raidbot.telegram_client import TelegramRaidListener
 
@@ -421,6 +425,7 @@ class DesktopBotWorker:
 
         raid_opened = False
         raid_succeeded = False
+        recovery_performed = False
         failure_recorded = False
         last_failure_reason: str | None = None
         for profile in eligible_profiles:
@@ -441,7 +446,7 @@ class DesktopBotWorker:
                 )
                 failure_recorded = True
                 continue
-            succeeded, opened, failure_reason = self._execute_raid_for_profile(
+            outcome, opened, failure_reason = self._execute_raid_for_profile(
                 item,
                 profile,
                 sequence=sequence,
@@ -451,13 +456,16 @@ class DesktopBotWorker:
             if opened and not raid_opened:
                 self._record_whole_raid_opened()
                 raid_opened = True
-            if not succeeded:
+            if outcome == "failed":
                 last_failure_reason = failure_reason
                 failure_recorded = True
                 continue
+            if outcome == "recovered":
+                recovery_performed = True
+                continue
             raid_succeeded = True
 
-        if raid_succeeded:
+        if raid_succeeded or (recovery_performed and not failure_recorded):
             self._record_whole_raid_completed()
             return True, None
 
@@ -504,7 +512,7 @@ class DesktopBotWorker:
         sequence,
         runtime: Any,
         sequence_id: str,
-    ) -> tuple[bool, bool, str | None]:
+    ) -> tuple[str, bool, str | None]:
         previous_windows = tuple(runtime.list_target_windows())
         profile_context, opened_window, open_failure_reason = self._open_raid_for_profile(
             item,
@@ -519,20 +527,40 @@ class DesktopBotWorker:
                 failure_reason,
                 sequence_id=sequence_id,
             )
-            return False, False, failure_reason
+            return "failed", False, failure_reason
 
         page_ready_failure_reason, scroll_anchor = self._wait_for_page_ready(
             runtime,
             opened_window,
         )
         if page_ready_failure_reason is not None:
+            if page_ready_failure_reason == "page_ready_not_found":
+                troubleshoot_failure_reason = self._run_cldf_troubleshoot(
+                    runtime,
+                    opened_window,
+                )
+                if troubleshoot_failure_reason is None:
+                    close_failure_reason = self._close_automation_window_for_profile(
+                        runtime
+                    )
+                    if close_failure_reason is not None:
+                        self._record_raid_profile_failure(
+                            item,
+                            profile,
+                            close_failure_reason,
+                            sequence_id=sequence_id,
+                        )
+                        return "failed", True, close_failure_reason
+                    self._record_raid_profile_recovered(item, profile)
+                    return "recovered", True, None
+                page_ready_failure_reason = troubleshoot_failure_reason
             self._record_raid_profile_failure(
                 item,
                 profile,
                 page_ready_failure_reason,
                 sequence_id=sequence_id,
             )
-            return False, True, page_ready_failure_reason
+            return "failed", True, page_ready_failure_reason
         anchor_failure_reason = self._move_cursor_to_scroll_anchor(
             runtime,
             opened_window,
@@ -545,7 +573,7 @@ class DesktopBotWorker:
                 anchor_failure_reason,
                 sequence_id=sequence_id,
             )
-            return False, True, anchor_failure_reason
+            return "failed", True, anchor_failure_reason
 
         started_at = self.now()
         self._mark_profile_run_started(
@@ -583,7 +611,7 @@ class DesktopBotWorker:
                 failure_reason,
                 sequence_id=sequence_id,
             )
-            return False, True, failure_reason
+            return "failed", True, failure_reason
         status = getattr(result, "status", None)
         failure_reason = getattr(result, "failure_reason", None)
         if status != "completed":
@@ -594,7 +622,7 @@ class DesktopBotWorker:
                 failure_reason,
                 sequence_id=sequence_id,
             )
-            return False, True, failure_reason
+            return "failed", True, failure_reason
 
         close_failure_reason = self._close_automation_window_for_profile(runtime)
         if close_failure_reason is not None:
@@ -604,14 +632,14 @@ class DesktopBotWorker:
                 close_failure_reason,
                 sequence_id=sequence_id,
             )
-            return False, True, close_failure_reason
+            return "failed", True, close_failure_reason
 
         self._record_raid_profile_success(
             item,
             profile,
             sequence_id=sequence_id,
         )
-        return True, True, None
+        return "succeeded", True, None
 
     def _close_automation_window(self, _context) -> None:
         return
@@ -847,7 +875,7 @@ class DesktopBotWorker:
                 name="page_ready",
                 template_path=template_path,
                 match_threshold=0.9,
-                max_search_seconds=8.0,
+                max_search_seconds=_PAGE_READY_MAX_SEARCH_SECONDS,
                 max_scroll_attempts=0,
                 scroll_amount=-120,
                 max_click_attempts=1,
@@ -864,6 +892,103 @@ class DesktopBotWorker:
         if failure_reason in {None, "match_not_found"}:
             return "page_ready_not_found", None
         return failure_reason, None
+
+    def _storage_base_dir(self) -> Path:
+        return Path(getattr(self.storage, "base_dir", Path(".")))
+
+    def _troubleshoot_template_relative_path(
+        self,
+        group_key: str,
+        item_index: int,
+    ) -> Path:
+        normalized_group_key = str(group_key).strip().lower() or "troubleshoot"
+        return (
+            Path("bot_actions")
+            / "troubleshoot"
+            / f"{normalized_group_key}_{item_index + 1}.png"
+        )
+
+    def _troubleshoot_template_path(
+        self,
+        group_key: str,
+        item_index: int,
+    ) -> Path:
+        return self._storage_base_dir() / self._troubleshoot_template_relative_path(
+            group_key,
+            item_index,
+        )
+
+    def _build_troubleshoot_sequence(
+        self,
+        *,
+        group_key: str,
+        item_index: int,
+        template_path: Path,
+    ) -> AutomationSequence:
+        step_number = item_index + 1
+        return AutomationSequence(
+            id=f"troubleshoot-{group_key}-{step_number}",
+            name=f"Troubleshoot {str(group_key).upper()} {step_number}",
+            steps=[
+                AutomationStep(
+                    name=f"{group_key}_{step_number}",
+                    template_path=template_path,
+                    match_threshold=0.9,
+                    max_search_seconds=_TROUBLESHOOT_STEP_SEARCH_SECONDS,
+                    max_scroll_attempts=0,
+                    scroll_amount=-120,
+                    max_click_attempts=1,
+                    post_click_settle_ms=int(_TROUBLESHOOT_STEP_SETTLE_SECONDS * 1000),
+                )
+            ],
+        )
+
+    def _run_troubleshoot_step(
+        self,
+        runtime: Any,
+        opened_window: Any,
+        *,
+        group_key: str,
+        item_index: int,
+    ) -> str | None:
+        template_path = self._troubleshoot_template_path(group_key, item_index)
+        step_prefix = f"troubleshoot_{group_key}_{item_index + 1}"
+        if not template_path.exists():
+            return f"{step_prefix}_missing"
+        sequence = self._build_troubleshoot_sequence(
+            group_key=group_key,
+            item_index=item_index,
+            template_path=template_path,
+        )
+        try:
+            result = runtime.run_sequence(
+                sequence,
+                selected_window_handle=opened_window.handle,
+            )
+        except Exception as exc:
+            return self._reason_from_exception(exc, f"{step_prefix}_runtime_error")
+        if getattr(result, "status", None) == "completed":
+            return None
+        failure_reason = getattr(result, "failure_reason", None)
+        if failure_reason in {None, "match_not_found"}:
+            return f"{step_prefix}_not_found"
+        return str(failure_reason)
+
+    def _run_cldf_troubleshoot(
+        self,
+        runtime: Any,
+        opened_window: Any,
+    ) -> str | None:
+        for item_index in range(3):
+            failure_reason = self._run_troubleshoot_step(
+                runtime,
+                opened_window,
+                group_key="cldf",
+                item_index=item_index,
+            )
+            if failure_reason is not None:
+                return failure_reason
+        return None
 
     def _resolve_page_ready_anchor(
         self,
@@ -945,6 +1070,28 @@ class DesktopBotWorker:
         self._emit(
             "automation_run_succeeded",
             sequence_id=sequence_id,
+            url=item.normalized_url,
+            profile_directory=profile.profile_directory,
+        )
+
+    def _record_raid_profile_recovered(
+        self,
+        item: PendingRaidWorkItem,
+        profile: RaidProfileConfig,
+    ) -> None:
+        self._discard_profile_run_start(
+            item.normalized_url,
+            profile.profile_directory,
+        )
+        self._mark_latest_replayable_raid_profile_succeeded(profile.profile_directory)
+        self._set_raid_profile_state(
+            profile,
+            status="green",
+            last_error=None,
+        )
+        self._record_activity(
+            "session_closed",
+            reason="troubleshoot_recovered",
             url=item.normalized_url,
             profile_directory=profile.profile_directory,
         )

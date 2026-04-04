@@ -1040,6 +1040,12 @@ class MainWindow(QMainWindow):
         self.bot_actions_page.slot1FinishDelayChanged.connect(
             self.controller.set_slot_1_finish_delay_seconds
         )
+        self.bot_actions_page.troubleshootCaptureRequested.connect(
+            self._capture_troubleshoot_template
+        )
+        self.bot_actions_page.troubleshootTestRequested.connect(
+            self._test_troubleshoot_template
+        )
         self.stack.addWidget(self._wrap_page(self.bot_actions_page))
 
         self.top_tabs.pageRequested.connect(self.stack.setCurrentIndex)
@@ -2264,6 +2270,34 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_bot_actions_error(str(exc))
 
+    def _capture_troubleshoot_template(self, group_key: str, item_index: int) -> None:
+        try:
+            template_path = self.slot_capture_service.capture_to_path(
+                self._troubleshoot_template_relative_path(group_key, item_index),
+                existing_path=self._troubleshoot_template_path(group_key, item_index),
+            )
+            self.bot_actions_page.set_troubleshoot_template_path(
+                group_key,
+                item_index,
+                template_path,
+            )
+            if template_path is not None:
+                self._bot_actions_status_text = (
+                    f"{self._format_troubleshoot_name(group_key, item_index)}: image saved"
+                )
+                self._bot_actions_last_error_text = None
+                self._bot_actions_current_slot_text = None
+                self._render_bot_actions_status()
+        except Exception as exc:
+            self._show_bot_actions_error(str(exc))
+
+    def _test_troubleshoot_template(self, group_key: str, item_index: int) -> None:
+        self.controller.test_troubleshoot_template(
+            group_key,
+            item_index,
+            self._troubleshoot_template_path(group_key, item_index),
+        )
+
     def _open_bot_action_slot_presets(self, slot_index: int) -> None:
         if slot_index != 0:
             return
@@ -2346,6 +2380,7 @@ class MainWindow(QMainWindow):
         self.settings_page.set_available_chats(self._available_chats_cache)
         self.bot_actions_page.set_page_ready_template_path(config.page_ready_template_path)
         self.bot_actions_page.set_slots(config.bot_action_slots)
+        self._sync_troubleshoot_templates()
         self.bot_actions_page.set_slot_1_finish_delay_seconds(
             config.slot_1_finish_delay_seconds
         )
@@ -2485,6 +2520,50 @@ class MainWindow(QMainWindow):
 
     def _format_bot_action_slot(self, slot_index: int, slot_label: str) -> str:
         return f"Slot {slot_index + 1} ({slot_label})"
+
+    def _format_troubleshoot_name(self, group_key: str, item_index: int) -> str:
+        return f"Troubleshoot {str(group_key).upper()} {item_index + 1}"
+
+    def _capture_base_dir(self) -> Path:
+        return Path(
+            getattr(
+                self.slot_capture_service,
+                "base_dir",
+                getattr(self.storage, "base_dir", Path(".")),
+            )
+        )
+
+    def _troubleshoot_template_relative_path(
+        self,
+        group_key: str,
+        item_index: int,
+    ) -> Path:
+        normalized_group_key = str(group_key).strip().lower() or "troubleshoot"
+        return (
+            Path("bot_actions")
+            / "troubleshoot"
+            / f"{normalized_group_key}_{item_index + 1}.png"
+        )
+
+    def _troubleshoot_template_path(
+        self,
+        group_key: str,
+        item_index: int,
+    ) -> Path | None:
+        template_path = (
+            self._capture_base_dir()
+            / self._troubleshoot_template_relative_path(group_key, item_index)
+        )
+        return template_path if template_path.exists() else None
+
+    def _sync_troubleshoot_templates(self) -> None:
+        for group_key, boxes in self.bot_actions_page.troubleshoot_groups.items():
+            for item_index, _box in enumerate(boxes):
+                self.bot_actions_page.set_troubleshoot_template_path(
+                    group_key,
+                    item_index,
+                    self._troubleshoot_template_path(group_key, item_index),
+                )
 
     def _render_bot_actions_status(self) -> None:
         lines = [f"Status: {self._bot_actions_status_text}"]

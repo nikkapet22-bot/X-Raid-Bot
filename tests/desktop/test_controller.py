@@ -1119,6 +1119,31 @@ def test_controller_rejects_slot_test_when_template_missing(qtbot) -> None:
     ]
 
 
+def test_controller_rejects_troubleshoot_test_when_template_missing(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    controller = DesktopController(
+        storage=FakeStorage(),
+        config=build_config(),
+        runner_factory=ImmediateRunner,
+        automation_runtime_probe=lambda: (True, None),
+        automation_runtime_factory=lambda _emit_event: FakeSlotTestRuntime(),
+    )
+    events = []
+    controller.botActionRunEvent.connect(events.append)
+
+    controller.test_troubleshoot_template("cldf", 0, None)
+
+    assert events == [
+        {
+            "type": "slot_test_failed",
+            "slot_index": 0,
+            "reason": "template_missing",
+            "message": "Troubleshoot CLDF 1: template missing",
+        }
+    ]
+
+
 def test_controller_rejects_slot_test_when_template_file_is_missing(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 
@@ -1189,6 +1214,44 @@ def test_controller_rejects_slot_1_test_when_no_presets_configured(
         }
     ]
     assert runtime.run_calls == []
+
+
+def test_controller_runs_troubleshoot_test_against_most_recent_chrome_window(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    template_path = tmp_path / "cldf_1.png"
+    template_path.write_bytes(b"capture")
+    runtime = FakeSlotTestRuntime(
+        windows=[
+            SimpleNamespace(handle=7, last_focused_at=1.0, title="Chrome 1"),
+            SimpleNamespace(handle=9, last_focused_at=5.0, title="Chrome 2"),
+        ]
+    )
+    controller = DesktopController(
+        storage=FakeStorage(),
+        config=build_config(),
+        runner_factory=ImmediateRunner,
+        automation_runtime_probe=lambda: (True, None),
+        automation_runtime_factory=lambda _emit_event: runtime,
+    )
+    events = []
+    controller.botActionRunEvent.connect(events.append)
+
+    controller.test_troubleshoot_template("cldf", 0, template_path)
+
+    assert [event["type"] for event in events] == [
+        "slot_test_started",
+        "slot_test_succeeded",
+    ]
+    assert events[0]["message"] == "Troubleshoot CLDF 1: testing"
+    assert events[1]["message"] == "Troubleshoot CLDF 1: success"
+    assert runtime.run_calls[0][1] == 9
+    assert runtime.run_calls[0][2] is True
+    assert runtime.run_calls[0][3] is True
+    assert runtime.run_calls[0][0].steps[0].template_path == template_path
 
 
 def test_controller_formats_reply_submit_not_confirmed_slot_test_reason(

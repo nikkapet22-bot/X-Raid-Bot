@@ -627,6 +627,26 @@ def build_bot_action_slots(
     return tuple(slots)
 
 
+def write_troubleshoot_templates(
+    base_dir: Path,
+    *,
+    group_key: str = "cldf",
+    indexes: tuple[int, ...] = (0, 1, 2),
+) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    for item_index in indexes:
+        path = (
+            base_dir
+            / "bot_actions"
+            / "troubleshoot"
+            / f"{group_key}_{item_index + 1}.png"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"capture")
+        paths.append(path)
+    return tuple(paths)
+
+
 def test_worker_records_sender_rejected_detection() -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 0, 0)
@@ -2307,7 +2327,213 @@ def test_worker_marks_profile_failed_when_page_ready_never_appears(tmp_path) -> 
     assert worker.state.raids_completed == 0
     assert worker.state.raids_failed == 1
     assert worker.state.raid_profile_states == (
-        RaidProfileState("Profile 3", "Profile 3", "red", "page_ready_not_found"),
+        RaidProfileState("Profile 3", "Profile 3", "red", "troubleshoot_cldf_1_missing"),
+    )
+
+
+def test_worker_page_ready_timeout_runs_cldf_recovery_and_restores_profile(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 4, 4, 12, 0, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    page_ready_path = tmp_path / "page_ready.png"
+    page_ready_path.write_bytes(b"capture")
+    write_troubleshoot_templates(tmp_path)
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=18,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+            wait_for_step_result=RunResult(
+                status="failed",
+                failure_reason="match_not_found",
+                window_handle=18,
+                step_index=0,
+            ),
+            run_sequence_results=[
+                RunResult(status="completed", window_handle=18),
+                RunResult(status="completed", window_handle=18),
+                RunResult(status="completed", window_handle=18),
+            ],
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            page_ready_template_path=page_ready_path,
+            bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/334")
+    )
+
+    assert outcome.kind == "job_detected"
+    assert runtime is not None
+    assert runtime.wait_for_step_calls == [(page_ready_path, 18)]
+    assert runtime.run_calls == [
+        ("troubleshoot-cldf-1", 18),
+        ("troubleshoot-cldf-2", 18),
+        ("troubleshoot-cldf-3", 18),
+    ]
+    assert runtime.input_driver.close_active_window_calls == 1
+    assert worker.state.raids_detected == 1
+    assert worker.state.raids_opened == 1
+    assert worker.state.raids_completed == 0
+    assert worker.state.raids_failed == 0
+    assert worker.state.raid_profile_states == (
+        RaidProfileState("Profile 3", "Profile 3", "green", None),
+    )
+
+
+def test_worker_page_ready_timeout_fails_when_cldf_1_template_missing(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 4, 4, 12, 5, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    page_ready_path = tmp_path / "page_ready.png"
+    page_ready_path.write_bytes(b"capture")
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=19,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+            wait_for_step_result=RunResult(
+                status="failed",
+                failure_reason="match_not_found",
+                window_handle=19,
+                step_index=0,
+            ),
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            page_ready_template_path=page_ready_path,
+            bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/335")
+    )
+
+    assert outcome.kind == "job_detected"
+    assert runtime is not None
+    assert runtime.run_calls == []
+    assert worker.state.raids_failed == 1
+    assert worker.state.raid_profile_states == (
+        RaidProfileState("Profile 3", "Profile 3", "red", "troubleshoot_cldf_1_missing"),
+    )
+
+
+def test_worker_page_ready_timeout_fails_when_cldf_2_does_not_match(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 4, 4, 12, 10, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    page_ready_path = tmp_path / "page_ready.png"
+    page_ready_path.write_bytes(b"capture")
+    write_troubleshoot_templates(tmp_path)
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=20,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+            wait_for_step_result=RunResult(
+                status="failed",
+                failure_reason="match_not_found",
+                window_handle=20,
+                step_index=0,
+            ),
+            run_sequence_results=[
+                RunResult(status="completed", window_handle=20),
+                RunResult(status="failed", failure_reason="match_not_found"),
+            ],
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            page_ready_template_path=page_ready_path,
+            bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/336")
+    )
+
+    assert outcome.kind == "job_detected"
+    assert runtime is not None
+    assert runtime.run_calls == [
+        ("troubleshoot-cldf-1", 20),
+        ("troubleshoot-cldf-2", 20),
+    ]
+    assert runtime.input_driver.close_active_window_calls == 0
+    assert worker.state.raids_failed == 1
+    assert worker.state.raid_profile_states == (
+        RaidProfileState("Profile 3", "Profile 3", "red", "troubleshoot_cldf_2_not_found"),
     )
 
 
