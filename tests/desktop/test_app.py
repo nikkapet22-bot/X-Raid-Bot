@@ -40,6 +40,8 @@ def test_build_application_stylesheet_contains_dark_surface_and_accent() -> None
     assert "QPushButton" in stylesheet
     assert "QWizard QPushButton" in stylesheet
     assert 'QPushButton[variant="secondary"]' in stylesheet
+    assert 'QPushButton[variant="secondary"]:hover' in stylesheet
+    assert 'QPushButton[variant="secondary"]:pressed' in stylesheet
     assert 'QPushButton[variant="secondary"]:disabled' in stylesheet
     assert 'QPushButton[variant="quiet"]' in stylesheet
     assert "QPushButton#profileActionConfigButton" in stylesheet
@@ -61,6 +63,8 @@ def test_build_application_stylesheet_contains_dark_surface_and_accent() -> None
     assert "QPushButton#shellTabButton" in stylesheet
     assert "min-height: 24px;" in stylesheet
     assert "QPushButton#metricResetButton" in stylesheet
+    assert '[profileStatus="warmup"]' in stylesheet
+    assert "background-color: #102847;" in stylesheet
     metric_reset_match = re.search(
         r'QPushButton#metricResetButton \{\s*(.*?)\s*\}',
         stylesheet,
@@ -68,11 +72,22 @@ def test_build_application_stylesheet_contains_dark_surface_and_accent() -> None
     )
     assert metric_reset_match is not None
     metric_reset_block = metric_reset_match.group(1)
-    assert "max-height: 12px;" in metric_reset_block
-    assert "max-width: 12px;" in metric_reset_block
-    assert "border: 1px solid" in metric_reset_block
+    assert "max-height: 18px;" in metric_reset_block
+    assert "max-width: 18px;" in metric_reset_block
+    assert "background-color: transparent;" in metric_reset_block
+    assert "border: 1px solid transparent;" in metric_reset_block
+    metric_reset_hover_match = re.search(
+        r'QPushButton#metricResetButton:hover \{\s*(.*?)\s*\}',
+        stylesheet,
+        re.S,
+    )
+    assert metric_reset_hover_match is not None
+    metric_reset_hover_block = metric_reset_hover_match.group(1)
+    assert "background-color: rgba(17, 37, 63, 0.82);" in metric_reset_hover_block
+    assert "border-color: #4f8ef7;" in metric_reset_hover_block
     assert "QFrame#statusSummaryCard" in stylesheet
     assert "background: transparent;" in stylesheet
+    assert "QListWidget#settingsRaidProfilesList::item" in stylesheet
     assert "QWizardPage" in stylesheet
     assert "QWizard > QWidget" in stylesheet
 

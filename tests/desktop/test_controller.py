@@ -342,7 +342,7 @@ def test_controller_add_raid_profile_appends_and_ignores_duplicates(qtbot) -> No
     assert changed_configs[-1] == controller.config
 
 
-def test_controller_sets_profile_action_overrides_for_one_profile(qtbot) -> None:
+def test_controller_sets_profile_action_overrides_with_warmup_for_one_profile(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 
     storage = FakeStorage()
@@ -373,6 +373,7 @@ def test_controller_sets_profile_action_overrides_for_one_profile(qtbot) -> None
         like_enabled=True,
         repost_enabled=False,
         bookmark_enabled=True,
+        warmup_enabled=True,
     )
 
     assert storage.saved_configs[-1].raid_profiles == (
@@ -389,6 +390,7 @@ def test_controller_sets_profile_action_overrides_for_one_profile(qtbot) -> None
             like_enabled=True,
             repost_enabled=False,
             bookmark_enabled=True,
+            warmup_enabled=True,
         ),
     )
     assert controller.config.raid_profiles == storage.saved_configs[-1].raid_profiles
@@ -465,6 +467,37 @@ def test_controller_rejects_raid_now_when_telegram_not_connected(qtbot) -> None:
     controller.run_raid_now_for_profile("Profile 3")
 
     assert errors == ["Telegram must be connected"]
+
+
+def test_controller_allows_raid_now_when_automation_queue_is_queued(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    runner = SubmitExecutingRunner()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=worker_factory,
+        runner_factory=lambda: runner,
+    )
+    errors = []
+    controller.errorRaised.connect(errors.append)
+
+    controller.start_bot()
+    controller._handle_worker_event({"type": "connection_state_changed", "state": "connected"})
+    controller._handle_worker_event({"type": "automation_queue_state_changed", "state": "queued"})
+    controller.run_raid_now_for_profile("Profile 3")
+
+    assert len(runner.submitted_coroutines) == 1
+    assert created["worker"].run_raid_now_calls == ["Profile 3"]
+    assert errors == []
 
 
 def test_controller_resets_dashboard_metric_through_worker_when_running(qtbot) -> None:

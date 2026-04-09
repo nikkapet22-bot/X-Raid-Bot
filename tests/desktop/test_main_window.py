@@ -12,6 +12,8 @@ from PySide6.QtCore import QEvent, QObject, QRect, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QColor, QIcon, QImage
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QDialog,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -411,6 +413,7 @@ class FakeController(QObject):
         like_enabled: bool,
         repost_enabled: bool,
         bookmark_enabled: bool,
+        warmup_enabled: bool = False,
     ) -> None:
         update = {
             "profile_directory": profile_directory,
@@ -418,6 +421,7 @@ class FakeController(QObject):
             "like_enabled": like_enabled,
             "repost_enabled": repost_enabled,
             "bookmark_enabled": bookmark_enabled,
+            "warmup_enabled": warmup_enabled,
         }
         self.raid_profile_action_override_updates.append(update)
         updated_profiles = tuple(
@@ -427,6 +431,7 @@ class FakeController(QObject):
                 like_enabled=like_enabled,
                 repost_enabled=repost_enabled,
                 bookmark_enabled=bookmark_enabled,
+                warmup_enabled=warmup_enabled,
             )
             if profile.profile_directory == profile_directory
             else profile
@@ -2989,6 +2994,38 @@ def test_main_window_profile_card_renders_paused_when_all_actions_disabled(qtbot
     assert card.raid_now_button.isHidden() is False
 
 
+def test_main_window_profile_card_renders_warmup_mode_in_light_blue_state(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(
+                RaidProfileConfig(
+                    "Profile 3",
+                    "Maria",
+                    True,
+                    warmup_enabled=True,
+                ),
+            ),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "green", None),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    card = window.raid_profile_cards["Profile 3"]
+
+    assert card.property("profileStatus") == "warmup"
+    assert card.status_label.text() == "Warmup"
+    assert card.raid_now_button.isHidden() is False
+
+
 def test_main_window_profile_action_cog_routes_overrides_to_controller(qtbot) -> None:
     controller = FakeController(
         config=build_config(
@@ -3016,6 +3053,7 @@ def test_main_window_profile_action_cog_routes_overrides_to_controller(qtbot) ->
             "like_enabled": True,
             "repost_enabled": True,
             "bookmark_enabled": False,
+            "warmup_enabled": True,
         },
     )
     qtbot.addWidget(window)
@@ -3041,8 +3079,80 @@ def test_main_window_profile_action_cog_routes_overrides_to_controller(qtbot) ->
             "like_enabled": True,
             "repost_enabled": True,
             "bookmark_enabled": False,
+            "warmup_enabled": True,
         }
     ]
+
+
+def test_main_window_profile_action_picker_disables_actions_when_warmup_enabled(
+    qtbot, monkeypatch
+) -> None:
+    controller = FakeController(
+        config=build_config(
+            bot_action_slots=(
+                BotActionSlotConfig(key="slot_1_r", label="Reply", enabled=True),
+                BotActionSlotConfig(key="slot_2_l", label="Like", enabled=True),
+                BotActionSlotConfig(key="slot_3_r", label="Repost", enabled=True),
+                BotActionSlotConfig(key="slot_4_b", label="Bookmark", enabled=True),
+            ),
+            raid_profiles=(
+                RaidProfileConfig(
+                    "Profile 3",
+                    "Maria",
+                    True,
+                    reply_enabled=False,
+                    like_enabled=True,
+                    repost_enabled=False,
+                    bookmark_enabled=True,
+                ),
+            ),
+        )
+    )
+    window = build_window(controller, FakeStorage(config=controller.config))
+    qtbot.addWidget(window)
+
+    def fake_exec(dialog: QDialog) -> int:
+        checkboxes = {
+            checkbox.text(): checkbox for checkbox in dialog.findChildren(QCheckBox)
+        }
+        warmup_checkbox = checkboxes["Warm me up baby"]
+        reply_checkbox = checkboxes["Reply"]
+        like_checkbox = checkboxes["Like"]
+        repost_checkbox = checkboxes["Repost"]
+        bookmark_checkbox = checkboxes["Bookmark"]
+
+        assert reply_checkbox.isChecked() is False
+        assert like_checkbox.isChecked() is True
+        assert repost_checkbox.isChecked() is False
+        assert bookmark_checkbox.isChecked() is True
+        assert reply_checkbox.isEnabled() is True
+        assert like_checkbox.isEnabled() is True
+        assert repost_checkbox.isEnabled() is True
+        assert bookmark_checkbox.isEnabled() is True
+
+        warmup_checkbox.setChecked(True)
+        QApplication.processEvents()
+
+        assert reply_checkbox.isEnabled() is False
+        assert like_checkbox.isEnabled() is False
+        assert repost_checkbox.isEnabled() is False
+        assert bookmark_checkbox.isEnabled() is False
+        return int(QDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr("raidbot.desktop.main_window.QDialog.exec", fake_exec)
+
+    selection = window._pick_profile_action_overrides(
+        controller.config.raid_profiles[0],
+        controller.config.bot_action_slots,
+    )
+
+    assert selection == {
+        "reply_enabled": False,
+        "like_enabled": True,
+        "repost_enabled": False,
+        "bookmark_enabled": True,
+        "warmup_enabled": True,
+    }
 
 
 def test_main_window_routes_settings_apply_errors_back_to_settings_status(qtbot) -> None:
@@ -3384,6 +3494,92 @@ def test_hidden_window_close_confirmation_centers_dialog_on_screen(
     window.closeEvent(event)
 
     assert restore_calls == ["restore_from_tray"]
+    assert dialog_calls == [(window, (380, 340))]
+    assert event.isAccepted() is False
+
+
+def test_minimized_visible_window_close_confirmation_restores_before_prompt(
+    qtbot,
+    monkeypatch,
+) -> None:
+    from raidbot.desktop import main_window as main_window_module
+
+    controller = FakeController()
+    controller.active = True
+    dialog_calls: list[tuple[object | None, tuple[int, int] | None]] = []
+    restore_calls: list[str] = []
+
+    class FakeMessageBox:
+        class StandardButton:
+            Yes = 1
+            No = 2
+
+        def __init__(self, parent=None) -> None:
+            self.parent = parent
+            self._frame = QRect(0, 0, 240, 120)
+            self._moved_to: tuple[int, int] | None = None
+
+        def setWindowTitle(self, _title: str) -> None:
+            return None
+
+        def setText(self, _text: str) -> None:
+            return None
+
+        def setStandardButtons(self, _buttons) -> None:
+            return None
+
+        def setDefaultButton(self, _button) -> None:
+            return None
+
+        def adjustSize(self) -> None:
+            return None
+
+        def frameGeometry(self) -> QRect:
+            return QRect(self._frame)
+
+        def move(self, x: int, y: int) -> None:
+            self._moved_to = (x, y)
+
+        def exec(self):
+            dialog_calls.append((self.parent, self._moved_to))
+            return self.StandardButton.No
+
+    monkeypatch.setattr(main_window_module, "QMessageBox", FakeMessageBox)
+
+    window = build_window(controller, FakeStorage(), confirm_close=None)
+    qtbot.addWidget(window)
+    controller.botStateChanged.emit("running")
+    monkeypatch.setattr(window, "isVisible", lambda: True)
+    monkeypatch.setattr(window, "isMinimized", lambda: True)
+    monkeypatch.setattr(window, "show", lambda: restore_calls.append("show"))
+    monkeypatch.setattr(window, "showNormal", lambda: restore_calls.append("showNormal"))
+    monkeypatch.setattr(
+        window,
+        "ensure_visible_on_screen",
+        lambda: restore_calls.append("ensure_visible_on_screen"),
+    )
+    monkeypatch.setattr(window, "raise_", lambda: restore_calls.append("raise"))
+    monkeypatch.setattr(
+        window,
+        "activateWindow",
+        lambda: restore_calls.append("activate"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_primary_screen_geometry",
+        lambda: QRect(100, 100, 800, 600),
+    )
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert restore_calls == [
+        "show",
+        "showNormal",
+        "ensure_visible_on_screen",
+        "raise",
+        "activate",
+    ]
     assert dialog_calls == [(window, (380, 340))]
     assert event.isAccepted() is False
 

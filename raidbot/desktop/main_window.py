@@ -544,17 +544,28 @@ class RaidProfileCard(QFrame):
         self.title_label.setText(state.label)
         is_paused = not raid_profile_has_any_actions_enabled(profile)
         is_error = state.status == "red" and not is_paused
-        profile_status = "paused" if is_paused else "red" if is_error else "green"
+        is_warmup = bool(getattr(profile, "warmup_enabled", False)) and not is_error
+        profile_status = (
+            "warmup"
+            if is_warmup
+            else "paused" if is_paused else "red" if is_error else "green"
+        )
 
         self.setProperty("profileStatus", profile_status)
         self.style().unpolish(self)
         self.style().polish(self)
 
-        dot_variant = "active" if is_paused else "error" if is_error else "running"
+        dot_variant = (
+            "active"
+            if is_warmup or is_paused
+            else "error" if is_error else "running"
+        )
         _apply_variant(self.dot_label, dot_variant)
 
         self.status_label.setText(
-            "Paused" if is_paused else "Needs attention" if is_error else "Healthy"
+            "Warmup"
+            if is_warmup
+            else "Paused" if is_paused else "Needs attention" if is_error else "Healthy"
         )
         self.reason_label.setText(state.last_error or "No details available")
         if not is_error:
@@ -2034,7 +2045,7 @@ class MainWindow(QMainWindow):
         return self.bot_state in {"starting", "running", "stopping"}
 
     def _confirm_close(self) -> bool:
-        if self.isVisible():
+        if self.isVisible() and not self.isMinimized():
             return (
                 QMessageBox.question(
                     self,
@@ -2244,6 +2255,17 @@ class MainWindow(QMainWindow):
                 checkbox.setToolTip("Enable this action globally in Bot Actions first.")
             layout.addWidget(checkbox)
             checkbox_map[field_name] = (checkbox, globally_enabled)
+        warmup_checkbox = QCheckBox("Warm me up baby", dialog)
+        warmup_checkbox.setChecked(bool(getattr(profile, "warmup_enabled", False)))
+        layout.addWidget(warmup_checkbox)
+
+        def sync_action_checkbox_enabled_state() -> None:
+            warmup_enabled = warmup_checkbox.isChecked()
+            for checkbox, globally_enabled in checkbox_map.values():
+                checkbox.setEnabled(bool(globally_enabled) and not warmup_enabled)
+
+        warmup_checkbox.toggled.connect(sync_action_checkbox_enabled_state)
+        sync_action_checkbox_enabled_state()
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Cancel,
@@ -2261,7 +2283,7 @@ class MainWindow(QMainWindow):
                 else bool(getattr(profile, field_name, True))
             )
             for field_name, (checkbox, globally_enabled) in checkbox_map.items()
-        }
+        } | {"warmup_enabled": warmup_checkbox.isChecked()}
 
     def _configure_profile_action_overrides(self, profile_directory: str) -> None:
         profile = next(
@@ -2286,6 +2308,7 @@ class MainWindow(QMainWindow):
             like_enabled=bool(selection["like_enabled"]),
             repost_enabled=bool(selection["repost_enabled"]),
             bookmark_enabled=bool(selection["bookmark_enabled"]),
+            warmup_enabled=bool(selection["warmup_enabled"]),
         )
 
     def _capture_bot_action_slot(self, slot_index: int) -> None:

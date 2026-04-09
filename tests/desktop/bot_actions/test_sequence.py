@@ -173,3 +173,37 @@ def test_build_slot_1_preset_chooser_avoids_reuse_until_pool_is_exhausted() -> N
 
     assert selected_ids[:3] == ["preset-1", "preset-2", "preset-3"]
     assert selected_ids[3] == "preset-1"
+
+
+def test_build_bot_action_sequence_can_preserve_input_action_order() -> None:
+    result = build_bot_action_sequence(
+        (
+            BotActionSlotConfig(
+                key="slot_2_l",
+                label="L",
+                enabled=True,
+                template_path=Path("captures/l.png"),
+            ),
+            BotActionSlotConfig(
+                key="slot_1_r",
+                label="R",
+                enabled=True,
+                template_path=Path("captures/r.png"),
+                presets=(BotActionPreset(id="preset-1", text="gm"),),
+                finish_template_path=Path("captures/finish.png"),
+            ),
+            BotActionSlotConfig(
+                key="slot_3_r",
+                label="R",
+                enabled=True,
+                template_path=Path("captures/r2.png"),
+            ),
+        ),
+        reorder_slot_1_last=False,
+    )
+
+    assert [step.name for step in result.sequence.steps] == [
+        "slot_2_l",
+        "slot_1_r",
+        "slot_3_r",
+    ]

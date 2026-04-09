@@ -109,6 +109,7 @@ def build_bot_action_sequence(
     *,
     slot_1_finish_delay_seconds: int = 2,
     choose_preset=choice,
+    reorder_slot_1_last: bool = True,
 ) -> BotActionSequenceBuildResult:
     warnings: list[BotActionBuildWarning] = []
     enabled_slots: list[tuple[int, BotActionSlotConfig]] = []
@@ -125,18 +126,22 @@ def build_bot_action_sequence(
             continue
         enabled_slots.append((slot_index, slot))
 
-    ordered_slots = [
-        *(
-            (slot_index, slot)
-            for slot_index, slot in enabled_slots
-            if slot.key != "slot_1_r"
-        ),
-        *(
-            (slot_index, slot)
-            for slot_index, slot in enabled_slots
-            if slot.key == "slot_1_r"
-        ),
-    ]
+    ordered_slots = (
+        [
+            *(
+                (slot_index, slot)
+                for slot_index, slot in enabled_slots
+                if slot.key != "slot_1_r"
+            ),
+            *(
+                (slot_index, slot)
+                for slot_index, slot in enabled_slots
+                if slot.key == "slot_1_r"
+            ),
+        ]
+        if reorder_slot_1_last
+        else list(enabled_slots)
+    )
 
     steps: list[AutomationStep] = []
     for _slot_index, slot in ordered_slots:

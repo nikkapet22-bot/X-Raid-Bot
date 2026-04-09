@@ -51,6 +51,7 @@ class RaidProfileConfig:
     like_enabled: bool = True
     repost_enabled: bool = True
     bookmark_enabled: bool = True
+    warmup_enabled: bool = False
 
 
 @dataclass(eq=True)
@@ -297,6 +298,7 @@ class DesktopAppConfig:
                     like_enabled=bool(getattr(profile, "like_enabled", True)),
                     repost_enabled=bool(getattr(profile, "repost_enabled", True)),
                     bookmark_enabled=bool(getattr(profile, "bookmark_enabled", True)),
+                    warmup_enabled=bool(getattr(profile, "warmup_enabled", False)),
                 )
             )
         if normalized_profiles:

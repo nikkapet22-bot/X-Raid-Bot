@@ -279,6 +279,7 @@ class DesktopController(QObject):
         like_enabled: bool,
         repost_enabled: bool,
         bookmark_enabled: bool,
+        warmup_enabled: bool,
     ) -> None:
         if self.config is None:
             raise ValueError("No desktop configuration is available")
@@ -290,6 +291,7 @@ class DesktopController(QObject):
                 like_enabled=bool(like_enabled),
                 repost_enabled=bool(repost_enabled),
                 bookmark_enabled=bool(bookmark_enabled),
+                warmup_enabled=bool(warmup_enabled),
             )
             if profile.profile_directory == normalized_directory
             else profile
@@ -305,9 +307,6 @@ class DesktopController(QObject):
             return
         if self._connection_state != "connected":
             self.errorRaised.emit("Telegram must be connected")
-            return
-        if self._automation_queue_blocks_manual_actions():
-            self.errorRaised.emit(self._QUEUE_OWNS_SLOT_ERROR)
             return
         if self._manual_automation_running():
             self.errorRaised.emit("Automation already running")

@@ -182,6 +182,7 @@ class SettingsPage(QWidget):
         self.add_profile_button.setProperty("variant", "secondary")
         self.add_profile_button.clicked.connect(self._emit_add_profile_request)
         self.raid_profiles_list = QListWidget()
+        self.raid_profiles_list.setObjectName("settingsRaidProfilesList")
         self.raid_profiles_list.currentRowChanged.connect(
             lambda _row: self._sync_raid_profile_action_buttons()
         )

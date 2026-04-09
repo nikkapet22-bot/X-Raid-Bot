@@ -588,6 +588,7 @@ class DesktopStorage:
             "like_enabled": profile.like_enabled,
             "repost_enabled": profile.repost_enabled,
             "bookmark_enabled": profile.bookmark_enabled,
+            "warmup_enabled": profile.warmup_enabled,
         }
 
     def _raid_profile_config_from_data(self, data: dict[str, Any]) -> RaidProfileConfig:
@@ -600,6 +601,7 @@ class DesktopStorage:
             like_enabled=self._maybe_bool(data.get("like_enabled"), default=True),
             repost_enabled=self._maybe_bool(data.get("repost_enabled"), default=True),
             bookmark_enabled=self._maybe_bool(data.get("bookmark_enabled"), default=True),
+            warmup_enabled=self._maybe_bool(data.get("warmup_enabled"), default=False),
         )
 
     def _raid_profile_state_to_data(self, profile_state: RaidProfileState) -> dict[str, Any]:

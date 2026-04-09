@@ -23,6 +23,8 @@ BORDER_FOCUS  = "#4f8ef7"
 SUCCESS       = "#2dd4bf"
 SUCCESS_DIM   = "#0d3d37"
 SUCCESS_TEXT  = "#99f6ec"
+WARMUP_DIM    = "#102847"
+WARMUP_BORDER = "#295f9e"
 
 WARNING       = "#fb923c"
 WARNING_DIM   = "#431e0a"
@@ -111,6 +113,10 @@ def build_application_stylesheet() -> str:
     {card_selector()}[profileStatus="paused"] {{
         background-color: {WARNING_DIM};
         border: 1px solid #6b3413;
+    }}
+    {card_selector()}[profileStatus="warmup"] {{
+        background-color: {WARMUP_DIM};
+        border: 1px solid {WARMUP_BORDER};
     }}
 
     QWidget#topTabStrip,
@@ -261,27 +267,22 @@ def build_application_stylesheet() -> str:
     }}
     QPushButton#metricResetButton {{
         min-height: 0;
-        max-height: 12px;
+        max-height: 18px;
         min-width: 0;
-        max-width: 12px;
+        max-width: 18px;
         padding: 0;
         margin: 0;
-        border: 1px solid {BORDER_MED};
-        border-radius: 3px;
-        background-color: #0b1629;
-        color: {TEXT};
-        font-size: 8px;
-        font-weight: 700;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        background-color: transparent;
     }}
     QPushButton#metricResetButton:hover {{
-        background-color: #11253f;
+        background-color: rgba(17, 37, 63, 0.82);
         border-color: {BORDER_FOCUS};
-        color: {TEXT};
     }}
     QPushButton#metricResetButton:pressed {{
-        background-color: #091221;
+        background-color: rgba(10, 20, 36, 0.92);
         border-color: {ACCENT};
-        color: {ACCENT_HOVER};
     }}
     QLabel#wizardHeadline {{
         font-size: 22px;
@@ -344,6 +345,9 @@ def build_application_stylesheet() -> str:
         outline: none;
     }}
     QListWidget::item {{ padding: 7px 10px; border-radius: 6px; color: {TEXT}; }}
+    QListWidget#settingsRaidProfilesList::item {{
+        padding: 4px 10px;
+    }}
     QListWidget::item:hover    {{ background-color: {ELEVATED_BG}; }}
     QListWidget::item:selected {{ background-color: {ACCENT_DIM}; color: {ACCENT_HOVER}; }}
     QListWidget#activityList {{
@@ -544,6 +548,14 @@ def build_application_stylesheet() -> str:
     }}
     QPushButton[variant="secondary"] {{
         background-color: {ELEVATED_BG}; color: {TEXT}; border-color: {BORDER_MED};
+    }}
+    QPushButton[variant="secondary"]:hover {{
+        background-color: #11253f;
+        border-color: {ACCENT};
+    }}
+    QPushButton[variant="secondary"]:pressed {{
+        background-color: {SURFACE_BG};
+        border-color: {ACCENT};
     }}
     QPushButton[variant="secondary"]:disabled {{
         color: {MUTED};

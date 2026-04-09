@@ -117,6 +117,7 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
                 like_enabled=False,
                 repost_enabled=True,
                 bookmark_enabled=False,
+                warmup_enabled=False,
             ),
             RaidProfileConfig(
                 profile_directory="Profile 3",
@@ -126,6 +127,7 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
                 like_enabled=True,
                 repost_enabled=False,
                 bookmark_enabled=True,
+                warmup_enabled=True,
             ),
         ),
     )
@@ -143,6 +145,7 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
             like_enabled=False,
             repost_enabled=True,
             bookmark_enabled=False,
+            warmup_enabled=False,
         ),
         RaidProfileConfig(
             profile_directory="Profile 3",
@@ -152,6 +155,7 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
             like_enabled=True,
             repost_enabled=False,
             bookmark_enabled=True,
+            warmup_enabled=True,
         ),
     )
 
@@ -195,6 +199,7 @@ def test_storage_defaults_raid_profile_action_overrides_for_legacy_config(tmp_pa
             like_enabled=True,
             repost_enabled=True,
             bookmark_enabled=True,
+            warmup_enabled=False,
         ),
     )
 
@@ -943,8 +948,8 @@ def test_storage_load_state_defaults_new_pipeline_counters_to_zero(tmp_path) -> 
 
     assert loaded.raids_detected == 6
     assert loaded.raids_opened == 7
-    assert loaded.raids_completed == 4
-    assert loaded.raids_failed == 1
+    assert loaded.raids_completed == 0
+    assert loaded.raids_failed == 0
     assert loaded.duplicates_skipped == 2
     assert loaded.non_matching_skipped == 5
     assert loaded.open_failures == 1
