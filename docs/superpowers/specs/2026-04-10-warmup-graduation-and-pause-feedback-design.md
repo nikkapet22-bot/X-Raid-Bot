@@ -2,7 +2,7 @@
 
 ## Goal
 
-Improve warmup mode so it automatically graduates a profile back into normal raiding after enough completed warmup cycles, and make hotkey pause state obvious in the UI instead of leaving the top panel misleadingly at `Running`.
+Improve warmup mode so it automatically graduates a profile back into normal raiding after enough completed warmup cycles, add visible warmup progress, and make queue pause/block states obvious in the UI instead of leaving the app misleadingly at `Running`.
 
 ## Current Problems
 
@@ -19,6 +19,17 @@ The hotkey pause feature currently suspends automation through the queue state, 
 
 That makes the feature look broken even when the queue is actually suspended.
 
+### Auto-Run Pauses Too Broadly
+
+`auto_run_paused` currently happens because the auto-run processor pauses at the raid-item level whenever a work item fails. That means:
+
+- one failed automation item can put the whole queue into a blocked state
+- later Telegram raids are still detected
+- but they get rejected as `auto_run_paused`
+- profiles can remain green even while nothing is actually raiding
+
+That is too broad. Per-profile automation failures should stay per-profile and should not block the rest of the bot.
+
 ## Desired Behavior
 
 ### Warmup Graduation
@@ -32,6 +43,12 @@ A full cycle is:
 3. one real random raid action from the allowed warmup action set
 
 After the third step succeeds, that profile has completed one full cycle.
+
+Warmup profiles should also display a visible progress bar on the profile card:
+
+- range `0%` to `100%`
+- based on completed full cycles out of `20`
+- hidden for non-warmup profiles
 
 When a profile reaches `20` full completed cycles:
 
@@ -56,21 +73,38 @@ If the user later re-enables `Warm me up baby` manually:
 - start warmup fresh
 - reset both warmup counters back to `0`
 
-### Pause Feedback
+### Pause And Block Feedback
 
-The UI must visibly show that the bot is paused by the hotkey.
+The UI must visibly distinguish user pause from true automation stop/block.
 
-When automation queue state is `suspended`:
+#### User Pause
+
+When the user presses the global pause hotkey:
 
 - top panel should display `Bot state: Paused`
+- bot-state styling should be orange
+- all profile cards should render an orange paused overlay
 - Telegram status should still display its real connection state, for example `Connected`
 - Bot Actions queue status should continue to show `Paused`
 
-When pause is cleared and queue leaves `suspended`:
+This is a display override, not a runtime disconnect. The bot may stay connected to Telegram while automation is paused.
+
+#### True Global Stop / Block
+
+When automation is genuinely blocked by an app-wide problem:
+
+- top panel should display `Bot state: Stopped`
+- bot-state styling should be red
+- all profile cards should render a red stopped overlay
+
+This stopped state is reserved for genuine global blockers, not ordinary per-profile automation failures.
+
+#### Resume
+
+When pause is cleared and the queue resumes:
 
 - top panel should return to the real bot runtime state, such as `Running`
-
-This is a display override, not a runtime disconnect. The bot may stay connected to Telegram while automation is paused.
+- profile cards should return to their real underlying colors/states
 
 ## Data Model Changes
 
@@ -103,16 +137,34 @@ The new graduation behavior should extend that model:
 
 Graduation should persist immediately through config save, just like the existing warmup cycle persistence.
 
+### Queue And Failure Semantics
+
+Per-profile automation failures should not pause the whole auto-run queue.
+
+New rule:
+
+- if one profile gets an automation error, only that profile should fail
+- other profiles should continue for the current raid
+- future Telegram raids should continue normally
+- ordinary per-raid/profile failures should not produce `auto_run_paused`
+
+Queue-level blocked state should be reserved only for genuine global blockers, for example:
+
+- no default action sequence configured
+- automation runtime unavailable
+- other app-wide conditions that make all further auto-run execution impossible
+
 ### Pause Presentation
 
-Pause feedback should remain UI-owned and not require a deep runtime enum rewrite.
+Pause feedback should remain mostly UI-owned and should not require a deep runtime enum rewrite.
 
 The main window should derive the displayed bot state like this:
 
-- if queue state is `suspended`, show `Paused`
+- internal user-pause queue state -> show `Paused` with orange styling
+- internal global blocked queue state -> show `Stopped` with red styling
 - otherwise show the real bot runtime state from worker events
 
-This keeps the current worker/controller semantics intact while making the visible state honest to the user.
+This keeps the current worker/controller mechanics intact while making the visible state honest to the user.
 
 ## Component Changes
 
@@ -141,11 +193,19 @@ This ensures warmup restarts cleanly when re-enabled manually.
 - graduate profile after cycle `20`
 - persist the updated profile config immediately
 - keep failures from advancing counters
+- keep per-profile automation failures local instead of pausing the whole queue
+- reserve queue-level stop/block only for genuine global blockers
 
 ### `raidbot/desktop/main_window.py`
 
-- add a display override so top status reads `Paused` while queue state is `suspended`
-- restore the real runtime state after pause clears
+- add a display override so top status reads:
+  - `Paused` in orange for user pause
+  - `Stopped` in red for true global queue block
+- add profile-card overlays:
+  - orange while user-paused
+  - red while globally stopped
+- add a warmup progress bar on warmup profile cards
+- restore the real runtime state and profile colors after pause clears
 
 ## Testing
 
@@ -156,8 +216,11 @@ Add or update tests for:
 - graduation enables `reply/like/repost` and disables `bookmark`
 - failed warmup real action does not advance completed-cycle count
 - re-enabling warmup resets both counters to `0`
-- main window top status shows `Paused` while queue state is `suspended`
-- main window restores `Running` after resume
+- warmup profile card progress bar reflects completed cycles out of `20`
+- user pause renders orange `Paused` state in the top panel and profile cards
+- true global queue block renders red `Stopped` state in the top panel and profile cards
+- clearing user pause restores `Running` and the underlying profile colors
+- one profile failure does not pause the whole queue or block later raids
 
 ## Versioning
 
