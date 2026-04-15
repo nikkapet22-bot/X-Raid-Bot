@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -56,8 +57,10 @@ from PySide6.QtWidgets import (
 from raidbot.desktop.bot_actions import BotActionsPage
 from raidbot.desktop.bot_actions.capture import SlotCaptureService
 from raidbot.desktop.bot_actions.presets_dialog import Slot1PresetsDialog
+from raidbot.desktop.animated_button import AttentionPulseButton
 from raidbot.desktop.branding import APP_NAME, APP_VERSION_BADGE
 from raidbot.desktop.chrome_profiles import ChromeProfile, detect_chrome_environment
+from raidbot.desktop.hotkeys import WindowsGlobalHotkeyRegistrar
 from raidbot.desktop.models import (
     BotActionSlotConfig,
     DesktopAppState,
@@ -463,6 +466,9 @@ class RaidProfileCard(QFrame):
         self.profile_directory = profile_directory
         self._details_visible = False
         self._raid_now_enabled = False
+        self._profile_config = None
+        self._profile_state = None
+        self._execution_overlay_state = "none"
         self.setObjectName(CARD_OBJECT_NAME)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumWidth(140)
@@ -518,13 +524,17 @@ class RaidProfileCard(QFrame):
 
         self.status_label = QLabel("")
         self.status_label.setProperty("muted", "true")
+        self.warmup_progress_bar = QProgressBar()
+        self.warmup_progress_bar.setObjectName("warmupProgressBar")
+        self.warmup_progress_bar.setRange(0, 100)
+        self.warmup_progress_bar.setTextVisible(True)
+        self.warmup_progress_bar.hide()
         self.reason_label = QLabel("")
         self.reason_label.setWordWrap(True)
         self.reason_label.setProperty("muted", "true")
         self.reason_label.hide()
 
-        self.raid_now_button = QPushButton("Raid NOW!")
-        self.raid_now_button.setProperty("variant", "secondary")
+        self.raid_now_button = AttentionPulseButton("Raid NOW!")
         self.raid_now_button.clicked.connect(
             lambda: self.raidNowRequested.emit(self.profile_directory)
         )
@@ -534,44 +544,90 @@ class RaidProfileCard(QFrame):
         self.raid_now_feedback_label.hide()
 
         layout.addWidget(self.status_label)
+        layout.addWidget(self.warmup_progress_bar)
         layout.addWidget(self.reason_label)
         layout.addWidget(self.raid_now_button)
         layout.addWidget(self.raid_now_feedback_label)
         layout.addStretch()
 
     def apply_state(self, profile, state: RaidProfileState) -> None:
+        self._profile_config = profile
+        self._profile_state = state
+        self._refresh_visual_state()
+
+    def set_execution_overlay_state(self, overlay_state: str) -> None:
+        self._execution_overlay_state = str(overlay_state or "none")
+        self._refresh_visual_state()
+
+    def _refresh_visual_state(self) -> None:
+        profile = self._profile_config
+        state = self._profile_state
+        if profile is None or state is None:
+            return
         self.profile_directory = state.profile_directory
         self.title_label.setText(state.label)
-        is_paused = not raid_profile_has_any_actions_enabled(profile)
-        is_error = state.status == "red" and not is_paused
-        is_warmup = bool(getattr(profile, "warmup_enabled", False)) and not is_error
-        profile_status = (
-            "warmup"
-            if is_warmup
-            else "paused" if is_paused else "red" if is_error else "green"
-        )
+        base_is_paused = not raid_profile_has_any_actions_enabled(profile)
+        base_is_error = state.status == "red" and not base_is_paused
+        base_is_warmup = bool(getattr(profile, "warmup_enabled", False)) and not base_is_error
+
+        if self._execution_overlay_state == "stopped":
+            profile_status = "stopped"
+            dot_variant = "error"
+            status_text = "Stopped"
+            reason_visible = False
+            reset_visible = False
+        elif self._execution_overlay_state == "paused":
+            profile_status = "paused"
+            dot_variant = "active"
+            status_text = "Paused"
+            reason_visible = False
+            reset_visible = False
+        else:
+            profile_status = (
+                "warmup"
+                if base_is_warmup
+                else "paused" if base_is_paused else "red" if base_is_error else "green"
+            )
+            dot_variant = (
+                "active"
+                if base_is_warmup or base_is_paused
+                else "error" if base_is_error else "running"
+            )
+            status_text = (
+                "Warmup"
+                if base_is_warmup
+                else "Paused" if base_is_paused else "Needs attention" if base_is_error else "Healthy"
+            )
+            if not base_is_error:
+                self._details_visible = False
+            reason_visible = base_is_error and self._details_visible
+            reset_visible = base_is_error
 
         self.setProperty("profileStatus", profile_status)
         self.style().unpolish(self)
         self.style().polish(self)
 
-        dot_variant = (
-            "active"
-            if is_warmup or is_paused
-            else "error" if is_error else "running"
-        )
         _apply_variant(self.dot_label, dot_variant)
-
-        self.status_label.setText(
-            "Warmup"
-            if is_warmup
-            else "Paused" if is_paused else "Needs attention" if is_error else "Healthy"
+        self.status_label.setText(status_text)
+        warmup_completed_cycles = max(
+            0,
+            min(int(getattr(profile, "warmup_completed_cycles", 0) or 0), 20),
         )
+        warmup_cycle_index = max(
+            0,
+            min(int(getattr(profile, "warmup_cycle_index", 0) or 0), 2),
+        )
+        completed_warmup_raids = min(
+            warmup_completed_cycles * 3 + warmup_cycle_index,
+            60,
+        )
+        progress_value = int(round((completed_warmup_raids / 60) * 100))
+        self.warmup_progress_bar.setValue(progress_value)
+        self.warmup_progress_bar.setFormat(f"{progress_value}%")
+        self.warmup_progress_bar.setVisible(bool(getattr(profile, "warmup_enabled", False)))
         self.reason_label.setText(state.last_error or "No details available")
-        if not is_error:
-            self._details_visible = False
-        self.reason_label.setVisible(is_error and self._details_visible)
-        self.reset_profile_button.setVisible(is_error)
+        self.reason_label.setVisible(reason_visible)
+        self.reset_profile_button.setVisible(reset_visible)
         self.raid_now_button.setVisible(True)
 
     def set_raid_now_enabled(self, enabled: bool) -> None:
@@ -582,10 +638,12 @@ class RaidProfileCard(QFrame):
     def set_raid_now_busy(self, text: str) -> None:
         self.raid_now_button.setText(str(text))
         self.raid_now_button.setEnabled(False)
+        self.raid_now_button.set_busy(True)
         self.raid_now_feedback_label.hide()
 
     def reset_raid_now_button(self) -> None:
         self.raid_now_button.setText("Raid NOW!")
+        self.raid_now_button.set_busy(False)
         self.raid_now_button.setEnabled(self._raid_now_enabled)
 
     def show_raid_now_feedback(self, message: str) -> None:
@@ -943,6 +1001,7 @@ class MainWindow(QMainWindow):
         slot_capture_service=None,
         sender_candidate_picker=None,
         profile_action_picker=None,
+        hotkey_registrar_factory=None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -963,8 +1022,12 @@ class MainWindow(QMainWindow):
         self.profile_action_picker = (
             profile_action_picker or self._pick_profile_action_overrides
         )
+        self.hotkey_registrar_factory = (
+            hotkey_registrar_factory or self._default_hotkey_registrar_factory
+        )
         self.bot_state = "stopped"
         self.connection_state = "disconnected"
+        self._automation_queue_state = "idle"
         self._bot_actions_status_text = "Idle"
         self._bot_actions_current_slot_text: str | None = None
         self._bot_actions_last_error_text: str | None = None
@@ -983,6 +1046,7 @@ class MainWindow(QMainWindow):
             self.controller.config
         )
         self._available_chats_cache = list(self.available_chats_loader())
+        self._hotkey_registrar = self.hotkey_registrar_factory()
 
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(960, 640)
@@ -1028,7 +1092,7 @@ class MainWindow(QMainWindow):
         self._conn_dot.setFixedSize(9, 9)
 
         # ── Buttons ────────────────────────────────────────────────────────────
-        self.start_button = QPushButton("Start")
+        self.start_button = AttentionPulseButton("Start")
         self.stop_button = QPushButton("Stop")
         self.start_button.setProperty("dashboardActionButton", "true")
         self.stop_button.setProperty("dashboardActionButton", "true")
@@ -1074,6 +1138,9 @@ class MainWindow(QMainWindow):
         self.bot_actions_page = BotActionsPage(config=self.controller.config)
         self.bot_actions_page.pageReadyCaptureRequested.connect(
             self._capture_page_ready_template
+        )
+        self.bot_actions_page.pageExitCaptureRequested.connect(
+            self._capture_page_exit_template
         )
         self.bot_actions_page.slotCaptureRequested.connect(self._capture_bot_action_slot)
         self.bot_actions_page.slotTestRequested.connect(self.controller.test_bot_action_slot)
@@ -1239,7 +1306,37 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(surface)
         layout.setSpacing(12)
         layout.setContentsMargins(20, 18, 20, 18)
-        layout.addWidget(self._build_section_title("Profiles"))
+        header_row = QWidget()
+        header_row.setObjectName("profilesHeaderRow")
+        header_layout = QHBoxLayout(header_row)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(12)
+        header_layout.addWidget(self._build_section_title("Profiles"))
+        header_layout.addStretch()
+        self.restart_all_profiles_button = AttentionPulseButton("Restart All")
+        self.restart_all_profiles_button.setProperty("dashboardActionButton", "true")
+        self.restart_all_profiles_button.setMinimumWidth(112)
+        self.restart_all_profiles_button.clicked.connect(
+            self.controller.reset_all_raid_profiles
+        )
+        header_layout.addWidget(
+            self.restart_all_profiles_button,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        self.restart_all_raid_checkbox = QCheckBox("Raid?")
+        self.restart_all_raid_checkbox.setChecked(
+            bool(getattr(self.controller.config, "raid_on_restart_enabled", False))
+        )
+        self.restart_all_raid_checkbox.toggled.connect(
+            self.controller.set_raid_on_restart_enabled
+        )
+        header_layout.addWidget(
+            self.restart_all_raid_checkbox,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        layout.addWidget(header_row)
         layout.addWidget(self._build_divider())
         layout.addWidget(
             self._build_helper_label(
@@ -1432,7 +1529,7 @@ class MainWindow(QMainWindow):
         self.controller.errorRaised.connect(self._handle_controller_error)
         self.controller.configChanged.connect(self._sync_config)
         self.controller.automationQueueStateChanged.connect(
-            self._update_bot_actions_queue_state
+            self._handle_automation_queue_state_changed
         )
         self.controller.botActionRunEvent.connect(self._handle_bot_actions_run_event)
 
@@ -1441,14 +1538,24 @@ class MainWindow(QMainWindow):
         self.bot_state = state
         if state in {"starting", "running"} and previous_state not in {"starting", "running"}:
             self._bot_session_started_at = datetime.now()
-        variant = _bot_state_variant(state)
-        display_state = _format_status_caption(state)
+        self._refresh_displayed_bot_state()
+        self._sync_dashboard_action_buttons()
+        self._refresh_dashboard_metrics()
+
+    def _refresh_displayed_bot_state(self) -> None:
+        if self._automation_queue_state == "suspended":
+            display_state = "Paused"
+            variant = "active"
+        elif self._automation_queue_state == "paused":
+            display_state = "Stopped"
+            variant = "error"
+        else:
+            display_state = _format_status_caption(self.bot_state)
+            variant = _bot_state_variant(self.bot_state)
         for label in (self.bot_state_label,):
             label.setText(display_state)
             _apply_variant(label, variant)
         _apply_variant(self._bot_dot, variant)
-        self._sync_dashboard_action_buttons()
-        self._refresh_dashboard_metrics()
 
     def _update_connection_state(self, state: str) -> None:
         self.connection_state = state
@@ -1482,15 +1589,18 @@ class MainWindow(QMainWindow):
     def _sync_dashboard_action_buttons(self) -> None:
         if self.bot_state in {"starting", "running"}:
             self._set_button_variant(self.start_button, "primary")
+            self.start_button.set_pulse_enabled(False)
             self._set_button_variant(self.stop_button, "secondary")
             return
         self._set_button_variant(self.start_button, "secondary")
+        self.start_button.set_pulse_enabled(True)
         self._set_button_variant(self.stop_button, "danger")
 
     def _apply_state(
         self, state: DesktopAppState, *, include_activity: bool = False
     ) -> None:
         self._latest_state = state
+        self._automation_queue_state = str(getattr(state, "automation_queue_state", "idle") or "idle")
         self._update_bot_state(state.bot_state.value)
         self._update_connection_state(state.connection_state.value)
         self.raids_detected_label.setText(str(state.raids_detected))
@@ -2029,15 +2139,52 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         if not self._should_wait_for_shutdown():
+            self._close_hotkey_registrar()
             event.accept()
             return
         if not self.confirm_close():
             event.ignore()
             return
         if self.controller.stop_bot_and_wait():
+            self._close_hotkey_registrar()
             event.accept()
             return
         event.ignore()
+
+    def _close_hotkey_registrar(self) -> None:
+        if self._hotkey_registrar is None:
+            return
+        self._hotkey_registrar.close()
+        self._hotkey_registrar = None
+
+    def _default_hotkey_registrar_factory(self):
+        if os.name != "nt":
+            return None
+        application = QApplication.instance()
+        install_filter = (
+            application.installNativeEventFilter if application is not None else None
+        )
+        remove_filter = (
+            application.removeNativeEventFilter if application is not None else None
+        )
+        return WindowsGlobalHotkeyRegistrar(
+            install_native_event_filter=install_filter,
+            remove_native_event_filter=remove_filter,
+        )
+
+    def _sync_pause_resume_hotkey(self, config) -> None:
+        if self._hotkey_registrar is None or not hasattr(
+            self.controller,
+            "toggle_pause_resume",
+        ):
+            return
+        try:
+            self._hotkey_registrar.set_hotkey(
+                config.pause_resume_hotkey,
+                self.controller.toggle_pause_resume,
+            )
+        except Exception as exc:
+            self._handle_controller_error(str(exc))
 
     def _should_wait_for_shutdown(self) -> bool:
         if hasattr(self.controller, "is_bot_active"):
@@ -2350,6 +2497,22 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_bot_actions_error(str(exc))
 
+    def _capture_page_exit_template(self) -> None:
+        try:
+            template_path = self.slot_capture_service.capture_to_path(
+                Path("bot_actions/page_exit.png"),
+                existing_path=self.controller.config.page_exit_template_path,
+            )
+            self.controller.set_page_exit_template_path(template_path)
+            self.bot_actions_page.set_page_exit_template_path(template_path)
+            if template_path is not None:
+                self._bot_actions_status_text = "Page Exit: image saved"
+                self._bot_actions_last_error_text = None
+                self._bot_actions_current_slot_text = None
+                self._render_bot_actions_status()
+        except Exception as exc:
+            self._show_bot_actions_error(str(exc))
+
     def _capture_troubleshoot_template(self, group_key: str, item_index: int) -> None:
         try:
             template_path = self.slot_capture_service.capture_to_path(
@@ -2453,12 +2616,20 @@ class MainWindow(QMainWindow):
 
     def _sync_config(self, config) -> None:
         self.settings_page.set_config(config)
+        self._sync_pause_resume_hotkey(config)
+        if hasattr(self, "restart_all_raid_checkbox"):
+            previous = self.restart_all_raid_checkbox.blockSignals(True)
+            self.restart_all_raid_checkbox.setChecked(
+                bool(getattr(config, "raid_on_restart_enabled", False))
+            )
+            self.restart_all_raid_checkbox.blockSignals(previous)
         chat_source_signature = self._chat_source_signature(config)
         if chat_source_signature != self._available_chats_signature:
             self._available_chats_cache = list(self.available_chats_loader())
             self._available_chats_signature = chat_source_signature
         self.settings_page.set_available_chats(self._available_chats_cache)
         self.bot_actions_page.set_page_ready_template_path(config.page_ready_template_path)
+        self.bot_actions_page.set_page_exit_template_path(config.page_exit_template_path)
         self.bot_actions_page.set_slots(config.bot_action_slots)
         self._sync_troubleshoot_templates()
         self.bot_actions_page.set_slot_1_finish_delay_seconds(
@@ -2498,6 +2669,7 @@ class MainWindow(QMainWindow):
                     ),
                 )
             )
+            card.set_execution_overlay_state(self._raid_profile_execution_overlay_state())
             card.set_raid_now_enabled(self.connection_state == "connected")
             self.raid_profile_cards[profile.profile_directory] = card
             self._raid_profile_card_widgets.append(card)
@@ -2549,10 +2721,28 @@ class MainWindow(QMainWindow):
         self._bot_actions_last_error_text = str(message)
         self._render_bot_actions_status()
 
+    def _handle_automation_queue_state_changed(self, state: str) -> None:
+        self._automation_queue_state = str(state or "idle")
+        self._update_bot_actions_queue_state(self._automation_queue_state)
+        self._refresh_displayed_bot_state()
+        self._refresh_raid_profile_execution_overlays()
+
+    def _raid_profile_execution_overlay_state(self) -> str:
+        if self._automation_queue_state == "suspended":
+            return "paused"
+        if self._automation_queue_state == "paused":
+            return "stopped"
+        return "none"
+
+    def _refresh_raid_profile_execution_overlays(self) -> None:
+        overlay_state = self._raid_profile_execution_overlay_state()
+        for card in self.raid_profile_cards.values():
+            card.set_execution_overlay_state(overlay_state)
+
     def _update_bot_actions_queue_state(self, state: str) -> None:
         queue_status_map = {
             "queued": "Queued", "running": "Running",
-            "paused": "Paused", "idle": "Idle",
+            "paused": "Stopped", "suspended": "Paused", "idle": "Idle",
         }
         self._bot_actions_status_text = queue_status_map.get(str(state), "Idle")
         if state == "idle":

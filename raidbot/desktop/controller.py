@@ -188,6 +188,12 @@ class DesktopController(QObject):
     def set_auto_run_enabled(self, enabled: bool) -> None:
         self.apply_config(replace(self.config, auto_run_enabled=enabled))
 
+    def set_raid_on_restart_enabled(self, enabled: bool) -> None:
+        self._persist_config(
+            replace(self.config, raid_on_restart_enabled=bool(enabled)),
+            resolve_sender_entries=False,
+        )
+
     def set_default_auto_sequence_id(self, sequence_id: str | None) -> None:
         self.apply_config(replace(self.config, default_auto_sequence_id=sequence_id))
 
@@ -284,19 +290,24 @@ class DesktopController(QObject):
         if self.config is None:
             raise ValueError("No desktop configuration is available")
         normalized_directory = str(profile_directory).strip()
-        updated_profiles = tuple(
-            replace(
-                profile,
-                reply_enabled=bool(reply_enabled),
-                like_enabled=bool(like_enabled),
-                repost_enabled=bool(repost_enabled),
-                bookmark_enabled=bool(bookmark_enabled),
-                warmup_enabled=bool(warmup_enabled),
-            )
-            if profile.profile_directory == normalized_directory
-            else profile
-            for profile in self.config.raid_profiles
-        )
+        normalized_warmup_enabled = bool(warmup_enabled)
+        updated_profiles = []
+        for profile in self.config.raid_profiles:
+            if profile.profile_directory != normalized_directory:
+                updated_profiles.append(profile)
+                continue
+            profile_updates = {
+                "reply_enabled": bool(reply_enabled),
+                "like_enabled": bool(like_enabled),
+                "repost_enabled": bool(repost_enabled),
+                "bookmark_enabled": bool(bookmark_enabled),
+                "warmup_enabled": normalized_warmup_enabled,
+            }
+            if normalized_warmup_enabled and not bool(getattr(profile, "warmup_enabled", False)):
+                profile_updates["warmup_cycle_index"] = 0
+                profile_updates["warmup_completed_cycles"] = 0
+            updated_profiles.append(replace(profile, **profile_updates))
+        updated_profiles = tuple(updated_profiles)
         if updated_profiles == self.config.raid_profiles:
             return
         self._persist_raid_profiles(updated_profiles)
@@ -338,6 +349,25 @@ class DesktopController(QObject):
         if not updated:
             return
         updated_state = replace(state, raid_profile_states=tuple(updated_states))
+        self.storage.save_state(updated_state)
+        self.statsChanged.emit(updated_state)
+
+    def reset_all_raid_profiles(self) -> None:
+        if self._worker is not None and self._runner is not None and self._runner.is_running():
+            self._submit_to_runner(
+                lambda: self._worker.reset_all_raid_profiles(
+                    self.config.raid_on_restart_enabled
+                )
+            )
+            return
+        state = self.storage.load_state()
+        updated_state = replace(
+            state,
+            raid_profile_states=tuple(
+                replace(profile_state, status="green", last_error=None)
+                for profile_state in state.raid_profile_states
+            ),
+        )
         self.storage.save_state(updated_state)
         self.statsChanged.emit(updated_state)
 
@@ -411,6 +441,22 @@ class DesktopController(QObject):
             replace(
                 self.config,
                 page_ready_template_path=normalized_template_path,
+            ),
+            resolve_sender_entries=False,
+        )
+
+    def set_page_exit_template_path(self, template_path: Path | None) -> None:
+        if self.config is None:
+            raise ValueError("No desktop configuration is available")
+        normalized_template_path = (
+            Path(template_path) if template_path is not None else None
+        )
+        if self.config.page_exit_template_path == normalized_template_path:
+            return
+        self._persist_config(
+            replace(
+                self.config,
+                page_exit_template_path=normalized_template_path,
             ),
             resolve_sender_entries=False,
         )
@@ -661,6 +707,11 @@ class DesktopController(QObject):
             return
         self._submit_to_runner(lambda: self._worker.clear_automation_queue())
 
+    def toggle_pause_resume(self) -> None:
+        if self._worker is None or self._runner is None or not self._runner.is_running():
+            return
+        self._submit_to_runner(lambda: self._worker.toggle_pause_resume())
+
     def _load_config(self):
         if hasattr(self.storage, "is_first_run") and self.storage.is_first_run():
             return None
@@ -732,6 +783,11 @@ class DesktopController(QObject):
             self.connectionStateChanged.emit(self._connection_state)
         elif event_type == "stats_changed":
             self.statsChanged.emit(event.get("state"))
+        elif event_type == "config_changed":
+            config = event.get("config")
+            if config is not None:
+                self.config = config
+                self.configChanged.emit(config)
         elif event_type == "activity_added":
             self.activityAdded.emit(event.get("entry"))
         elif event_type == "error":
@@ -959,7 +1015,7 @@ class DesktopController(QObject):
         return self._automation_run_state == "running"
 
     def _automation_queue_blocks_manual_actions(self) -> bool:
-        return self._automation_queue_state in {"queued", "running", "paused"}
+        return self._automation_queue_state in {"queued", "running", "paused", "suspended"}
 
     def _notify_worker_manual_run_finished(self) -> None:
         if self._worker is None or self._runner is None or not self._runner.is_running():

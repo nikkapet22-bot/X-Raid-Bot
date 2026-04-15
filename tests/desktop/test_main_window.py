@@ -153,6 +153,7 @@ class FakeController(QObject):
         self.automation_run_calls = []
         self.automation_dry_run_calls = []
         self.page_ready_template_updates = []
+        self.page_exit_template_updates = []
         self.bot_action_slot_template_updates = []
         self.bot_action_slot_1_presets_updates = []
         self.bot_action_slot_test_calls = []
@@ -166,6 +167,9 @@ class FakeController(QObject):
         self.raid_profile_action_override_updates = []
         self.raid_now_profile_calls = []
         self.reset_raid_profile_calls = []
+        self.reset_all_raid_profiles_calls = 0
+        self.set_raid_on_restart_enabled_calls = []
+        self.toggle_pause_resume_calls = 0
         self.dashboard_metric_reset_requests = []
         self.sender_candidate_scan_calls = []
         self.sender_candidate_results = [RaidarCandidate(entity_id=42, label="@raidar")]
@@ -294,6 +298,12 @@ class FakeController(QObject):
             return
         self.apply_config(replace(self.config, page_ready_template_path=template_path))
 
+    def set_page_exit_template_path(self, template_path: Path | None) -> None:
+        self.page_exit_template_updates.append(template_path)
+        if getattr(self.config, "page_exit_template_path", None) == template_path:
+            return
+        self.apply_config(replace(self.config, page_exit_template_path=template_path))
+
     def set_bot_action_slot_template_path(
         self, slot_index: int, template_path: Path | None
     ) -> None:
@@ -405,6 +415,16 @@ class FakeController(QObject):
     def reset_raid_profile(self, profile_directory: str) -> None:
         self.reset_raid_profile_calls.append(profile_directory)
 
+    def reset_all_raid_profiles(self) -> None:
+        self.reset_all_raid_profiles_calls += 1
+
+    def set_raid_on_restart_enabled(self, enabled: bool) -> None:
+        self.set_raid_on_restart_enabled_calls.append(bool(enabled))
+        self.apply_config(replace(self.config, raid_on_restart_enabled=bool(enabled)))
+
+    def toggle_pause_resume(self) -> None:
+        self.toggle_pause_resume_calls += 1
+
     def set_raid_profile_action_overrides(
         self,
         profile_directory: str,
@@ -515,6 +535,7 @@ def build_window(controller: FakeController, storage: FakeStorage, **overrides):
         "controller": controller,
         "storage": storage,
         "tray_controller_factory": lambda *args, **kwargs: None,
+        "hotkey_registrar_factory": lambda: FakeHotkeyRegistrar(),
         "available_profiles_loader": lambda: ["Default", "Profile 3", "Profile 9"],
         "available_chats_loader": lambda: [AccessibleChat(chat_id=-1001, title="Raid Group")],
         "session_status_loader": lambda: "authorized",
@@ -584,6 +605,20 @@ class FakeTrayIcon:
 
     def show(self) -> None:
         self.visible = True
+
+
+class FakeHotkeyRegistrar:
+    def __init__(self) -> None:
+        self.set_calls = []
+        self.closed = False
+        self.callback = None
+
+    def set_hotkey(self, hotkey, callback) -> None:
+        self.set_calls.append(hotkey)
+        self.callback = callback
+
+    def close(self) -> None:
+        self.closed = True
 
     def hide(self) -> None:
         self.visible = False
@@ -1956,6 +1991,28 @@ def test_main_window_capture_updates_page_ready_template_via_controller(qtbot) -
     assert window.bot_actions_page.status_label.text() == "Status: Page Ready: image saved"
 
 
+def test_main_window_capture_updates_page_exit_template_via_controller(qtbot) -> None:
+    captured_path = Path("bot_actions/page_exit.png")
+    capture_service = FakeSlotCaptureService(captured_path)
+    controller = FakeController()
+    window = build_window(
+        controller,
+        FakeStorage(),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.bot_actions_page.page_exit_capture_button, Qt.MouseButton.LeftButton)
+
+    assert capture_service.capture_to_path_calls == [
+        (Path("bot_actions/page_exit.png"), None)
+    ]
+    assert controller.page_exit_template_updates == [captured_path]
+    assert controller.config.page_exit_template_path == captured_path
+    assert window.bot_actions_page.page_exit_status_label.text() == str(captured_path)
+    assert window.bot_actions_page.status_label.text() == "Status: Page Exit: image saved"
+
+
 def test_main_window_capture_updates_cldf_troubleshoot_template(qtbot) -> None:
     captured_path = Path("bot_actions/troubleshoot/cldf_1.png")
     capture_service = FakeSlotCaptureService(captured_path)
@@ -2060,6 +2117,29 @@ def test_main_window_capture_refreshes_page_ready_preview_when_same_path_is_over
 
     assert controller.page_ready_template_updates == [image_path]
     assert _label_center_hex(window.bot_actions_page.page_ready_preview_label) == "#00ff00"
+
+
+def test_main_window_capture_refreshes_page_exit_preview_when_same_path_is_overwritten(
+    qtbot,
+    tmp_path,
+) -> None:
+    image_path = tmp_path / "page_exit.png"
+    _write_solid_image(image_path, "#ff0000")
+    controller = FakeController(config=build_config(page_exit_template_path=image_path))
+    capture_service = OverwritingSlotCaptureService(image_path, ["#00ff00"])
+    window = build_window(
+        controller,
+        FakeStorage(),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    assert _label_center_hex(window.bot_actions_page.page_exit_preview_label) == "#ff0000"
+
+    qtbot.mouseClick(window.bot_actions_page.page_exit_capture_button, Qt.MouseButton.LeftButton)
+
+    assert controller.page_exit_template_updates == [image_path]
+    assert _label_center_hex(window.bot_actions_page.page_exit_preview_label) == "#00ff00"
 
 
 def test_main_window_slot_1_presets_dialog_capture_updates_finish_preview(qtbot) -> None:
@@ -2831,6 +2911,102 @@ def test_main_window_profile_card_shows_restart_icon_only_for_red_profiles(qtbot
     assert maria_card.reset_profile_button.isHidden() is False
 
 
+def test_main_window_profiles_header_renders_restart_all_button(qtbot) -> None:
+    controller = FakeController()
+    storage = FakeStorage(config=controller.config)
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    assert window.restart_all_profiles_button.text() == "Restart All"
+    assert window.restart_all_raid_checkbox.text() == "Raid?"
+    assert window.restart_all_raid_checkbox.isChecked() is False
+
+
+def test_main_window_restart_all_profiles_button_routes_to_controller(qtbot) -> None:
+    controller = FakeController()
+    storage = FakeStorage(config=controller.config)
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.restart_all_profiles_button, Qt.MouseButton.LeftButton)
+
+    assert controller.reset_all_raid_profiles_calls == 1
+
+
+def test_main_window_restart_all_raid_checkbox_routes_to_controller(qtbot) -> None:
+    controller = FakeController()
+    storage = FakeStorage(config=controller.config)
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    window.restart_all_raid_checkbox.setChecked(True)
+
+    assert controller.set_raid_on_restart_enabled_calls == [True]
+
+
+def test_main_window_uses_animated_buttons_for_start_restart_all_and_raid_now(qtbot) -> None:
+    from raidbot.desktop.animated_button import AttentionPulseButton
+    from PySide6.QtCore import QVariantAnimation
+
+    controller = FakeController(
+        config=build_config(
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(RaidProfileState("Profile 3", "Maria", "green", None),)
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    assert isinstance(window.start_button, AttentionPulseButton)
+    assert isinstance(window.restart_all_profiles_button, AttentionPulseButton)
+    assert isinstance(window.raid_profile_cards["Profile 3"].raid_now_button, AttentionPulseButton)
+    assert window.restart_all_profiles_button.property("variant") is None
+    assert window.raid_profile_cards["Profile 3"].raid_now_button.property("variant") is None
+    assert window.start_button._pulse_animation.state() == QVariantAnimation.State.Stopped
+    assert (
+        window.restart_all_profiles_button._pulse_animation.state()
+        == QVariantAnimation.State.Stopped
+    )
+
+
+def test_main_window_raid_now_animated_button_does_not_pulse_while_disabled(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(RaidProfileState("Profile 3", "Maria", "green", None),)
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+    card = window.raid_profile_cards["Profile 3"]
+
+    assert card.raid_now_button.isEnabled() is False
+    assert card.raid_now_button.pulse_enabled() is False
+
+
+def test_main_window_start_button_click_animation_runs_on_press(qtbot) -> None:
+    from PySide6.QtCore import QVariantAnimation
+
+    controller = FakeController()
+    storage = FakeStorage(config=controller.config)
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    qtbot.mousePress(window.start_button, Qt.MouseButton.LeftButton)
+
+    assert window.start_button._pulse_animation.state() == QVariantAnimation.State.Running
+
+
 def test_main_window_profile_card_restart_icon_routes_to_controller(qtbot) -> None:
     controller = FakeController(
         config=build_config(
@@ -3026,6 +3202,147 @@ def test_main_window_profile_card_renders_warmup_mode_in_light_blue_state(qtbot)
     assert card.raid_now_button.isHidden() is False
 
 
+def test_main_window_profile_card_shows_warmup_progress_bar(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(
+                RaidProfileConfig(
+                    "Profile 3",
+                    "Maria",
+                    True,
+                    warmup_enabled=True,
+                    warmup_cycle_index=2,
+                    warmup_completed_cycles=8,
+                ),
+            ),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "green", None),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    card = window.raid_profile_cards["Profile 3"]
+
+    assert card.warmup_progress_bar.isHidden() is False
+    assert card.warmup_progress_bar.value() == 43
+    assert card.warmup_progress_bar.format() == "43%"
+
+
+def test_main_window_updates_warmup_progress_bar_when_config_changes(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(
+                RaidProfileConfig(
+                    "Profile 3",
+                    "Maria",
+                    True,
+                    warmup_enabled=True,
+                    warmup_completed_cycles=0,
+                ),
+            ),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "green", None),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    assert window.raid_profile_cards["Profile 3"].warmup_progress_bar.value() == 0
+
+    controller.apply_config(
+        build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(
+                RaidProfileConfig(
+                    "Profile 3",
+                    "Maria",
+                    True,
+                    warmup_enabled=True,
+                    warmup_cycle_index=1,
+                    warmup_completed_cycles=8,
+                ),
+            ),
+        )
+    )
+
+    assert window.raid_profile_cards["Profile 3"].warmup_progress_bar.value() == 42
+    assert window.raid_profile_cards["Profile 3"].warmup_progress_bar.format() == "42%"
+
+
+def test_main_window_displays_user_pause_as_paused_with_orange_profiles(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            bot_state=BotRuntimeState.running,
+            raid_profile_states=(RaidProfileState("Profile 3", "Maria", "green", None),),
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    try:
+        controller.botStateChanged.emit("running")
+        controller.automationQueueStateChanged.emit("suspended")
+
+        assert window.bot_state_label.text() == "Paused"
+        assert window.bot_state_label.property("stateVariant") == "active"
+        assert window.raid_profile_cards["Profile 3"].property("profileStatus") == "paused"
+
+        controller.automationQueueStateChanged.emit("idle")
+
+        assert window.bot_state_label.text() == "Running"
+        assert window.raid_profile_cards["Profile 3"].property("profileStatus") == "green"
+    finally:
+        controller.botStateChanged.emit("stopped")
+
+
+def test_main_window_displays_global_queue_pause_as_stopped_with_red_profiles(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            bot_state=BotRuntimeState.running,
+            raid_profile_states=(RaidProfileState("Profile 3", "Maria", "green", None),),
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    try:
+        controller.botStateChanged.emit("running")
+        controller.automationQueueStateChanged.emit("paused")
+
+        assert window.bot_state_label.text() == "Stopped"
+        assert window.bot_state_label.property("stateVariant") == "error"
+        assert window.raid_profile_cards["Profile 3"].property("profileStatus") == "stopped"
+    finally:
+        controller.botStateChanged.emit("stopped")
+
+
 def test_main_window_profile_action_cog_routes_overrides_to_controller(qtbot) -> None:
     controller = FakeController(
         config=build_config(
@@ -3159,7 +3476,8 @@ def test_main_window_routes_settings_apply_errors_back_to_settings_status(qtbot)
     window = build_window(FailingApplyController(), FakeStorage())
     qtbot.addWidget(window)
 
-    qtbot.mouseClick(window.settings_page.save_button, Qt.MouseButton.LeftButton)
+    window.settings_page.api_hash_input.setText("new-hash")
+    window.settings_page.api_hash_input.editingFinished.emit()
 
     assert "Could not resolve sender '@missing'." in window.settings_page.status_label.text()
 
@@ -3744,6 +4062,38 @@ def test_main_window_feeds_settings_page_real_profiles_and_session_status(qtbot)
     assert window.settings_page.reauthorize_button.isEnabled() is False
     assert "delete the saved desktop config file" in window.settings_page.reauthorize_hint_label.text().lower()
     assert "restart the app" in window.settings_page.reauthorize_hint_label.text().lower()
+
+
+def test_main_window_registers_pause_resume_hotkey_from_config(qtbot) -> None:
+    registrar = FakeHotkeyRegistrar()
+    controller = FakeController(
+        build_config(pause_resume_hotkey="Ctrl+P")
+    )
+    window = build_window(
+        controller,
+        FakeStorage(config=controller.config),
+        hotkey_registrar_factory=lambda: registrar,
+    )
+    qtbot.addWidget(window)
+
+    assert registrar.set_calls == ["Ctrl+P"]
+
+
+def test_main_window_hotkey_callback_routes_to_controller_toggle(qtbot) -> None:
+    registrar = FakeHotkeyRegistrar()
+    controller = FakeController(
+        build_config(pause_resume_hotkey="Ctrl+P")
+    )
+    window = build_window(
+        controller,
+        FakeStorage(config=controller.config),
+        hotkey_registrar_factory=lambda: registrar,
+    )
+    qtbot.addWidget(window)
+
+    registrar.callback()
+
+    assert controller.toggle_pause_resume_calls == 1
 
 
 def test_main_window_default_loaders_feed_settings_page(qtbot, monkeypatch) -> None:

@@ -16,6 +16,7 @@ from raidbot.desktop.models import (
     DesktopAppConfig,
     DesktopAppState,
     RaidProfileConfig,
+    RaidProfileState,
 )
 
 
@@ -51,9 +52,11 @@ class FakeWorker:
         self.apply_calls: list[DesktopAppConfig] = []
         self.resume_calls = 0
         self.clear_calls = 0
+        self.toggle_pause_resume_calls = 0
         self.manual_finished_calls = 0
         self.run_raid_now_calls: list[str] = []
         self.reset_raid_profile_calls: list[str] = []
+        self.reset_all_raid_profiles_calls: list[bool] = []
         self.reset_dashboard_metric_calls: list[str] = []
 
     async def run(self) -> None:
@@ -72,6 +75,9 @@ class FakeWorker:
     def clear_automation_queue(self) -> None:
         self.clear_calls += 1
 
+    def toggle_pause_resume(self) -> None:
+        self.toggle_pause_resume_calls += 1
+
     def notify_manual_automation_finished(self) -> None:
         self.manual_finished_calls += 1
 
@@ -80,6 +86,9 @@ class FakeWorker:
 
     def reset_raid_profile(self, profile_directory: str) -> None:
         self.reset_raid_profile_calls.append(profile_directory)
+
+    def reset_all_raid_profiles(self, raid_on_restart_enabled: bool = False) -> None:
+        self.reset_all_raid_profiles_calls.append(bool(raid_on_restart_enabled))
 
     def reset_dashboard_metric(self, metric_key: str) -> None:
         self.reset_dashboard_metric_calls.append(metric_key)
@@ -360,6 +369,8 @@ def test_controller_sets_profile_action_overrides_with_warmup_for_one_profile(qt
                     profile_directory="Profile 3",
                     label="Maria",
                     enabled=True,
+                    warmup_cycle_index=2,
+                    warmup_completed_cycles=7,
                 ),
             ),
         ),
@@ -391,6 +402,8 @@ def test_controller_sets_profile_action_overrides_with_warmup_for_one_profile(qt
             repost_enabled=False,
             bookmark_enabled=True,
             warmup_enabled=True,
+            warmup_cycle_index=0,
+            warmup_completed_cycles=0,
         ),
     )
     assert controller.config.raid_profiles == storage.saved_configs[-1].raid_profiles
@@ -449,6 +462,103 @@ def test_controller_reset_raid_profile_submits_worker_command(qtbot) -> None:
     assert created["worker"].reset_raid_profile_calls == ["Profile 3"]
 
 
+def test_controller_reset_all_raid_profiles_submits_worker_command(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    runner = SubmitExecutingRunner()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=worker_factory,
+        runner_factory=lambda: runner,
+    )
+
+    controller.start_bot()
+    controller.reset_all_raid_profiles()
+
+    assert len(runner.submitted_coroutines) == 1
+    assert created["worker"].reset_all_raid_profiles_calls == [False]
+
+
+def test_controller_set_raid_on_restart_enabled_persists_config(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: SubmitExecutingRunner(),
+    )
+
+    controller.set_raid_on_restart_enabled(True)
+
+    assert storage.saved_configs[-1].raid_on_restart_enabled is True
+
+
+def test_controller_reset_all_raid_profiles_submits_worker_command_with_replay_enabled(
+    qtbot,
+) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    runner = SubmitExecutingRunner()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(raid_on_restart_enabled=True),
+        worker_factory=worker_factory,
+        runner_factory=lambda: runner,
+    )
+
+    controller.start_bot()
+    controller.reset_all_raid_profiles()
+
+    assert len(runner.submitted_coroutines) == 1
+    assert created["worker"].reset_all_raid_profiles_calls == [True]
+
+
+def test_controller_reset_all_raid_profiles_offline_still_only_resets_state(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    storage._state = DesktopAppState(
+        raid_profile_states=(
+            RaidProfileState(
+                profile_directory="Profile 3",
+                label="Maria",
+                status="red",
+                last_error="login required",
+            ),
+        ),
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(raid_on_restart_enabled=True),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: SubmitExecutingRunner(),
+    )
+
+    controller.reset_all_raid_profiles()
+
+    assert storage.saved_states[-1].raid_profile_states[0].status == "green"
+    assert storage.saved_states[-1].raid_profile_states[0].last_error is None
+
+
 def test_controller_rejects_raid_now_when_telegram_not_connected(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 
@@ -500,6 +610,48 @@ def test_controller_allows_raid_now_when_automation_queue_is_queued(qtbot) -> No
     assert errors == []
 
 
+def test_controller_updates_config_from_worker_config_changed_event(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(
+                RaidProfileConfig(
+                    "Profile 3",
+                    "Maria",
+                    True,
+                    warmup_enabled=True,
+                    warmup_completed_cycles=0,
+                ),
+            ),
+        ),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+    )
+    changed_configs = []
+    controller.configChanged.connect(changed_configs.append)
+    updated_config = build_config(
+        chrome_profile_directory="Profile 3",
+        raid_profiles=(
+            RaidProfileConfig(
+                "Profile 3",
+                "Maria",
+                True,
+                warmup_enabled=True,
+                warmup_completed_cycles=8,
+            ),
+        ),
+    )
+
+    controller._handle_worker_event({"type": "config_changed", "config": updated_config})
+
+    assert controller.config == updated_config
+    assert changed_configs == [updated_config]
+
+
 def test_controller_resets_dashboard_metric_through_worker_when_running(qtbot) -> None:
     from raidbot.desktop.controller import DesktopController
 
@@ -524,6 +676,32 @@ def test_controller_resets_dashboard_metric_through_worker_when_running(qtbot) -
 
     assert len(runner.submitted_coroutines) == 1
     assert created["worker"].reset_dashboard_metric_calls == ["raids_completed"]
+
+
+def test_controller_toggle_pause_resume_submits_worker_command(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    created = {}
+
+    def worker_factory(**kwargs):
+        worker = FakeWorker(**kwargs)
+        created["worker"] = worker
+        return worker
+
+    runner = SubmitExecutingRunner()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=worker_factory,
+        runner_factory=lambda: runner,
+    )
+
+    controller.start_bot()
+    controller.toggle_pause_resume()
+
+    assert len(runner.submitted_coroutines) == 1
+    assert created["worker"].toggle_pause_resume_calls == 1
 
 
 def test_controller_resets_dashboard_metric_directly_when_idle(qtbot) -> None:
@@ -949,6 +1127,33 @@ def test_controller_updates_page_ready_template_and_saves(qtbot) -> None:
     assert storage.saved_configs[-1].page_ready_template_path == captured_path
     assert controller.config.page_ready_template_path == captured_path
     assert updated_configs[-1].page_ready_template_path == captured_path
+    assert storage.saved_configs[-1].bot_action_slots == config.bot_action_slots
+
+
+def test_controller_updates_page_exit_template_and_saves(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    config = build_config(
+        allowed_sender_ids=[42],
+        allowed_sender_entries=("raidar",),
+    )
+    controller = DesktopController(
+        storage=storage,
+        config=config,
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: FakeRunner(),
+        telegram_setup_service_factory=lambda _config: FailIfResolveCalled(),
+    )
+    updated_configs = []
+    controller.configChanged.connect(updated_configs.append)
+    captured_path = Path("bot_actions/page_exit.png")
+
+    controller.set_page_exit_template_path(captured_path)
+
+    assert storage.saved_configs[-1].page_exit_template_path == captured_path
+    assert controller.config.page_exit_template_path == captured_path
+    assert updated_configs[-1].page_exit_template_path == captured_path
     assert storage.saved_configs[-1].bot_action_slots == config.bot_action_slots
 
 
