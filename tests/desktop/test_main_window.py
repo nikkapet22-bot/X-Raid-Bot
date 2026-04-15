@@ -2944,6 +2944,30 @@ def test_main_window_restart_all_raid_checkbox_routes_to_controller(qtbot) -> No
     assert controller.set_raid_on_restart_enabled_calls == [True]
 
 
+def test_main_window_restart_all_replay_errors_surface_in_existing_status_ui(qtbot) -> None:
+    controller = FakeController()
+    storage = FakeStorage(config=controller.config)
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    window.restart_all_raid_checkbox.setChecked(True)
+    qtbot.mouseClick(window.restart_all_profiles_button, Qt.MouseButton.LeftButton)
+
+    assert controller.reset_all_raid_profiles_calls == 1
+
+    controller.errorRaised.emit("No recent valid raid found")
+    assert window.last_error_label.text() == "No recent valid raid found"
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Idle\nLast error: No recent valid raid found"
+    )
+
+    controller.errorRaised.emit("All profiles already raided latest raid")
+    assert window.last_error_label.text() == "All profiles already raided latest raid"
+    assert window.bot_actions_page.status_label.text() == (
+        "Status: Idle\nLast error: All profiles already raided latest raid"
+    )
+
+
 def test_main_window_uses_animated_buttons_for_start_restart_all_and_raid_now(qtbot) -> None:
     from raidbot.desktop.animated_button import AttentionPulseButton
     from PySide6.QtCore import QVariantAnimation
