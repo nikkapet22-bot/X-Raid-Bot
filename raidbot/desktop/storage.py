@@ -88,12 +88,19 @@ class DesktopStorage:
             "default_action_bookmark": config.default_action_bookmark,
             "default_action_reply": config.default_action_reply,
             "auto_run_enabled": config.auto_run_enabled,
+            "raid_on_restart_enabled": config.raid_on_restart_enabled,
             "default_auto_sequence_id": config.default_auto_sequence_id,
             "auto_run_settle_ms": config.auto_run_settle_ms,
             "slot_1_finish_delay_seconds": config.slot_1_finish_delay_seconds,
+            "pause_resume_hotkey": config.pause_resume_hotkey,
             "page_ready_template_path": (
                 str(config.page_ready_template_path)
                 if config.page_ready_template_path is not None
+                else None
+            ),
+            "page_exit_template_path": (
+                str(config.page_exit_template_path)
+                if config.page_exit_template_path is not None
                 else None
             ),
             "bot_action_slots": [
@@ -137,6 +144,10 @@ class DesktopStorage:
             ),
             default_action_reply=self._maybe_bool(data.get("default_action_reply"), default=True),
             auto_run_enabled=self._maybe_bool(data.get("auto_run_enabled"), default=False),
+            raid_on_restart_enabled=self._maybe_bool(
+                data.get("raid_on_restart_enabled"),
+                default=False,
+            ),
             default_auto_sequence_id=data.get("default_auto_sequence_id"),
             auto_run_settle_ms=(
                 int(data["auto_run_settle_ms"])
@@ -148,9 +159,19 @@ class DesktopStorage:
                 if data.get("slot_1_finish_delay_seconds") is not None
                 else 2
             ),
+            pause_resume_hotkey=(
+                str(data.get("pause_resume_hotkey")).strip()
+                if data.get("pause_resume_hotkey") is not None
+                else None
+            ),
             page_ready_template_path=(
                 Path(data["page_ready_template_path"])
                 if data.get("page_ready_template_path") is not None
+                else None
+            ),
+            page_exit_template_path=(
+                Path(data["page_exit_template_path"])
+                if data.get("page_exit_template_path") is not None
                 else None
             ),
             bot_action_slots=tuple(
@@ -589,6 +610,12 @@ class DesktopStorage:
             "repost_enabled": profile.repost_enabled,
             "bookmark_enabled": profile.bookmark_enabled,
             "warmup_enabled": profile.warmup_enabled,
+            "warmup_cycle_index": self._normalize_warmup_cycle_index(
+                getattr(profile, "warmup_cycle_index", 0)
+            ),
+            "warmup_completed_cycles": self._normalize_warmup_completed_cycles(
+                getattr(profile, "warmup_completed_cycles", 0)
+            ),
         }
 
     def _raid_profile_config_from_data(self, data: dict[str, Any]) -> RaidProfileConfig:
@@ -602,7 +629,27 @@ class DesktopStorage:
             repost_enabled=self._maybe_bool(data.get("repost_enabled"), default=True),
             bookmark_enabled=self._maybe_bool(data.get("bookmark_enabled"), default=True),
             warmup_enabled=self._maybe_bool(data.get("warmup_enabled"), default=False),
+            warmup_cycle_index=self._normalize_warmup_cycle_index(
+                data.get("warmup_cycle_index")
+            ),
+            warmup_completed_cycles=self._normalize_warmup_completed_cycles(
+                data.get("warmup_completed_cycles")
+            ),
         )
+
+    def _normalize_warmup_cycle_index(self, value: Any) -> int:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return normalized if normalized in {0, 1, 2} else 0
+
+    def _normalize_warmup_completed_cycles(self, value: Any) -> int:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return min(max(normalized, 0), 20)
 
     def _raid_profile_state_to_data(self, profile_state: RaidProfileState) -> dict[str, Any]:
         return {

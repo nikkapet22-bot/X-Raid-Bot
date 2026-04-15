@@ -118,6 +118,8 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
                 repost_enabled=True,
                 bookmark_enabled=False,
                 warmup_enabled=False,
+                warmup_cycle_index=1,
+                warmup_completed_cycles=4,
             ),
             RaidProfileConfig(
                 profile_directory="Profile 3",
@@ -128,6 +130,8 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
                 repost_enabled=False,
                 bookmark_enabled=True,
                 warmup_enabled=True,
+                warmup_cycle_index=2,
+                warmup_completed_cycles=12,
             ),
         ),
     )
@@ -146,6 +150,8 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
             repost_enabled=True,
             bookmark_enabled=False,
             warmup_enabled=False,
+            warmup_cycle_index=1,
+            warmup_completed_cycles=4,
         ),
         RaidProfileConfig(
             profile_directory="Profile 3",
@@ -156,6 +162,8 @@ def test_storage_round_trips_raid_profiles_in_order(tmp_path) -> None:
             repost_enabled=False,
             bookmark_enabled=True,
             warmup_enabled=True,
+            warmup_cycle_index=2,
+            warmup_completed_cycles=12,
         ),
     )
 
@@ -200,6 +208,100 @@ def test_storage_defaults_raid_profile_action_overrides_for_legacy_config(tmp_pa
             repost_enabled=True,
             bookmark_enabled=True,
             warmup_enabled=False,
+            warmup_cycle_index=0,
+        ),
+    )
+
+
+def test_storage_normalizes_warmup_cycle_index_for_raid_profiles(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        json.dumps(
+            {
+                "telegram_api_id": 123456,
+                "telegram_api_hash": "api-hash",
+                "telegram_session_path": "sessions/raid.session",
+                "telegram_phone_number": "+15555550123",
+                "whitelisted_chat_ids": [1001],
+                "allowed_sender_ids": [424242],
+                "allowed_sender_entries": ["@raidar"],
+                "chrome_profile_directory": "Default",
+                "raid_profiles": [
+                    {
+                        "profile_directory": "Default",
+                        "label": "George",
+                        "enabled": True,
+                        "warmup_enabled": True,
+                        "warmup_cycle_index": 5,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+
+    assert loaded.raid_profiles == (
+        RaidProfileConfig(
+            profile_directory="Default",
+            label="George",
+            enabled=True,
+            reply_enabled=True,
+            like_enabled=True,
+            repost_enabled=True,
+            bookmark_enabled=True,
+            warmup_enabled=True,
+            warmup_cycle_index=0,
+        ),
+    )
+
+
+def test_storage_defaults_missing_warmup_completed_cycles_to_zero(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        json.dumps(
+            {
+                "telegram_api_id": 123456,
+                "telegram_api_hash": "api-hash",
+                "telegram_session_path": "sessions/raid.session",
+                "telegram_phone_number": "+15555550123",
+                "whitelisted_chat_ids": [1001],
+                "allowed_sender_ids": [424242],
+                "allowed_sender_entries": ["@raidar"],
+                "chrome_profile_directory": "Default",
+                "raid_profiles": [
+                    {
+                        "profile_directory": "Default",
+                        "label": "George",
+                        "enabled": True,
+                        "warmup_enabled": True,
+                        "warmup_cycle_index": 2,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+
+    assert loaded.raid_profiles == (
+        RaidProfileConfig(
+            profile_directory="Default",
+            label="George",
+            enabled=True,
+            reply_enabled=True,
+            like_enabled=True,
+            repost_enabled=True,
+            bookmark_enabled=True,
+            warmup_enabled=True,
+            warmup_cycle_index=2,
+            warmup_completed_cycles=0,
         ),
     )
 
@@ -241,6 +343,99 @@ def test_storage_ignores_legacy_raid_on_restart_field(tmp_path) -> None:
             enabled=True,
         ),
     )
+
+
+def test_storage_round_trips_raid_on_restart_enabled(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    config = DesktopAppConfig(
+        telegram_api_id=123456,
+        telegram_api_hash="api-hash",
+        telegram_session_path=Path("sessions/raid.session"),
+        telegram_phone_number="+15555550123",
+        whitelisted_chat_ids=[1001],
+        allowed_sender_ids=[424242],
+        allowed_sender_entries=("@raidar",),
+        chrome_profile_directory="Profile 1",
+        raid_on_restart_enabled=True,
+    )
+
+    storage.save_config(config)
+
+    loaded = storage.load_config()
+
+    assert loaded.raid_on_restart_enabled is True
+
+
+def test_storage_defaults_raid_on_restart_enabled_to_false(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        json.dumps(
+            {
+                "telegram_api_id": 123456,
+                "telegram_api_hash": "api-hash",
+                "telegram_session_path": "sessions/raid.session",
+                "telegram_phone_number": "+15555550123",
+                "whitelisted_chat_ids": [1001],
+                "allowed_sender_ids": [424242],
+                "allowed_sender_entries": ["@raidar"],
+                "chrome_profile_directory": "Profile 1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+
+    assert loaded.raid_on_restart_enabled is False
+
+
+def test_storage_round_trips_pause_resume_hotkey(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    config = DesktopAppConfig(
+        telegram_api_id=123456,
+        telegram_api_hash="api-hash",
+        telegram_session_path=Path("sessions/raid.session"),
+        telegram_phone_number="+15555550123",
+        whitelisted_chat_ids=[1001],
+        allowed_sender_ids=[424242],
+        allowed_sender_entries=("@raidar",),
+        chrome_profile_directory="Profile 1",
+        pause_resume_hotkey="Ctrl+P",
+    )
+
+    storage.save_config(config)
+
+    loaded = storage.load_config()
+
+    assert loaded.pause_resume_hotkey == "Ctrl+P"
+
+
+def test_storage_defaults_pause_resume_hotkey_to_none(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    config = DesktopAppConfig(
+        telegram_api_id=123456,
+        telegram_api_hash="api-hash",
+        telegram_session_path=Path("sessions/raid.session"),
+        telegram_phone_number="+15555550123",
+        whitelisted_chat_ids=[1001],
+        allowed_sender_ids=[424242],
+        allowed_sender_entries=("@raidar",),
+        chrome_profile_directory="Profile 1",
+    )
+
+    storage.save_config(config)
+
+    loaded = storage.load_config()
+
+    assert loaded.pause_resume_hotkey is None
 
 
 def test_storage_round_trips_slot_1_presets_and_finish_template(tmp_path) -> None:
@@ -350,6 +545,29 @@ def test_storage_round_trips_page_ready_template_path(tmp_path) -> None:
     loaded = storage.load_config()
 
     assert loaded.page_ready_template_path == Path("bot_actions/page_ready.png")
+
+
+def test_storage_round_trips_page_exit_template_path(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    config = DesktopAppConfig(
+        telegram_api_id=123456,
+        telegram_api_hash="api-hash",
+        telegram_session_path=Path("sessions/raid.session"),
+        telegram_phone_number="+15555550123",
+        whitelisted_chat_ids=[1001],
+        allowed_sender_ids=[424242],
+        allowed_sender_entries=("@raidar",),
+        chrome_profile_directory="Profile 1",
+        page_exit_template_path=Path("bot_actions/page_exit.png"),
+    )
+
+    storage.save_config(config)
+
+    loaded = storage.load_config()
+
+    assert loaded.page_exit_template_path == Path("bot_actions/page_exit.png")
 
 
 def test_state_round_trip_includes_activity_entries(tmp_path) -> None:

@@ -52,6 +52,8 @@ class RaidProfileConfig:
     repost_enabled: bool = True
     bookmark_enabled: bool = True
     warmup_enabled: bool = False
+    warmup_cycle_index: int = 0
+    warmup_completed_cycles: int = 0
 
 
 @dataclass(eq=True)
@@ -128,10 +130,13 @@ class DesktopAppConfig:
     default_action_bookmark: bool
     default_action_reply: bool
     auto_run_enabled: bool
+    raid_on_restart_enabled: bool
     default_auto_sequence_id: str | None
     auto_run_settle_ms: int
     slot_1_finish_delay_seconds: int
+    pause_resume_hotkey: str | None
     page_ready_template_path: Path | None
+    page_exit_template_path: Path | None
     bot_action_slots: tuple[BotActionSlotConfig, ...]
     raid_profiles: tuple[RaidProfileConfig, ...]
 
@@ -155,10 +160,13 @@ class DesktopAppConfig:
         default_action_bookmark: bool = False,
         default_action_reply: bool = True,
         auto_run_enabled: bool = False,
+        raid_on_restart_enabled: bool = False,
         default_auto_sequence_id: str | None = None,
         auto_run_settle_ms: int = 1500,
         slot_1_finish_delay_seconds: int = 2,
+        pause_resume_hotkey: str | None = None,
         page_ready_template_path: Path | None = None,
+        page_exit_template_path: Path | None = None,
         bot_action_slots: Sequence[BotActionSlotConfig] | None = None,
         raid_profiles: Sequence[RaidProfileConfig] | None = None,
     ) -> None:
@@ -184,11 +192,19 @@ class DesktopAppConfig:
         self.default_action_bookmark = default_action_bookmark
         self.default_action_reply = default_action_reply
         self.auto_run_enabled = auto_run_enabled
+        self.raid_on_restart_enabled = raid_on_restart_enabled
         self.default_auto_sequence_id = default_auto_sequence_id
         self.auto_run_settle_ms = auto_run_settle_ms
         self.slot_1_finish_delay_seconds = int(slot_1_finish_delay_seconds)
+        normalized_pause_resume_hotkey = (
+            str(pause_resume_hotkey).strip() if pause_resume_hotkey is not None else ""
+        )
+        self.pause_resume_hotkey = normalized_pause_resume_hotkey or None
         self.page_ready_template_path = (
             Path(page_ready_template_path) if page_ready_template_path is not None else None
+        )
+        self.page_exit_template_path = (
+            Path(page_exit_template_path) if page_exit_template_path is not None else None
         )
         self.bot_action_slots = self._coerce_bot_action_slots(bot_action_slots)
         self.raid_profiles = self._coerce_raid_profiles(
@@ -299,6 +315,10 @@ class DesktopAppConfig:
                     repost_enabled=bool(getattr(profile, "repost_enabled", True)),
                     bookmark_enabled=bool(getattr(profile, "bookmark_enabled", True)),
                     warmup_enabled=bool(getattr(profile, "warmup_enabled", False)),
+                    warmup_cycle_index=int(getattr(profile, "warmup_cycle_index", 0) or 0),
+                    warmup_completed_cycles=int(
+                        getattr(profile, "warmup_completed_cycles", 0) or 0
+                    ),
                 )
             )
         if normalized_profiles:
