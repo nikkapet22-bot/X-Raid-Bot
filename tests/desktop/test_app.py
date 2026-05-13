@@ -35,8 +35,8 @@ def test_build_application_stylesheet_contains_dark_surface_and_accent() -> None
 
     stylesheet = build_application_stylesheet()
 
-    assert "#0a1628" in stylesheet
-    assert "#4f8ef7" in stylesheet
+    assert "#0f1724" in stylesheet
+    assert "#b8a77a" in stylesheet
     assert "QPushButton" in stylesheet
     assert "QWizard QPushButton" in stylesheet
     assert 'QPushButton[variant="secondary"]' in stylesheet
@@ -44,8 +44,18 @@ def test_build_application_stylesheet_contains_dark_surface_and_accent() -> None
     assert 'QPushButton[variant="secondary"]:pressed' in stylesheet
     assert 'QPushButton[variant="secondary"]:disabled' in stylesheet
     assert 'QPushButton[variant="quiet"]' in stylesheet
+    assert 'QPushButton[variant="quiet"]:pressed' in stylesheet
     assert "QPushButton#profileActionConfigButton" in stylesheet
     assert "QPushButton#profileResetButton" in stylesheet
+
+
+def test_build_application_stylesheet_contains_attention_button_support() -> None:
+    from raidbot.desktop.theme import build_application_stylesheet
+
+    stylesheet = build_application_stylesheet()
+
+    assert 'QPushButton[attentionPulseButton="true"]' in stylesheet
+    assert 'QPushButton[dashboardActionButton="true"][variant="quiet"]' in stylesheet
     match = re.search(
         r'QPushButton\[variant="quiet"\]:hover \{\s*(.*?)\s*\}',
         stylesheet,
@@ -53,18 +63,24 @@ def test_build_application_stylesheet_contains_dark_surface_and_accent() -> None
     )
     assert match is not None
     hover_block = match.group(1)
-    assert "background-color: #0e1e35;" in hover_block
-    assert "color: #dce8ff;" in hover_block
+    assert "background-color: #151e2d;" in hover_block
+    assert "color: #f3f4f6;" in hover_block
     assert "border-color: transparent;" in hover_block
     assert "QScrollBar:vertical" in stylesheet
     assert "width: 10px;" in stylesheet
     assert "border-radius: 5px;" in stylesheet
     assert "min-height: 28px;" in stylesheet
     assert "QPushButton#shellTabButton" in stylesheet
-    assert "min-height: 24px;" in stylesheet
+    assert "QPushButton#shellAccountButton" in stylesheet
+    assert "min-height: 48px;" in stylesheet
     assert "QPushButton#metricResetButton" in stylesheet
     assert '[profileStatus="warmup"]' in stylesheet
-    assert "background-color: #102847;" in stylesheet
+    assert '[profileStatus="stopped"]' in stylesheet
+    assert "background-color: #2a1748;" in stylesheet
+    assert "QProgressBar#warmupProgressBar" in stylesheet
+    assert "QCheckBox:disabled" in stylesheet
+    assert "QCheckBox::indicator:disabled" in stylesheet
+    assert "QCheckBox::indicator:checked:disabled" in stylesheet
     metric_reset_match = re.search(
         r'QPushButton#metricResetButton \{\s*(.*?)\s*\}',
         stylesheet,
@@ -84,12 +100,237 @@ def test_build_application_stylesheet_contains_dark_surface_and_accent() -> None
     assert metric_reset_hover_match is not None
     metric_reset_hover_block = metric_reset_hover_match.group(1)
     assert "background-color: rgba(17, 37, 63, 0.82);" in metric_reset_hover_block
-    assert "border-color: #4f8ef7;" in metric_reset_hover_block
+    assert "border-color: #b8a77a;" in metric_reset_hover_block
     assert "QFrame#statusSummaryCard" in stylesheet
     assert "background: transparent;" in stylesheet
+    assert "QWidget#profilesHeaderRow" in stylesheet
     assert "QListWidget#settingsRaidProfilesList::item" in stylesheet
     assert "QWizardPage" in stylesheet
     assert "QWizard > QWidget" in stylesheet
+
+
+def test_dashboard_preview_bot_actions_uses_compact_presets_without_health_aside() -> None:
+    content = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'data-page="bot-actions"' in content
+    assert "bot-actions-wide" in content
+    assert "settings-wide" in content
+    assert "Raid Profiles" in content
+    assert "Profile modal" not in content
+    assert "Same desktop settings, redesigned into clean grouped surfaces" not in content
+    assert "Auto-saved" not in content
+    assert "Test sequence" not in content
+    assert "Navy soft sand surface" not in content
+    assert ".activity-feed" in content
+    assert "overflow-y: auto;" in content
+    assert '<div class="monogram">L8N</div>' in content
+    assert "stroke-dasharray: 980" not in content
+    assert "Survives restarts" not in content
+    assert "2 captures" not in content
+    assert "Randomized runtime" not in content
+    assert "Open presets to edit the full list" in content
+    assert "Template Health" not in content
+    assert "troubleshoot-wide" in content
+    assert "When Page Ready Times Out" not in content
+    assert "Operator feedback" not in content
+    assert "Trouble Status" not in content
+
+
+def test_dashboard_preview_exposes_performance_mode_toggle() -> None:
+    content = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'data-performance-toggle' in content
+    assert 'aria-label="Performance mode"' in content
+    assert 'aria-label="Account"' not in content
+    assert ".performance-mode" in content
+    assert "performance-toggle:not(.active)" not in content
+    assert "Performance mode off" in content
+    assert "Performance mode on" in content
+    assert content.index('data-performance-toggle') > content.index(
+        '<div class="rail-spacer"></div>'
+    )
+    assert 'data-app-version' in content
+    assert content.index('data-app-version') > content.index('data-performance-toggle')
+
+
+def test_dashboard_runtime_performance_toggle_has_visible_feedback_and_immediate_ui() -> None:
+    content = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
+
+    assert "performance-toggle:not(.active)" not in content
+    assert "aria-pressed" in content
+    assert "applyPerformanceMode(enabled)" in content
+    assert 'call("setPerformanceMode", enabled)' in content
+    assert 'closest("[data-performance-toggle]")' in content
+    assert "stopImmediatePropagation" in content
+
+
+def test_dashboard_runtime_updates_sidebar_version_label() -> None:
+    content = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
+
+    assert 'first("[data-app-version]")' in content
+    assert "data.appVersion" in content
+
+
+def test_dashboard_settings_raid_profiles_exposes_remove_action() -> None:
+    runtime = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
+    preview = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Remove profile" in runtime
+    assert 'data-web-action="remove-profile"' in runtime
+    assert '"remove-profile": () => call("removeProfile", selectedProfile)' in runtime
+    assert "Remove profile" in preview
+
+
+def test_dashboard_performance_mode_uses_aggressive_lightweight_rendering() -> None:
+    runtime = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
+    preview = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
+        encoding="utf-8"
+    )
+
+    for content in (runtime, preview):
+        assert "body.performance-mode .raid-chart" in content
+        assert "body.performance-mode .profile-preview" in content
+        assert "body.performance-mode .chart-frame::after" in content
+
+    assert 'document.body.classList.contains("performance-mode")' in runtime
+    assert 'svg.innerHTML = ""' in runtime
+    assert "const lightweightProfiles" in runtime
+    assert "renderProfiles(state.latest)" in runtime
+
+
+def test_dashboard_bot_actions_hides_slot_section_marketing_and_enabled_badges() -> None:
+    preview = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
+        encoding="utf-8"
+    )
+    runtime = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
+
+    assert "Runtime captures" not in preview
+    assert "Runtime captures" not in runtime
+    assert "Reply tooling" not in preview
+    assert "Reply tooling" not in runtime
+    assert '<h2 class="panel-title">Page Templates</h2>' not in preview
+    assert '<h2 class="panel-title">Page Templates</h2>' not in runtime
+    assert '<h2 class="panel-title">Presets</h2>' not in preview
+    assert '<h2 class="panel-title">Presets</h2>' not in runtime
+    assert '<div class="eyebrow">Page Templates</div>' in preview
+    assert '<div class="eyebrow">Page Templates</div>' in runtime
+    assert '<div class="eyebrow">Presets</div>' in preview
+    assert '<div class="eyebrow">Presets</div>' in runtime
+    assert "Four Slot Cards" not in preview
+    assert "Four Slot Cards" not in runtime
+    assert '<h2 class="panel-title">Slots</h2>' not in preview
+    assert '<h2 class="panel-title">Slots</h2>' not in runtime
+    assert 'class="slot-title">Slot 1' in preview
+    assert '<button class="tiny-button">Presets</button>' not in preview
+    assert '<button class="tiny-button" data-slot-presets="0">Presets</button>' not in runtime
+    assert '<button class="lux-button">Open presets</button>' in preview
+    assert '<button class="lux-button" data-slot-presets="0">Open presets</button>' in runtime
+    assert '<span class="toggle-pill">Enabled</span>' not in preview
+    assert '${slot.enabled ? "Enabled" : "Disabled"}' not in runtime
+    assert "Fail fast" not in preview
+
+
+def test_dashboard_troubleshooting_runtime_replaces_full_capture_panel() -> None:
+    preview = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
+        encoding="utf-8"
+    )
+    runtime = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
+
+    assert 'class="troubleshoot-content"' in preview
+    assert preview.count('class="preview-panel trouble-section-panel"') == 2
+    assert preview.count('<div class="eyebrow">CLDF Capture Path</div>') == 1
+    assert preview.count('<div class="eyebrow">Black Box Escape</div>') == 1
+    assert 'const content = page.querySelector(".troubleshoot-content");' in runtime
+    assert 'const path = page.querySelector(".trouble-path");' not in runtime
+    assert '<article class="preview-panel trouble-section-panel">' in runtime
+    assert 'class="trouble-path ${section.key === "black_box" ? "single" : ""}"' in runtime
+
+
+def test_dashboard_runtime_renders_profile_raid_now_feedback() -> None:
+    content = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
+
+    assert "profile.raidNowFeedback" in content
+    assert "profile-error" in content
+
+
+def test_dashboard_bridge_routes_performance_mode_toggle() -> None:
+    from raidbot.desktop.web_dashboard import DashboardBridge
+
+    calls = []
+    bridge = DashboardBridge(
+        on_ready=lambda: None,
+        on_start=lambda: None,
+        on_stop=lambda: None,
+        on_toggle_pause=lambda: None,
+        on_raid_now=lambda: None,
+        on_raid_now_for_profile=lambda _profile: None,
+        on_reset_profile=lambda _profile: None,
+        on_configure_profile=lambda _profile: None,
+        on_reset_all_profiles=lambda: None,
+        on_set_raid_on_restart=lambda _enabled: None,
+        on_set_performance_mode=calls.append,
+        on_reauthorize=lambda: None,
+        on_refresh_chats=lambda: None,
+        on_scan_senders=lambda: None,
+        on_add_profile=lambda: None,
+        on_move_profile=lambda _profile, _direction: None,
+        on_remove_profile=lambda _profile: None,
+        on_capture_page_template=lambda _key: None,
+        on_test_page_template=lambda _key: None,
+        on_capture_slot=lambda _slot: None,
+        on_test_slot=lambda _slot: None,
+        on_open_slot_presets=lambda _slot: None,
+        on_capture_slot_finish=lambda _slot: None,
+        on_test_enabled_slots=lambda: None,
+        on_capture_troubleshoot=lambda _group, _index: None,
+        on_test_troubleshoot=lambda _group, _index: None,
+    )
+    bridge.setPerformanceMode(True)
+
+    assert calls == [True]
+
+
+def test_dashboard_bridge_routes_remove_profile() -> None:
+    from raidbot.desktop.web_dashboard import DashboardBridge
+
+    calls = []
+    bridge = DashboardBridge(
+        on_ready=lambda: None,
+        on_start=lambda: None,
+        on_stop=lambda: None,
+        on_toggle_pause=lambda: None,
+        on_raid_now=lambda: None,
+        on_raid_now_for_profile=lambda _profile: None,
+        on_reset_profile=lambda _profile: None,
+        on_configure_profile=lambda _profile: None,
+        on_reset_all_profiles=lambda: None,
+        on_set_raid_on_restart=lambda _enabled: None,
+        on_set_performance_mode=lambda _enabled: None,
+        on_reauthorize=lambda: None,
+        on_refresh_chats=lambda: None,
+        on_scan_senders=lambda: None,
+        on_add_profile=lambda: None,
+        on_move_profile=lambda _profile, _direction: None,
+        on_remove_profile=calls.append,
+        on_capture_page_template=lambda _key: None,
+        on_test_page_template=lambda _key: None,
+        on_capture_slot=lambda _slot: None,
+        on_test_slot=lambda _slot: None,
+        on_open_slot_presets=lambda _slot: None,
+        on_capture_slot_finish=lambda _slot: None,
+        on_test_enabled_slots=lambda: None,
+        on_capture_troubleshoot=lambda _group, _index: None,
+        on_test_troubleshoot=lambda _group, _index: None,
+    )
+    bridge.removeProfile("Profile 3")
+
+    assert calls == ["Profile 3"]
 
 
 def test_create_startup_window_uses_wizard_for_first_run() -> None:
@@ -484,7 +725,7 @@ def test_main_applies_application_stylesheet(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "create_startup_window", lambda **_kwargs: FakeWindow())
 
     assert app_module.main([]) == 0
-    assert "#0a1628" in applied["stylesheet"]
+    assert "#0f1724" in applied["stylesheet"]
 
 
 def test_main_signals_existing_instance_and_exits_cleanly(monkeypatch) -> None:

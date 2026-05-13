@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import math
-import mimetypes
 import os
 from collections import defaultdict, deque
 from dataclasses import replace
@@ -79,7 +76,6 @@ from raidbot.desktop.theme import (
     CARD_OBJECT_NAME,
     SECTION_OBJECT_NAME,
     ACCENT,
-    ACCENT_HOVER,
     SUCCESS,
     WARNING,
     ERROR,
@@ -87,7 +83,6 @@ from raidbot.desktop.theme import (
     TEXT,
 )
 from raidbot.desktop.tray import TrayController
-from raidbot.desktop.web_dashboard import DashboardWebView
 
 
 RAID_ACTIVITY_MODE_CUMULATIVE = "cumulative"
@@ -138,88 +133,6 @@ def _build_profile_reset_icon(size: int = 12, *, color: str = TEXT) -> QIcon:
     arrow_path.lineTo(QPointF(size * 0.68, size * 0.40))
     arrow_path.closeSubpath()
     painter.fillPath(arrow_path, QColor(color))
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _build_shell_nav_icon(
-    name: str,
-    *,
-    size: int = 22,
-    color: str = MUTED,
-) -> QIcon:
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    pen = QPen(QColor(color))
-    pen.setWidthF(max(1.4, size * 0.085))
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-
-    if name == "dashboard":
-        gap = size * 0.13
-        cell = size * 0.29
-        left = size * 0.18
-        top = size * 0.18
-        for row in range(2):
-            for column in range(2):
-                painter.drawRect(
-                    QRectF(
-                        left + column * (cell + gap),
-                        top + row * (cell + gap),
-                        cell,
-                        cell,
-                    )
-                )
-    elif name == "settings":
-        center = QPointF(size / 2, size / 2)
-        outer = size * 0.34
-        inner = size * 0.15
-        painter.drawEllipse(center, inner, inner)
-        for index in range(8):
-            angle = (math.pi * 2 * index) / 8
-            start = QPointF(
-                center.x() + math.cos(angle) * (outer * 0.74),
-                center.y() + math.sin(angle) * (outer * 0.74),
-            )
-            end = QPointF(
-                center.x() + math.cos(angle) * outer,
-                center.y() + math.sin(angle) * outer,
-            )
-            painter.drawLine(start, end)
-    elif name == "bot_actions":
-        center = QPointF(size / 2, size / 2)
-        painter.drawEllipse(center, size * 0.19, size * 0.19)
-        for index in range(8):
-            angle = (math.pi * 2 * index) / 8
-            start = QPointF(
-                center.x() + math.cos(angle) * size * 0.30,
-                center.y() + math.sin(angle) * size * 0.30,
-            )
-            end = QPointF(
-                center.x() + math.cos(angle) * size * 0.42,
-                center.y() + math.sin(angle) * size * 0.42,
-            )
-            painter.drawLine(start, end)
-    elif name == "account":
-        painter.drawEllipse(QPointF(size / 2, size * 0.34), size * 0.16, size * 0.16)
-        painter.drawArc(
-            QRectF(size * 0.23, size * 0.50, size * 0.54, size * 0.42),
-            20 * 16,
-            140 * 16,
-        )
-    else:
-        path = QPainterPath()
-        path.moveTo(size * 0.58, size * 0.08)
-        path.lineTo(size * 0.23, size * 0.55)
-        path.lineTo(size * 0.48, size * 0.55)
-        path.lineTo(size * 0.38, size * 0.92)
-        path.lineTo(size * 0.76, size * 0.42)
-        path.lineTo(size * 0.51, size * 0.42)
-        painter.drawPath(path)
     painter.end()
     return QIcon(pixmap)
 
@@ -859,7 +772,7 @@ class RaidActivityChart(QWidget):
         self._series = [0] * 24
         self._mode = RAID_ACTIVITY_MODE_SMOOTHED_RATE
         self.setObjectName("raidActivityChart")
-        self.setMinimumHeight(280)
+        self.setMinimumHeight(180)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._chart = QChart()
         self._chart.legend().hide()
@@ -873,7 +786,7 @@ class RaidActivityChart(QWidget):
         self._chart_view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self._chart_view.setStyleSheet("background: transparent; border: none;")
         self._chart_view.setFrameShape(QChartView.Shape.NoFrame)
-        self._chart_view.setBackgroundBrush(QColor("#060b13"))
+        self._chart_view.setBackgroundBrush(QColor("#07111f"))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -937,7 +850,7 @@ class RaidActivityChart(QWidget):
         self._rebuild_chart_series()
 
     def sizeHint(self) -> QSize:
-        return QSize(520, 300)
+        return QSize(360, 180)
 
     def chart(self) -> QChart:
         return self._chart
@@ -950,7 +863,7 @@ class RaidActivityChart(QWidget):
         return self._mode == RAID_ACTIVITY_MODE_SMOOTHED_RATE
 
     def _recreate_chart_series(self) -> None:
-        line_pen = QPen(QColor("#eee6d0"), 2.4)
+        line_pen = QPen(QColor("#2dd4bf"), 2.0)
         line_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         line_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
 
@@ -976,7 +889,7 @@ class RaidActivityChart(QWidget):
 
         area_series = QAreaSeries(fill_series, baseline_series)
         area_series.setPen(Qt.PenStyle.NoPen)
-        area_series.setBrush(QColor(184, 167, 122, 34))
+        area_series.setBrush(QColor(45, 212, 191, 22))
 
         self._upper_series = upper_series
         self._fill_series = fill_series
@@ -1024,9 +937,9 @@ class TopTabStrip(QWidget):
     pageRequested = Signal(int)
 
     _NAV_ITEMS = [
-        ("Dashboard", 0, "dashboard"),
-        ("Settings", 1, "settings"),
-        ("Bot Actions", 2, "bot_actions"),
+        ("Dashboard", 0),
+        ("Settings", 1),
+        ("Bot Actions", 2),
     ]
 
     def __init__(
@@ -1037,57 +950,24 @@ class TopTabStrip(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("topTabStrip")
-        self.setFixedWidth(96)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 22, 16, 22)
-        layout.setSpacing(18)
-
-        monogram_halo = QFrame()
-        monogram_halo.setObjectName("shellMonogramHalo")
-        monogram_halo.setFixedSize(76, 76)
-        halo_layout = QVBoxLayout(monogram_halo)
-        halo_layout.setContentsMargins(11, 11, 11, 11)
-        halo_layout.setSpacing(0)
-        monogram = QLabel("L8N")
-        monogram.setObjectName("shellMonogram")
-        monogram.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        monogram.setFixedSize(54, 54)
-        halo_layout.addWidget(monogram, 0, Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(monogram_halo, 0, Qt.AlignmentFlag.AlignHCenter)
-        layout.addSpacing(8)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 0)
+        layout.setSpacing(4)
 
         self._buttons: list[QPushButton] = []
-        self._button_icons: list[tuple[QIcon, QIcon]] = []
-        for label, index, icon_name in self._NAV_ITEMS:
-            btn = QPushButton("")
+        for label, index in self._NAV_ITEMS:
+            btn = QPushButton(label)
             btn.setObjectName("shellTabButton")
-            btn.setAccessibleName(label)
-            btn.setToolTip(label)
-            btn.setFixedSize(48, 48)
-            btn.setIconSize(QSize(22, 22))
-            normal_icon = _build_shell_nav_icon(icon_name, color=MUTED)
-            active_icon = _build_shell_nav_icon(icon_name, color=ACCENT_HOVER)
-            btn.setIcon(normal_icon)
             btn.clicked.connect(lambda _, i=index: self._activate(i))
-            layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
+            layout.addWidget(btn)
             self._buttons.append(btn)
-            self._button_icons.append((normal_icon, active_icon))
 
         layout.addStretch()
-        account_button = QPushButton("")
-        account_button.setObjectName("shellAccountButton")
-        account_button.setAccessibleName("Account")
-        account_button.setToolTip("Account")
-        account_button.setFixedSize(48, 48)
-        account_button.setIconSize(QSize(22, 22))
-        account_button.setIcon(_build_shell_nav_icon("account", color=MUTED))
-        layout.addWidget(account_button, 0, Qt.AlignmentFlag.AlignHCenter)
-        self._session_stamp_label = QLabel(badge_text or "", self)
+        self._session_stamp_label = QLabel(badge_text or "")
         self._session_stamp_label.setObjectName("shellSessionStamp")
         self._session_stamp_label.setProperty("muted", "true")
-        self._session_stamp_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._session_stamp_label.hide()
+        layout.addWidget(self._session_stamp_label, 0, Qt.AlignmentFlag.AlignRight)
 
         self._activate(0)
 
@@ -1097,10 +977,7 @@ class TopTabStrip(QWidget):
 
     def _set_active_page(self, index: int) -> None:
         for i, btn in enumerate(self._buttons):
-            active = i == index
-            btn.setProperty("active", "true" if active else "false")
-            normal_icon, active_icon = self._button_icons[i]
-            btn.setIcon(active_icon if active else normal_icon)
+            btn.setProperty("active", "true" if i == index else "false")
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
@@ -1159,7 +1036,6 @@ class MainWindow(QMainWindow):
         self._latest_state = DesktopAppState()
         self._raid_now_pending_profile_directory: str | None = None
         self._raid_now_started_profile_directory: str | None = None
-        self._raid_now_feedback_by_profile: dict[str, str] = {}
         self.raid_profile_cards: dict[str, RaidProfileCard] = {}
         self._raid_profile_card_widgets: list[RaidProfileCard] = []
         self._profile_card_columns = 0
@@ -1227,57 +1103,15 @@ class MainWindow(QMainWindow):
 
         # ── Layout ─────────────────────────────────────────────────────────────
         central = QWidget()
-        root = QHBoxLayout(central)
+        root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self.top_tabs = TopTabStrip(badge_text=APP_VERSION_BADGE, parent=central)
-        self.top_tabs.hide()
+        self.top_tabs = TopTabStrip(badge_text=APP_VERSION_BADGE)
+        root.addWidget(self.top_tabs)
 
-        self.stack = QStackedWidget(central)
-        self.stack.hide()
-        self._native_dashboard_shadow = self._build_dashboard_tab()
-        self.stack.addWidget(self._wrap_page(self._native_dashboard_shadow))
-        self.dashboard_web = DashboardWebView(
-            on_start=self.controller.start_bot,
-            on_stop=self.controller.stop_bot,
-            on_toggle_pause=getattr(self.controller, "toggle_pause_resume", lambda: None),
-            on_raid_now=self._handle_web_raid_now_requested,
-            on_raid_now_for_profile=self._handle_raid_now_requested,
-            on_reset_profile=getattr(self.controller, "reset_raid_profile", lambda _profile: None),
-            on_configure_profile=self._configure_profile_action_overrides,
-            on_reset_all_profiles=getattr(self.controller, "reset_all_raid_profiles", lambda: None),
-            on_set_raid_on_restart=getattr(
-                self.controller,
-                "set_raid_on_restart_enabled",
-                lambda _enabled: None,
-            ),
-            on_set_performance_mode=getattr(
-                self.controller,
-                "set_performance_mode_enabled",
-                lambda _enabled: None,
-            ),
-            on_reauthorize=self._web_reauthorize_requested,
-            on_refresh_chats=self._web_refresh_chats_requested,
-            on_scan_senders=self._web_scan_senders_requested,
-            on_add_profile=self._web_add_profile_requested,
-            on_move_profile=self._web_move_profile_requested,
-            on_remove_profile=getattr(
-                self.controller,
-                "remove_raid_profile",
-                lambda _profile: None,
-            ),
-            on_capture_page_template=self._web_capture_page_template_requested,
-            on_test_page_template=self._web_test_page_template_requested,
-            on_capture_slot=self._capture_bot_action_slot,
-            on_test_slot=self.controller.test_bot_action_slot,
-            on_open_slot_presets=self._open_bot_action_slot_presets,
-            on_capture_slot_finish=lambda _slot_index: self._capture_slot_1_finish_template(),
-            on_test_enabled_slots=self._web_test_enabled_slots_requested,
-            on_capture_troubleshoot=self._capture_troubleshoot_template,
-            on_test_troubleshoot=self._test_troubleshoot_template,
-        )
-        root.addWidget(self.dashboard_web, 1)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self._wrap_page(self._build_dashboard_tab()))
         self.settings_page = SettingsPage(
             config=self.controller.config,
             available_profiles=self.available_profiles_loader(),
@@ -1327,6 +1161,7 @@ class MainWindow(QMainWindow):
 
         self.top_tabs.pageRequested.connect(self.stack.setCurrentIndex)
         self.stack.currentChanged.connect(self.top_tabs.set_active_page)
+        root.addWidget(self.stack, 1)
 
         # Keep self.tabs alias for any external code that references it
         self.tabs = self.stack
@@ -1350,53 +1185,55 @@ class MainWindow(QMainWindow):
     def _build_dashboard_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setSpacing(18)
-        layout.setContentsMargins(20, 20, 20, 28)
+        layout.setSpacing(14)
+        layout.setContentsMargins(12, 12, 12, 24)
 
-        layout.addWidget(self._build_dashboard_topbar())
-
-        hero_row = QHBoxLayout()
-        hero_row.setSpacing(18)
-        self.status_panel = self._build_raid_activity_panel()
-        self.command_execution_panel = self._build_command_execution_panel()
-        hero_row.addWidget(self.status_panel, 3)
-        hero_row.addWidget(self.command_execution_panel, 1)
-        layout.addLayout(hero_row)
+        self.status_panel = self._build_status_panel()
+        layout.addWidget(self.status_panel)
 
         self.profiles_panel = self._build_profiles_panel()
         layout.addWidget(self.profiles_panel)
+
+        self.metric_cards = [
+            self._build_metric_card(
+                "avg_raid_completion_time",
+                "AVG RAID COMPLETION TIME",
+                self.avg_raid_completion_time_label,
+            ),
+            self._build_metric_card(
+                "avg_raids_per_hour",
+                "AVG RAIDS PER HOUR",
+                self.average_raids_per_hour_label,
+            ),
+            self._build_metric_card(
+                "raids_completed",
+                "Raids Completed",
+                self.raids_completed_label,
+            ),
+            self._build_metric_card(
+                "raids_failed",
+                "Raids Failed",
+                self.raids_failed_label,
+            ),
+            self._build_metric_card(
+                "success_rate",
+                "Success Rate",
+                self.sidebar_success_rate_label,
+            ),
+            self._build_metric_card("uptime", "Uptime", self.sidebar_uptime_label),
+        ]
+        metrics_row = QHBoxLayout()
+        metrics_row.setSpacing(10)
+        for card in self.metric_cards:
+            metrics_row.addWidget(card)
+        layout.addLayout(metrics_row)
+
+        self.activity_panel = self._build_activity_panel()
+        self.error_panel = self._build_error_panel()
+        layout.addWidget(self.activity_panel)
+        layout.addWidget(self.error_panel)
         layout.addStretch()
         return widget
-
-    def _build_dashboard_topbar(self) -> QWidget:
-        topbar = QWidget()
-        topbar.setObjectName("dashboardTopbar")
-        layout = QHBoxLayout(topbar)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(16)
-
-        title_block = QWidget()
-        title_layout = QVBoxLayout(title_block)
-        title_layout.setContentsMargins(0, 0, 0, 0)
-        title_layout.setSpacing(3)
-        title = QLabel(APP_NAME)
-        title.setObjectName("dashboardAppTitle")
-        subtitle = QLabel("Navy soft sand surface")
-        subtitle.setObjectName("dashboardAppSubtitle")
-        title_layout.addWidget(title)
-        title_layout.addWidget(subtitle)
-        layout.addWidget(title_block, 1)
-
-        state_pill = QWidget()
-        state_pill.setObjectName("dashboardStatePill")
-        state_layout = QHBoxLayout(state_pill)
-        state_layout.setContentsMargins(12, 7, 12, 7)
-        state_layout.setSpacing(8)
-        state_layout.addWidget(self._bot_dot)
-        self.bot_state_label.setObjectName("dashboardBotState")
-        state_layout.addWidget(self.bot_state_label)
-        layout.addWidget(state_pill, 0, Qt.AlignmentFlag.AlignVCenter)
-        return topbar
 
     def _add_vertical_separator(self, layout: QHBoxLayout) -> None:
         sep = QFrame()
@@ -1404,33 +1241,42 @@ class MainWindow(QMainWindow):
         sep.setStyleSheet("background: #1e3252; max-width: 1px; border: none; margin: 6px 4px;")
         layout.addWidget(sep)
 
-    def _build_raid_activity_panel(self) -> QWidget:
-        panel, surface = self._build_panel("raidActivityPanel")
+    def _build_status_panel(self) -> QWidget:
+        panel, surface = self._build_panel("statusPanel")
         layout = QVBoxLayout(surface)
-        layout.setSpacing(16)
-        layout.setContentsMargins(22, 20, 22, 22)
-
-        header_layout = QHBoxLayout()
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 18, 20, 18)
+        header_row = QWidget()
+        header_row.setObjectName("statusHeaderRow")
+        header_layout = QHBoxLayout(header_row)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(12)
-        header_text = QWidget()
-        header_text_layout = QVBoxLayout(header_text)
-        header_text_layout.setContentsMargins(0, 0, 0, 0)
-        header_text_layout.setSpacing(8)
-        kicker = QLabel("Raid Activity")
-        kicker.setObjectName("dashboardKicker")
-        title = QLabel("Live raid throughput.")
-        title.setObjectName("dashboardHeroTitle")
-        copy = self._build_helper_label(
-            "A command-center view of completed and failed raids across the current session."
-        )
-        copy.setObjectName("dashboardHeroCopy")
-        header_text_layout.addWidget(kicker)
-        header_text_layout.addWidget(title)
-        header_text_layout.addWidget(copy)
-        header_layout.addWidget(header_text, 1)
+        header_layout.addWidget(self._build_section_title("System Status"))
         header_layout.addStretch()
-        layout.addLayout(header_layout)
+        header_buttons = QWidget()
+        header_buttons.setObjectName("statusHeaderButtons")
+        header_buttons_layout = QHBoxLayout(header_buttons)
+        header_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        header_buttons_layout.setSpacing(8)
+        header_buttons_layout.addWidget(self.start_button)
+        header_buttons_layout.addWidget(self.stop_button)
+        header_layout.addWidget(header_buttons, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(header_row)
+        layout.addWidget(self._build_divider())
+        content_row = QHBoxLayout()
+        content_row.setSpacing(18)
+
+        left_column = QWidget()
+        left_column.setObjectName("statusSummaryColumn")
+        left_layout = QVBoxLayout(left_column)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(12)
+        left_layout.addWidget(
+            self._build_helper_label("Monitor bot runtime and Telegram connectivity.")
+        )
+        left_layout.addWidget(self._build_status_summary_card())
+        left_layout.addStretch()
+        content_row.addWidget(left_column, 1)
 
         chart_card = QFrame()
         chart_card.setObjectName("raidActivityCard")
@@ -1451,88 +1297,8 @@ class MainWindow(QMainWindow):
         chart_header.addWidget(chart_subtitle)
         chart_layout.addLayout(chart_header)
         chart_layout.addWidget(self.raid_activity_chart)
-        layout.addWidget(chart_card)
-        return panel
-
-    def _build_command_execution_panel(self) -> QWidget:
-        panel, surface = self._build_panel("commandExecutionPanel")
-        layout = QVBoxLayout(surface)
-        layout.setSpacing(12)
-        layout.setContentsMargins(20, 18, 20, 18)
-
-        header_row = QHBoxLayout()
-        header_row.setContentsMargins(0, 0, 0, 0)
-        header_row.setSpacing(12)
-        title_block = QWidget()
-        title_layout = QVBoxLayout(title_block)
-        title_layout.setContentsMargins(0, 0, 0, 0)
-        title_layout.setSpacing(2)
-        kicker = QLabel("Command")
-        kicker.setObjectName("dashboardKicker")
-        title = QLabel("Execution")
-        title.setObjectName("dashboardPanelTitle")
-        title_layout.addWidget(kicker)
-        title_layout.addWidget(title)
-        header_row.addWidget(title_block, 1)
-        status_pill = QWidget()
-        status_pill.setObjectName("commandStatusPill")
-        status_layout = QHBoxLayout(status_pill)
-        status_layout.setContentsMargins(12, 6, 12, 6)
-        status_layout.setSpacing(8)
-        status_layout.addWidget(self._conn_dot)
-        self.connection_state_label.setObjectName("commandConnectionState")
-        status_layout.addWidget(self.connection_state_label)
-        header_row.addWidget(status_pill, 0, Qt.AlignmentFlag.AlignTop)
-        layout.addLayout(header_row)
-
-        button_stack = QWidget()
-        button_stack.setObjectName("commandButtonStack")
-        button_layout = QVBoxLayout(button_stack)
-        button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.setSpacing(10)
-        self.start_button.setText("Start")
-        self.stop_button.setText("Stop")
-        self.pause_queue_button = QPushButton("Pause queue after current action")
-        self.pause_queue_button.setProperty("dashboardActionButton", "true")
-        self.pause_queue_button.setProperty("variant", "secondary")
-        pause_handler = getattr(self.controller, "toggle_pause_resume", None)
-        if callable(pause_handler):
-            self.pause_queue_button.clicked.connect(pause_handler)
-        else:
-            self.pause_queue_button.setEnabled(False)
-        button_layout.addWidget(self.start_button)
-        button_layout.addWidget(self.pause_queue_button)
-        button_layout.addWidget(self.stop_button)
-        layout.addWidget(button_stack)
-
-        self.metric_cards = [
-            self._build_metric_card(
-                "raids_completed",
-                "Raids Completed",
-                self.raids_completed_label,
-            ),
-            self._build_metric_card(
-                "raids_failed",
-                "Raids Failed",
-                self.raids_failed_label,
-            ),
-            self._build_metric_card(
-                "success_rate",
-                "Success Rate",
-                self.sidebar_success_rate_label,
-            ),
-            self._build_metric_card("uptime", "Uptime", self.sidebar_uptime_label),
-        ]
-        metrics_grid_widget = QWidget()
-        metrics_grid_widget.setObjectName("commandMetricsGrid")
-        metrics_grid = QGridLayout(metrics_grid_widget)
-        metrics_grid.setContentsMargins(0, 4, 0, 0)
-        metrics_grid.setHorizontalSpacing(10)
-        metrics_grid.setVerticalSpacing(10)
-        for index, card in enumerate(self.metric_cards):
-            metrics_grid.addWidget(card, index // 2, index % 2)
-        layout.addWidget(metrics_grid_widget)
-        layout.addStretch()
+        content_row.addWidget(chart_card, 1)
+        layout.addLayout(content_row)
         return panel
 
     def _build_profiles_panel(self) -> QWidget:
@@ -1550,11 +1316,9 @@ class MainWindow(QMainWindow):
         self.restart_all_profiles_button = AttentionPulseButton("Restart All")
         self.restart_all_profiles_button.setProperty("dashboardActionButton", "true")
         self.restart_all_profiles_button.setMinimumWidth(112)
-        reset_all_handler = getattr(self.controller, "reset_all_raid_profiles", None)
-        if callable(reset_all_handler):
-            self.restart_all_profiles_button.clicked.connect(reset_all_handler)
-        else:
-            self.restart_all_profiles_button.setEnabled(False)
+        self.restart_all_profiles_button.clicked.connect(
+            self.controller.reset_all_raid_profiles
+        )
         header_layout.addWidget(
             self.restart_all_profiles_button,
             0,
@@ -1564,15 +1328,9 @@ class MainWindow(QMainWindow):
         self.restart_all_raid_checkbox.setChecked(
             bool(getattr(self.controller.config, "raid_on_restart_enabled", False))
         )
-        raid_on_restart_handler = getattr(
-            self.controller,
-            "set_raid_on_restart_enabled",
-            None,
+        self.restart_all_raid_checkbox.toggled.connect(
+            self.controller.set_raid_on_restart_enabled
         )
-        if callable(raid_on_restart_handler):
-            self.restart_all_raid_checkbox.toggled.connect(raid_on_restart_handler)
-        else:
-            self.restart_all_raid_checkbox.setEnabled(False)
         header_layout.addWidget(
             self.restart_all_raid_checkbox,
             0,
@@ -1592,8 +1350,6 @@ class MainWindow(QMainWindow):
         self.profile_cards_layout.setHorizontalSpacing(12)
         self.profile_cards_layout.setVerticalSpacing(12)
         layout.addWidget(self.profile_cards_container)
-        self.activity_panel = self._build_activity_panel()
-        layout.addWidget(self.activity_panel)
         return panel
 
     def _build_metric_card(
@@ -1663,7 +1419,6 @@ class MainWindow(QMainWindow):
 
     def _build_activity_panel(self) -> QWidget:
         panel, surface = self._build_panel("activityPanel")
-        panel.setProperty("dashboardRecentActivity", "true")
         layout = QVBoxLayout(surface)
         layout.setSpacing(12)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -1764,560 +1519,6 @@ class MainWindow(QMainWindow):
         div.setStyleSheet("background: #1e3252; max-height: 1px; border: none;")
         return div
 
-    def _refresh_web_dashboard(self) -> None:
-        dashboard = getattr(self, "dashboard_web", None)
-        if dashboard is None:
-            return
-        dashboard.set_state(self._build_web_dashboard_state())
-
-    def _build_web_dashboard_state(self) -> dict[str, object]:
-        series = list(getattr(self.raid_activity_chart, "_series", []) or [])
-        if not series:
-            series = [0] * 24
-        chart_max = max(max(series), 1)
-        chart_top = self._chart_axis_top(chart_max)
-        return {
-            "appVersion": APP_VERSION_BADGE,
-            "botStateText": self._web_bot_state_text(),
-            "botVariant": self._web_bot_state_variant(),
-            "connectionStateText": _format_status_caption(self.connection_state),
-            "connectionVariant": _connection_state_variant(self.connection_state),
-            "canStart": self.bot_state not in {"starting", "running"},
-            "canStop": self.bot_state in {"starting", "running"},
-            "canPause": callable(getattr(self.controller, "toggle_pause_resume", None))
-            and self.bot_state in {"starting", "running"},
-            "pauseButtonText": self._web_pause_button_text(),
-            "canRaidNow": self._web_can_raid_now(),
-            "globalRaidNowText": self._web_global_raid_now_text(),
-            "raidOnRestart": bool(
-                getattr(self.controller.config, "raid_on_restart_enabled", False)
-            ),
-            "performanceMode": bool(
-                getattr(self.controller.config, "performance_mode_enabled", False)
-            ),
-            "metrics": [
-                {"label": "Raids Completed", "value": self.raids_completed_label.text()},
-                {"label": "Raids Failed", "value": self.raids_failed_label.text()},
-                {
-                    "label": "Success Rate",
-                    "value": self.sidebar_success_rate_label.text(),
-                },
-                {"label": "Uptime", "value": self.sidebar_uptime_label.text()},
-            ],
-            "chartSeries": series,
-            "chartMax": chart_top,
-            "chartAxis": self._chart_axis_labels(chart_top),
-            "chartTimes": self._chart_time_labels(len(series)),
-            "lastRaidText": self._web_last_raid_text(),
-            "profiles": self._web_profile_cards(),
-            "activity": self._web_activity_entries(),
-            "settings": self._web_settings_state(),
-            "botActions": self._web_bot_actions_state(),
-            "troubleshoot": self._web_troubleshoot_state(),
-        }
-
-    def _web_bot_state_text(self) -> str:
-        if self._automation_queue_state == "suspended":
-            return "Paused"
-        if self._automation_queue_state == "paused":
-            return "Stopped"
-        return _format_status_caption(self.bot_state)
-
-    def _web_bot_state_variant(self) -> str:
-        if self._automation_queue_state == "suspended":
-            return "warning"
-        if self._automation_queue_state == "paused":
-            return "error"
-        return _bot_state_variant(self.bot_state)
-
-    def _web_pause_button_text(self) -> str:
-        if self._automation_queue_state in {"paused", "suspended"}:
-            return "Resume"
-        return "Pause"
-
-    def _web_can_raid_now(self) -> bool:
-        return (
-            self.connection_state == "connected"
-            and self.bot_state in {"starting", "running"}
-            and self._first_raid_now_profile_directory() is not None
-        )
-
-    def _web_global_raid_now_text(self) -> str:
-        if self._raid_now_started_profile_directory is not None:
-            return "Raiding..."
-        if self._raid_now_pending_profile_directory is not None:
-            return "Fetching..."
-        return "Raid NOW!"
-
-    def _web_last_raid_text(self) -> str:
-        value = getattr(self._latest_state, "last_successful_raid_open_at", None)
-        if value in {None, ""}:
-            successful_runs = self._recent_successful_profile_runs(self._latest_state)
-            if not successful_runs:
-                return "--"
-            timestamp = max(timestamp for timestamp, _duration in successful_runs)
-        else:
-            try:
-                timestamp = (
-                    value
-                    if isinstance(value, datetime)
-                    else datetime.fromisoformat(str(value))
-                )
-            except (TypeError, ValueError):
-                return str(value)
-        elapsed = max(datetime.now() - timestamp, timedelta())
-        total_seconds = int(elapsed.total_seconds())
-        if total_seconds < 60:
-            return f"{total_seconds:02d}s"
-        total_minutes = total_seconds // 60
-        if total_minutes < 60:
-            return f"{total_minutes}m"
-        return f"{total_minutes // 60}h"
-
-    def _chart_axis_top(self, maximum_value: int) -> int:
-        maximum_value = max(1, int(maximum_value))
-        if maximum_value <= 4:
-            return 4
-        if maximum_value <= 10:
-            return 10
-        magnitude = 10 ** (len(str(maximum_value)) - 1)
-        return ((maximum_value + magnitude - 1) // magnitude) * magnitude
-
-    def _chart_axis_labels(self, chart_top: int) -> list[int]:
-        return [
-            int(round(chart_top * 1.0)),
-            int(round(chart_top * 0.75)),
-            int(round(chart_top * 0.5)),
-            int(round(chart_top * 0.25)),
-            0,
-        ]
-
-    def _chart_time_labels(self, series_length: int) -> list[str]:
-        now = datetime.now()
-        start = now - timedelta(hours=24 if series_length > 24 else 23)
-        return [
-            (start + timedelta(hours=offset)).strftime("%H:%M")
-            for offset in (0, 6, 12, 18)
-        ] + ["NOW"]
-
-    def _web_profile_cards(self) -> list[dict[str, object]]:
-        states_by_directory = {
-            ps.profile_directory: ps
-            for ps in getattr(self._latest_state, "raid_profile_states", ())
-        }
-        cards: list[dict[str, object]] = []
-        for profile in self.controller.config.raid_profiles:
-            state = states_by_directory.get(
-                profile.profile_directory,
-                RaidProfileState(
-                    profile_directory=profile.profile_directory,
-                    label=profile.label,
-                    status="green",
-                    last_error=None,
-                ),
-            )
-            profile_status, dot_variant, status_text = self._web_profile_status(
-                profile,
-                state,
-            )
-            cards.append(
-                {
-                    "directory": profile.profile_directory,
-                    "label": state.label,
-                    "statusClass": profile_status,
-                    "dotVariant": dot_variant,
-                    "statusText": status_text,
-                    "chips": self._web_profile_chips(profile, profile_status),
-                    "warmup": bool(getattr(profile, "warmup_enabled", False)),
-                    "warmupProgress": self._web_warmup_progress(profile),
-                    "error": state.last_error if profile_status == "failed" else None,
-                    "raidNowFeedback": self._raid_now_feedback_by_profile.get(
-                        profile.profile_directory,
-                        "",
-                    ),
-                    "canRaidNow": self._web_can_raid_now()
-                    and profile_status not in {"failed", "stopped"},
-                    "raidNowText": self._web_profile_raid_now_text(
-                        profile.profile_directory
-                    ),
-                }
-            )
-        return cards
-
-    def _web_profile_status(
-        self,
-        profile: RaidProfileConfig,
-        state: RaidProfileState,
-    ) -> tuple[str, str, str]:
-        overlay_state = self._raid_profile_execution_overlay_state()
-        if overlay_state == "stopped":
-            return "stopped", "error", "Stopped"
-        if overlay_state == "paused":
-            return "paused", "warning", "Paused"
-        if state.status == "red" and raid_profile_has_any_actions_enabled(profile):
-            return "failed", "error", "Needs attention"
-        if bool(getattr(profile, "warmup_enabled", False)):
-            return "warmup", "warmup", "Warmup"
-        if not raid_profile_has_any_actions_enabled(profile):
-            return "paused", "warning", "Paused"
-        return "healthy", "running", "Healthy"
-
-    def _web_profile_chips(
-        self,
-        profile: RaidProfileConfig,
-        profile_status: str,
-    ) -> list[dict[str, str]]:
-        if profile_status == "failed":
-            return [
-                {"label": "Window close failed", "tone": ""},
-                {"label": "Ready to reset", "tone": ""},
-            ]
-        if bool(getattr(profile, "warmup_enabled", False)):
-            return [
-                {"label": "Warm me up baby", "tone": "warm"},
-                {"label": "Random real action", "tone": ""},
-            ]
-        chips = []
-        for field_name, label, _slot_key in raid_profile_action_specs():
-            if bool(getattr(profile, field_name, True)):
-                chips.append({"label": label, "tone": "live"})
-        if not chips:
-            chips.append({"label": "Paused", "tone": ""})
-        return chips
-
-    def _web_warmup_progress(self, profile: RaidProfileConfig) -> int:
-        warmup_completed_cycles = max(
-            0,
-            min(int(getattr(profile, "warmup_completed_cycles", 0) or 0), 20),
-        )
-        warmup_cycle_index = max(
-            0,
-            min(int(getattr(profile, "warmup_cycle_index", 0) or 0), 2),
-        )
-        completed_warmup_raids = min(
-            warmup_completed_cycles * 3 + warmup_cycle_index,
-            60,
-        )
-        return int(round((completed_warmup_raids / 60) * 100))
-
-    def _web_profile_raid_now_text(self, profile_directory: str) -> str:
-        if profile_directory == self._raid_now_started_profile_directory:
-            return "Raiding..."
-        if profile_directory == self._raid_now_pending_profile_directory:
-            return "Fetching..."
-        return "Raid NOW!"
-
-    def _web_activity_entries(self) -> list[dict[str, str]]:
-        entries = []
-        for entry in reversed(list(getattr(self._latest_state, "activity", []) or [])):
-            if not self._should_display_activity(entry.action):
-                continue
-            reason_text = self._activity_reason_text(
-                entry.action,
-                getattr(entry, "reason", None),
-            )
-            detail_parts = []
-            if getattr(entry, "url", None):
-                detail_parts.append(str(entry.url))
-            if reason_text:
-                detail_parts.append(reason_text)
-            entries.append(
-                {
-                    "profile": getattr(entry, "profile_directory", None) or "System",
-                    "title": self._format_activity_action(entry.action),
-                    "detail": " | ".join(detail_parts)
-                    or self._activity_badge(entry.action),
-                    "time": self._format_activity_timestamp(entry.timestamp),
-                    "tone": self._web_activity_tone(entry.action),
-                }
-            )
-        return entries
-
-    def _web_activity_tone(self, action: str) -> str:
-        tone = self._activity_tone(action)
-        if tone == "success":
-            return ""
-        if tone == "warning":
-            return "warning"
-        if tone == "error":
-            return "error"
-        return "neutral"
-
-    def _first_raid_now_profile_directory(self) -> str | None:
-        states_by_directory = {
-            ps.profile_directory: ps
-            for ps in getattr(self._latest_state, "raid_profile_states", ())
-        }
-        for profile in self.controller.config.raid_profiles:
-            if not bool(getattr(profile, "enabled", True)):
-                continue
-            state = states_by_directory.get(profile.profile_directory)
-            if state is not None and state.status == "red":
-                continue
-            return profile.profile_directory
-        return None
-
-    def _web_settings_state(self) -> dict[str, object]:
-        config = self.controller.config
-        states_by_directory = {
-            ps.profile_directory: ps
-            for ps in getattr(self._latest_state, "raid_profile_states", ())
-        }
-        allowed_chat_ids = list(getattr(config, "whitelisted_chat_ids", []) or [])
-        chats = []
-        chats_by_id = {int(chat.chat_id): chat for chat in self._available_chats_cache}
-        for chat_id in allowed_chat_ids:
-            chat = chats_by_id.get(int(chat_id))
-            chats.append(
-                {
-                    "id": str(chat_id),
-                    "label": getattr(chat, "title", None) or str(chat_id),
-                }
-            )
-        sender_entries = list(
-            getattr(config, "allowed_sender_entries", ())
-            or tuple(str(sender_id) for sender_id in getattr(config, "allowed_sender_ids", ()))
-        )
-        return {
-            "sessionStatus": self.settings_page.session_status_label.text(),
-            "connection": _format_status_caption(self.connection_state),
-            "pauseHotkey": getattr(config, "pause_resume_hotkey", None),
-            "apiId": str(getattr(config, "telegram_api_id", "")),
-            "apiHashMasked": "*" * min(max(len(str(getattr(config, "telegram_api_hash", ""))), 8), 20),
-            "allowedChats": chats,
-            "allowedSenders": sender_entries,
-            "raidProfiles": [
-                {
-                    "directory": profile.profile_directory,
-                    "label": profile.label,
-                    "status": self._web_profile_status(
-                        profile,
-                        states_by_directory.get(
-                            profile.profile_directory,
-                            RaidProfileState(
-                                profile_directory=profile.profile_directory,
-                                label=profile.label,
-                                status="green",
-                                last_error=None,
-                            ),
-                        ),
-                    )[2],
-                }
-                for profile in getattr(config, "raid_profiles", ())
-            ],
-        }
-
-    def _web_bot_actions_state(self) -> dict[str, object]:
-        config = self.controller.config
-        slots = list(getattr(config, "bot_action_slots", ()) or ())
-        slot_names = {
-            "slot_1_r": "Reply",
-            "slot_2_l": "Like",
-            "slot_3_r": "Repost",
-            "slot_4_b": "Bookmark",
-        }
-        slot_delays = {
-            "slot_1_r": f"{getattr(config, 'slot_1_finish_delay_seconds', 0)}s",
-            "slot_2_l": "0.25s",
-            "slot_3_r": "0.25s",
-            "slot_4_b": "0.25s",
-        }
-        first_slot = slots[0] if slots else None
-        presets = list(getattr(first_slot, "presets", ()) or ())
-        return {
-            "pageTemplates": {
-                "page_ready": self._web_template_state(
-                    "Page Ready",
-                    getattr(config, "page_ready_template_path", None),
-                ),
-                "page_exit": self._web_template_state(
-                    "Page Exit",
-                    getattr(config, "page_exit_template_path", None),
-                ),
-            },
-            "slots": [
-                {
-                    "name": slot_names.get(getattr(slot, "key", ""), str(getattr(slot, "label", "?"))),
-                    "enabled": bool(getattr(slot, "enabled", False)),
-                    "path": self._web_path_text(getattr(slot, "template_path", None)),
-                    "saved": self._web_template_saved(getattr(slot, "template_path", None)),
-                    "imageSrc": self._web_template_image_src(
-                        getattr(slot, "template_path", None)
-                    ),
-                    "delay": slot_delays.get(getattr(slot, "key", ""), "0.25s"),
-                }
-                for slot in slots
-            ],
-            "presetCount": len(presets),
-            "presets": [
-                {
-                    "label": f"Preset {index + 1}",
-                    "detail": "Image + text"
-                    if getattr(preset, "image_path", None) is not None
-                    else "Text only",
-                }
-                for index, preset in enumerate(presets)
-            ],
-            "finishTemplatePath": self._web_path_text(
-                getattr(first_slot, "finish_template_path", None)
-                if first_slot is not None
-                else None
-            ),
-            "finishTemplateSaved": self._web_template_saved(
-                getattr(first_slot, "finish_template_path", None)
-                if first_slot is not None
-                else None
-            ),
-            "finishTemplateImageSrc": self._web_template_image_src(
-                getattr(first_slot, "finish_template_path", None)
-                if first_slot is not None
-                else None
-            ),
-        }
-
-    def _web_troubleshoot_state(self) -> dict[str, object]:
-        return {
-            "cldf": [
-                self._web_template_state(
-                    f"CLDF {index + 1}",
-                    self._troubleshoot_template_path("cldf", index),
-                )
-                for index in range(3)
-            ],
-            "black_box": [
-                self._web_template_state(
-                    "Black Box",
-                    self._troubleshoot_template_path("black_box", 0),
-                )
-            ],
-        }
-
-    def _web_template_state(
-        self,
-        label: str,
-        path: Path | str | None,
-    ) -> dict[str, object]:
-        return {
-            "label": label,
-            "path": self._web_path_text(path),
-            "saved": self._web_template_saved(path),
-            "imageSrc": self._web_template_image_src(path),
-        }
-
-    def _web_path_text(self, path: Path | str | None) -> str | None:
-        if path is None:
-            return None
-        return str(path)
-
-    def _web_template_saved(self, path: Path | str | None) -> bool:
-        if path is None:
-            return False
-        try:
-            return Path(path).exists()
-        except OSError:
-            return False
-
-    def _web_template_image_src(self, path: Path | str | None) -> str | None:
-        if path is None:
-            return None
-        try:
-            template_path = Path(path)
-            if not template_path.exists():
-                return None
-            mime_type = mimetypes.guess_type(str(template_path))[0] or "image/png"
-            encoded = base64.b64encode(template_path.read_bytes()).decode("ascii")
-            return f"data:{mime_type};base64,{encoded}"
-        except OSError:
-            return None
-
-    def _web_reauthorize_requested(self) -> None:
-        handler = getattr(self.controller, "reauthorize_session", None)
-        if callable(handler):
-            handler()
-            return
-        self._show_bot_actions_error("Reauthorize is not available in this build.")
-
-    def _web_refresh_chats_requested(self) -> None:
-        self._available_chats_cache = list(self.available_chats_loader())
-        self.settings_page.set_available_chats(self._available_chats_cache)
-        self._refresh_web_dashboard()
-
-    def _web_scan_senders_requested(self) -> None:
-        chat_ids = list(getattr(self.controller.config, "whitelisted_chat_ids", []) or [])
-        try:
-            candidates = list(self.controller.infer_recent_sender_candidates(chat_ids))
-        except Exception as exc:
-            self.settings_page.show_error(str(exc))
-            return
-        if not candidates:
-            self.settings_page.show_error("No recent sender candidates found.")
-            return
-        selected_entries = [
-            str(entry).strip()
-            for entry in self.sender_candidate_picker(candidates)
-            if str(entry).strip()
-        ]
-        if not selected_entries:
-            return
-        self.settings_page.append_allowed_sender_entries(selected_entries)
-        self.settings_page.show_success("Sender scan complete.")
-        self._refresh_web_dashboard()
-
-    def _web_add_profile_requested(self) -> None:
-        self._refresh_available_profiles_for_settings()
-        configured_directories = {
-            profile.profile_directory for profile in self.controller.config.raid_profiles
-        }
-        for profile in self.available_profiles_loader():
-            directory = (
-                profile.directory_name if isinstance(profile, ChromeProfile) else str(profile)
-            )
-            label = profile.label if isinstance(profile, ChromeProfile) else directory
-            if directory in configured_directories:
-                continue
-            self.controller.add_raid_profile(directory, label)
-            return
-        self.settings_page.show_error("No unused Chrome profile found.")
-
-    def _web_move_profile_requested(self, profile_directory: str, direction: str) -> None:
-        if not profile_directory:
-            return
-        self.controller.move_raid_profile(profile_directory, direction)
-
-    def _web_capture_page_template_requested(self, template_key: str) -> None:
-        if template_key == "page_exit":
-            self._capture_page_exit_template()
-            return
-        self._capture_page_ready_template()
-
-    def _web_test_page_template_requested(self, template_key: str) -> None:
-        if template_key == "page_exit":
-            self.controller.test_troubleshoot_template(
-                "page_exit",
-                0,
-                self.controller.config.page_exit_template_path,
-            )
-            return
-        self.controller.test_troubleshoot_template(
-            "page_ready",
-            0,
-            self.controller.config.page_ready_template_path,
-        )
-
-    def _web_test_enabled_slots_requested(self) -> None:
-        for index, slot in enumerate(self.controller.config.bot_action_slots):
-            if bool(getattr(slot, "enabled", False)):
-                self.controller.test_bot_action_slot(index)
-                return
-        self._show_bot_actions_error("No enabled bot action slots to test.")
-
-    def _handle_web_raid_now_requested(self) -> None:
-        profile_directory = self._first_raid_now_profile_directory()
-        if profile_directory is None:
-            self.controller.errorRaised.emit("No healthy raid profile is available")
-            return
-        self._handle_raid_now_requested(profile_directory)
-
     # ── Controller signals ────────────────────────────────────────────────────
 
     def _connect_controller_signals(self) -> None:
@@ -2340,7 +1541,6 @@ class MainWindow(QMainWindow):
         self._refresh_displayed_bot_state()
         self._sync_dashboard_action_buttons()
         self._refresh_dashboard_metrics()
-        self._refresh_web_dashboard()
 
     def _refresh_displayed_bot_state(self) -> None:
         if self._automation_queue_state == "suspended":
@@ -2366,25 +1566,18 @@ class MainWindow(QMainWindow):
             _apply_variant(label, variant)
         _apply_variant(self._conn_dot, variant)
         self._update_raid_now_buttons_enabled_state()
-        self._refresh_web_dashboard()
 
     def _handle_controller_error(self, message: str) -> None:
         self.last_error_label.setText(message)
         self._show_bot_actions_error(message)
         pending_profile_directory = self._raid_now_pending_profile_directory
-        started_profile_directory = self._raid_now_started_profile_directory
-        feedback_profile_directory = pending_profile_directory or started_profile_directory
-        if feedback_profile_directory is None:
-            self._refresh_web_dashboard()
+        if pending_profile_directory is None or self._raid_now_started_profile_directory is not None:
             return
-        card = self.raid_profile_cards.get(feedback_profile_directory)
+        card = self.raid_profile_cards.get(pending_profile_directory)
         if card is not None:
             card.reset_raid_now_button()
             card.show_raid_now_feedback(message)
-        self._raid_now_feedback_by_profile[feedback_profile_directory] = str(message)
         self._raid_now_pending_profile_directory = None
-        self._raid_now_started_profile_directory = None
-        self._refresh_web_dashboard()
 
     def _set_button_variant(self, button: QPushButton, variant: str) -> None:
         if button.property("variant") == variant:
@@ -2400,22 +1593,8 @@ class MainWindow(QMainWindow):
             self._set_button_variant(self.stop_button, "secondary")
             return
         self._set_button_variant(self.start_button, "secondary")
-        self.start_button.set_pulse_enabled(not self._performance_mode_enabled())
+        self.start_button.set_pulse_enabled(True)
         self._set_button_variant(self.stop_button, "danger")
-
-    def _performance_mode_enabled(self) -> bool:
-        return bool(getattr(self.controller.config, "performance_mode_enabled", False))
-
-    def _sync_performance_mode(self) -> None:
-        enabled = self._performance_mode_enabled()
-        self.setProperty("performanceMode", enabled)
-        for button in (
-            getattr(self, "start_button", None),
-            getattr(self, "restart_all_profiles_button", None),
-        ):
-            if hasattr(button, "set_pulse_enabled"):
-                button.set_pulse_enabled(not enabled)
-        self._sync_dashboard_action_buttons()
 
     def _apply_state(
         self, state: DesktopAppState, *, include_activity: bool = False
@@ -2446,7 +1625,6 @@ class MainWindow(QMainWindow):
         self._sync_raid_profile_cards(self.controller.config, state)
         if include_activity:
             self._populate_activity_list(state.activity)
-        self._refresh_web_dashboard()
 
     def _apply_stats_state(self, state: DesktopAppState) -> None:
         self._apply_state(state, include_activity=False)
@@ -2454,10 +1632,7 @@ class MainWindow(QMainWindow):
     def _append_activity_entry(self, entry) -> None:
         if not self._should_display_activity(entry.action):
             return
-        if hasattr(self._latest_state, "activity"):
-            self._latest_state.activity.append(entry)
         self._insert_activity_entry(entry, at_top=True)
-        self._refresh_web_dashboard()
 
     def _format_activity(self, entry) -> str:
         timestamp = entry.timestamp
@@ -3356,7 +2531,6 @@ class MainWindow(QMainWindow):
                 self._bot_actions_last_error_text = None
                 self._bot_actions_current_slot_text = None
                 self._render_bot_actions_status()
-            self._refresh_web_dashboard()
         except Exception as exc:
             self._show_bot_actions_error(str(exc))
 
@@ -3386,39 +2560,29 @@ class MainWindow(QMainWindow):
 
     def _capture_slot_1_finish_template(self) -> None:
         dialog = self._slot_1_presets_dialog
-        current_slot = self.controller.config.bot_action_slots[0]
-        existing_finish_path = (
-            dialog.finish_template_path
-            if dialog is not None
-            else current_slot.finish_template_path
-        )
+        if dialog is None:
+            return
         try:
             finish_template_path = self.slot_capture_service.capture_to_path(
                 Path("bot_actions/slot_1_r_finish.png"),
-                existing_path=existing_finish_path,
+                existing_path=dialog.finish_template_path,
             )
-            if dialog is not None:
-                dialog.finish_template_path = finish_template_path
-                dialog.finish_image_status_label.setText(
-                    str(finish_template_path)
-                    if finish_template_path is not None
-                    else "No finish image"
-                )
-                updated_slot = dialog.build_updated_slot()
-                presets = updated_slot.presets
-                updated_finish_template_path = updated_slot.finish_template_path
-            else:
-                presets = current_slot.presets
-                updated_finish_template_path = finish_template_path
+            dialog.finish_template_path = finish_template_path
+            dialog.finish_image_status_label.setText(
+                str(finish_template_path)
+                if finish_template_path is not None
+                else "No finish image"
+            )
+            updated_slot = dialog.build_updated_slot()
             self.controller.set_bot_action_slot_1_presets(
-                presets=presets,
-                finish_template_path=updated_finish_template_path,
+                presets=updated_slot.presets,
+                finish_template_path=updated_slot.finish_template_path,
             )
             refreshed_slots = list(self.controller.config.bot_action_slots)
             refreshed_slots[0] = replace(
                 refreshed_slots[0],
-                presets=presets,
-                finish_template_path=updated_finish_template_path,
+                presets=updated_slot.presets,
+                finish_template_path=updated_slot.finish_template_path,
             )
             self.bot_actions_page.set_slots(tuple(refreshed_slots))
             if finish_template_path is not None:
@@ -3426,7 +2590,6 @@ class MainWindow(QMainWindow):
                 self._bot_actions_last_error_text = None
                 self._bot_actions_current_slot_text = None
                 self._render_bot_actions_status()
-            self._refresh_web_dashboard()
         except Exception as exc:
             self._show_bot_actions_error(str(exc))
 
@@ -3472,9 +2635,7 @@ class MainWindow(QMainWindow):
         self.bot_actions_page.set_slot_1_finish_delay_seconds(
             config.slot_1_finish_delay_seconds
         )
-        self._sync_performance_mode()
         self._sync_raid_profile_cards(config, self._latest_state)
-        self._refresh_web_dashboard()
 
     def _sync_raid_profile_cards(self, config, state: DesktopAppState) -> None:
         for card in self._raid_profile_card_widgets:
@@ -3522,13 +2683,11 @@ class MainWindow(QMainWindow):
     def _handle_raid_now_requested(self, profile_directory: str) -> None:
         self._raid_now_pending_profile_directory = str(profile_directory)
         self._raid_now_started_profile_directory = None
-        self._raid_now_feedback_by_profile.pop(str(profile_directory), None)
         card = self.raid_profile_cards.get(profile_directory)
         if card is not None:
             card.clear_raid_now_feedback()
             card.set_raid_now_busy("Fetching...")
         self.controller.run_raid_now_for_profile(profile_directory)
-        self._refresh_web_dashboard()
 
     def _reflow_raid_profile_cards(self) -> None:
         if not hasattr(self, "profile_cards_layout"):
@@ -3567,7 +2726,6 @@ class MainWindow(QMainWindow):
         self._update_bot_actions_queue_state(self._automation_queue_state)
         self._refresh_displayed_bot_state()
         self._refresh_raid_profile_execution_overlays()
-        self._refresh_web_dashboard()
 
     def _raid_profile_execution_overlay_state(self) -> str:
         if self._automation_queue_state == "suspended":
@@ -3603,8 +2761,6 @@ class MainWindow(QMainWindow):
                 card = self.raid_profile_cards.get(event_profile_directory)
                 if card is not None:
                     card.set_raid_now_busy("Raiding...")
-                    card.clear_raid_now_feedback()
-                self._raid_now_feedback_by_profile.pop(event_profile_directory, None)
             elif event_type in {"automation_run_succeeded", "automation_run_failed"} and (
                 event_profile_directory == self._raid_now_pending_profile_directory
                 or event_profile_directory == self._raid_now_started_profile_directory
@@ -3614,21 +2770,6 @@ class MainWindow(QMainWindow):
                     card.reset_raid_now_button()
                     if event_type == "automation_run_succeeded":
                         card.clear_raid_now_feedback()
-                    else:
-                        message = str(
-                            event.get("message")
-                            or event.get("reason")
-                            or "Raid NOW failed"
-                        )
-                        card.show_raid_now_feedback(message)
-                if event_type == "automation_run_succeeded":
-                    self._raid_now_feedback_by_profile.pop(event_profile_directory, None)
-                else:
-                    self._raid_now_feedback_by_profile[event_profile_directory] = str(
-                        event.get("message")
-                        or event.get("reason")
-                        or "Raid NOW failed"
-                    )
                 self._raid_now_pending_profile_directory = None
                 self._raid_now_started_profile_directory = None
         if event_type in {"slot_test_started", "slot_test_succeeded", "slot_test_failed"}:
@@ -3659,7 +2800,6 @@ class MainWindow(QMainWindow):
                 event.get("step_index")
             )
         self._render_bot_actions_status()
-        self._refresh_web_dashboard()
 
     def _snapshot_bot_actions_run_slots(self) -> None:
         slots = getattr(self.controller.config, "bot_action_slots", ())
@@ -3686,8 +2826,7 @@ class MainWindow(QMainWindow):
         return f"Slot {slot_index + 1} ({slot_label})"
 
     def _format_troubleshoot_name(self, group_key: str, item_index: int) -> str:
-        display_group = str(group_key).replace("_", " ").upper()
-        return f"Troubleshoot {display_group} {item_index + 1}"
+        return f"Troubleshoot {str(group_key).upper()} {item_index + 1}"
 
     def _capture_base_dir(self) -> Path:
         return Path(

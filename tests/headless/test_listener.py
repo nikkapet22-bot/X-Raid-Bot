@@ -84,3 +84,39 @@ def test_headless_listener_ignores_non_matching_messages(tmp_path) -> None:
 
     assert result.kind == "sender_rejected"
     assert seen_jobs == []
+
+
+def test_headless_listener_builds_real_listener_from_shared_credentials(tmp_path) -> None:
+    from raidbot.headless.config import HeadlessConfigStore
+    from raidbot.headless.listener import HeadlessRaidListenerAdapter
+
+    captured_kwargs = {}
+
+    class FakeListener:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+    DesktopStorage(tmp_path).save_config(
+        DesktopAppConfig(
+            telegram_api_id=123456,
+            telegram_api_hash="api-hash",
+            telegram_session_path=Path("sessions/raid.session"),
+            telegram_phone_number="+15555550123",
+            whitelisted_chat_ids=[1001],
+            allowed_sender_ids=[424242],
+            allowed_sender_entries=("@raidar",),
+            chrome_profile_directory="Default",
+        )
+    )
+    store = HeadlessConfigStore(tmp_path)
+    listener = HeadlessRaidListenerAdapter(
+        shared_config=store.load_shared_config(),
+        on_job=lambda _job: None,
+        listener_factory=FakeListener,
+    )
+
+    listener.build_listener()
+
+    assert captured_kwargs["api_id"] == 123456
+    assert captured_kwargs["api_hash"] == "api-hash"
+    assert captured_kwargs["session_path"].endswith("sessions\\raid.session")

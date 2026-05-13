@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QDialog,
+    QFrame,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -29,6 +30,7 @@ from raidbot.desktop.main_window import (
     MainWindow,
     RaidActivityChart,
 )
+from raidbot.desktop.web_dashboard import DashboardWebView
 from raidbot.desktop.models import (
     ActivityEntry,
     BotActionPreset,
@@ -169,6 +171,7 @@ class FakeController(QObject):
         self.reset_raid_profile_calls = []
         self.reset_all_raid_profiles_calls = 0
         self.set_raid_on_restart_enabled_calls = []
+        self.set_performance_mode_enabled_calls = []
         self.toggle_pause_resume_calls = 0
         self.dashboard_metric_reset_requests = []
         self.sender_candidate_scan_calls = []
@@ -422,6 +425,10 @@ class FakeController(QObject):
         self.set_raid_on_restart_enabled_calls.append(bool(enabled))
         self.apply_config(replace(self.config, raid_on_restart_enabled=bool(enabled)))
 
+    def set_performance_mode_enabled(self, enabled: bool) -> None:
+        self.set_performance_mode_enabled_calls.append(bool(enabled))
+        self.apply_config(replace(self.config, performance_mode_enabled=bool(enabled)))
+
     def toggle_pause_resume(self) -> None:
         self.toggle_pause_resume_calls += 1
 
@@ -625,7 +632,14 @@ class FakeHotkeyRegistrar:
 
 
 def test_main_window_initializes_from_persisted_state_and_updates_from_signals(qtbot) -> None:
-    base_time = datetime.now().replace(second=0, microsecond=0)
+    now = datetime.now()
+    base_time = (
+        now + timedelta(hours=1 if now.minute > 30 else 0)
+    ).replace(
+        minute=30,
+        second=0,
+        microsecond=0,
+    )
     storage = FakeStorage(
         state=DesktopAppState(
             bot_state=BotRuntimeState.stopped,
@@ -867,47 +881,35 @@ def test_main_window_dashboard_exposes_metric_cards_and_panels(qtbot) -> None:
     window = build_window(FakeController(), FakeStorage())
     qtbot.addWidget(window)
 
-    tab_texts = [
-        button.text()
+    tab_labels = [
+        button.accessibleName()
         for button in window.findChildren(QPushButton, "shellTabButton")
     ]
 
     assert window.findChild(QWidget, "sidebar") is None
-    assert tab_texts == ["Dashboard", "Settings", "Bot Actions"]
+    assert tab_labels == ["Dashboard", "Settings", "Bot Actions"]
     assert window.findChild(QWidget, "commandStatusRow") is None
-    assert window.status_panel.objectName() == "statusPanel"
-    status_summary_column = window.status_panel.findChild(QWidget, "statusSummaryColumn")
-    status_header_row = window.status_panel.findChild(QWidget, "statusHeaderRow")
-    status_header_buttons = window.status_panel.findChild(QWidget, "statusHeaderButtons")
-    assert status_summary_column is not None
-    assert status_header_row is not None
-    assert window.status_panel.findChild(QWidget, "statusHeaderInline") is None
-    assert status_header_buttons is not None
-    assert status_header_buttons.parentWidget() is status_header_row
-    assert window.start_button.parentWidget() is status_header_buttons
-    assert window.stop_button.parentWidget() is status_header_buttons
-    status_summary_card = window.status_panel.findChild(QWidget, "statusSummaryCard")
-    assert status_summary_card is not None
-    assert len(status_summary_card.findChildren(QLabel, "statusDot")) == 2
-    first_status_row = status_summary_card.findChildren(QWidget, "statusSummaryRow")[0]
-    first_status_row_layout = first_status_row.layout()
-    assert first_status_row_layout is not None
-    assert first_status_row_layout.itemAt(2).widget() is window.bot_state_label
-    assert first_status_row_layout.itemAt(3).widget() is window._bot_dot
-    assert len(window.metric_cards) == 6
+    assert window.status_panel.objectName() == "raidActivityPanel"
+    assert window.command_execution_panel.objectName() == "commandExecutionPanel"
+    assert window.status_panel.findChild(QFrame, "raidActivityCard") is not None
+    assert window.command_execution_panel.findChild(QWidget, "commandButtonStack") is not None
+    command_metrics_grid = window.command_execution_panel.findChild(
+        QWidget, "commandMetricsGrid"
+    )
+    assert command_metrics_grid is not None
+    assert window.start_button.parentWidget().objectName() == "commandButtonStack"
+    assert window.stop_button.parentWidget().objectName() == "commandButtonStack"
+    assert len(window.metric_cards) == 4
     assert [label.text() for label in window.metric_title_labels] == [
-        "AVG RAID COMPLETION TIME",
-        "AVG RAIDS PER HOUR",
         "Raids Completed",
         "Raids Failed",
         "Success Rate",
         "Uptime",
     ]
     assert window.activity_panel.objectName() == "activityPanel"
-    assert window.error_panel.objectName() == "errorPanel"
+    assert window.activity_panel.property("dashboardRecentActivity") == "true"
     assert window.status_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
     assert window.activity_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
-    assert window.error_panel.findChild(type(window.status_panel), SECTION_OBJECT_NAME) is not None
     assert window.status_panel.findChild(QLabel, "raidActivitySubtitle").text() == (
         "Last 24 Hours | Smoothed Rate"
     )
@@ -919,7 +921,7 @@ def test_main_window_metric_cards_expose_reset_buttons(qtbot) -> None:
 
     reset_buttons = window.findChildren(QPushButton, "metricResetButton")
 
-    assert len(reset_buttons) == 6
+    assert len(reset_buttons) == 4
     assert all(button.text() == "" for button in reset_buttons)
     assert all(button.icon().isNull() is False for button in reset_buttons)
     assert all(button.height() == 18 for button in reset_buttons)
@@ -927,8 +929,6 @@ def test_main_window_metric_cards_expose_reset_buttons(qtbot) -> None:
     assert all(button.iconSize().width() == 13 for button in reset_buttons)
     assert all(button.iconSize().height() == 13 for button in reset_buttons)
     assert set(window.metric_reset_buttons) == {
-        "avg_raid_completion_time",
-        "avg_raids_per_hour",
         "raids_completed",
         "raids_failed",
         "success_rate",
@@ -953,20 +953,13 @@ def test_main_window_status_panel_header_contains_action_buttons(qtbot) -> None:
     window = build_window(FakeController(), FakeStorage())
     qtbot.addWidget(window)
 
-    status_summary_column = window.status_panel.findChild(QWidget, "statusSummaryColumn")
-    status_header_row = window.status_panel.findChild(QWidget, "statusHeaderRow")
-    status_header_buttons = window.status_panel.findChild(QWidget, "statusHeaderButtons")
+    command_button_stack = window.command_execution_panel.findChild(
+        QWidget, "commandButtonStack"
+    )
 
-    assert status_summary_column is not None
-    assert status_header_row is not None
-    assert window.status_panel.findChild(QWidget, "statusHeaderInline") is None
-    assert status_header_buttons is not None
-    assert status_header_buttons.parentWidget() is status_header_row
-    assert window.start_button.parentWidget() is status_header_buttons
-    assert window.stop_button.parentWidget() is status_header_buttons
-    header_layout = status_header_row.layout()
-    assert header_layout is not None
-    assert header_layout.itemAt(2).widget() is status_header_buttons
+    assert command_button_stack is not None
+    assert window.start_button.parentWidget() is command_button_stack
+    assert window.stop_button.parentWidget() is command_button_stack
 
 
 def test_main_window_formats_zero_dashboard_metrics_without_em_dash(qtbot) -> None:
@@ -1399,7 +1392,11 @@ def test_build_eased_cumulative_path_handles_steep_growth_without_reversing() ->
 
 
 def test_main_window_uses_current_automation_activity_for_dashboard_metrics(qtbot) -> None:
-    base_time = datetime.now().replace(second=0, microsecond=0)
+    base_time = (datetime.now() - timedelta(hours=1)).replace(
+        minute=40,
+        second=0,
+        microsecond=0,
+    )
     state = DesktopAppState(
         raids_completed=14,
         raids_failed=1,
@@ -1489,7 +1486,11 @@ def test_main_window_uses_current_automation_activity_for_dashboard_metrics(qtbo
 
 
 def test_main_window_dashboard_metrics_respect_reset_baselines(qtbot) -> None:
-    current_time = datetime.now().replace(second=0, microsecond=0)
+    current_time = (datetime.now() - timedelta(hours=1)).replace(
+        minute=30,
+        second=0,
+        microsecond=0,
+    )
     state = DesktopAppState(
         raids_completed=14,
         raids_failed=3,
@@ -1558,7 +1559,7 @@ def test_main_window_dashboard_metrics_respect_reset_baselines(qtbot) -> None:
             raids_failed_offset=1,
             success_rate_completed_offset=12,
             success_rate_failed_offset=1,
-            uptime_reset_at=current_time - timedelta(minutes=5),
+            uptime_reset_at=datetime.now() - timedelta(minutes=5),
         ),
     )
     window = build_window(FakeController(), FakeStorage(state=state))
@@ -1647,7 +1648,7 @@ def test_main_window_top_tabs_switch_pages(qtbot) -> None:
 
     top_tabs = window.findChildren(QPushButton, "shellTabButton")
 
-    assert [button.text() for button in top_tabs] == [
+    assert [button.accessibleName() for button in top_tabs] == [
         "Dashboard",
         "Settings",
         "Bot Actions",
@@ -1665,14 +1666,14 @@ def test_main_window_dashboard_uses_tighter_left_gutter(qtbot) -> None:
     window = build_window(FakeController(), FakeStorage())
     qtbot.addWidget(window)
 
-    dashboard_scroll = window.stack.widget(0)
-    assert isinstance(dashboard_scroll, QScrollArea)
-    dashboard_page = dashboard_scroll.widget()
+    dashboard_tab = window.dashboard_web
+    assert isinstance(dashboard_tab, DashboardWebView)
+    dashboard_page = window._native_dashboard_shadow
     assert dashboard_page is not None
     dashboard_layout = dashboard_page.layout()
     assert dashboard_layout is not None
 
-    assert dashboard_layout.contentsMargins().left() == 12
+    assert dashboard_layout.contentsMargins().left() == 20
 
 
 def test_activity_feed_row_does_not_flash_reason_label_as_top_level_window(qtbot) -> None:
@@ -2168,6 +2169,42 @@ def test_main_window_slot_1_presets_dialog_capture_updates_finish_preview(qtbot)
     assert dialog.finish_image_status_label.text() == str(finish_path)
 
 
+def test_main_window_slot_1_finish_capture_works_without_presets_dialog(qtbot) -> None:
+    previous_finish_path = Path("bot_actions/old_finish.png")
+    finish_path = Path("bot_actions/slot_1_r_finish.png")
+    preset = BotActionPreset(id="preset-1", text="gm")
+    default_slots = build_config().bot_action_slots
+    config = build_config(
+        bot_action_slots=(
+            replace(
+                default_slots[0],
+                presets=(preset,),
+                finish_template_path=previous_finish_path,
+            ),
+            *default_slots[1:],
+        )
+    )
+    capture_service = FakeSlotCaptureService(finish_path)
+    controller = FakeController(config=config)
+    window = build_window(
+        controller,
+        FakeStorage(config=config),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+
+    assert window._slot_1_presets_dialog is None
+
+    window._capture_slot_1_finish_template()
+
+    assert capture_service.capture_to_path_calls == [
+        (Path("bot_actions/slot_1_r_finish.png"), previous_finish_path)
+    ]
+    assert controller.bot_action_slot_1_presets_updates[-1] == ((preset,), finish_path)
+    assert controller.config.bot_action_slots[0].finish_template_path == finish_path
+    assert window.bot_actions_page.status_label.text() == "Status: Slot 1 (R): finish image saved"
+
+
 def test_main_window_slot_1_finish_capture_refreshes_card_preview_when_same_path_is_overwritten(
     qtbot,
     tmp_path,
@@ -2398,12 +2435,10 @@ def test_main_window_wraps_long_tabs_in_scroll_areas(qtbot) -> None:
     window = build_window(FakeController(), FakeStorage())
     qtbot.addWidget(window)
 
-    dashboard_tab = window.tabs.widget(0)
     settings_tab = window.tabs.widget(1)
     bot_actions_tab = window.tabs.widget(2)
 
-    assert isinstance(dashboard_tab, QScrollArea)
-    assert dashboard_tab.widgetResizable() is True
+    assert isinstance(window.dashboard_web, DashboardWebView)
     assert settings_tab.widget() is window.settings_page
     assert bot_actions_tab.widget() is window.bot_actions_page
 
@@ -2787,13 +2822,179 @@ def test_main_window_wraps_raid_profile_cards_across_rows(qtbot) -> None:
     window = build_window(controller, storage)
     qtbot.addWidget(window)
 
-    with qtbot.waitExposed(window):
-        window.resize(920, 860)
-        window.show()
+    web_state = window._build_web_dashboard_state()
 
-    row_positions = {card.y() for card in window.raid_profile_cards.values()}
+    assert len(web_state["profiles"]) == 8
+    assert [profile["label"] for profile in web_state["profiles"]][:2] == [
+        "Profile 1",
+        "Profile 2",
+    ]
 
-    assert len(row_positions) > 1
+
+def test_main_window_web_bot_actions_state_embeds_capture_previews_and_preset_count(
+    qtbot, tmp_path
+) -> None:
+    page_ready_path = tmp_path / "page-ready.png"
+    page_exit_path = tmp_path / "page-exit.png"
+    slot_path = tmp_path / "slot-1.png"
+    finish_path = tmp_path / "finish.png"
+    page_ready_path.write_bytes(b"ready")
+    page_exit_path.write_bytes(b"exit")
+    slot_path.write_bytes(b"slot")
+    finish_path.write_bytes(b"finish")
+    default_slots = build_config().bot_action_slots
+    config = build_config(
+        page_ready_template_path=page_ready_path,
+        page_exit_template_path=page_exit_path,
+        bot_action_slots=(
+            replace(
+                default_slots[0],
+                template_path=slot_path,
+                presets=(
+                    BotActionPreset(id="preset-1", text="gm"),
+                    BotActionPreset(id="preset-2", text="wagmi"),
+                ),
+                finish_template_path=finish_path,
+            ),
+            *default_slots[1:],
+        ),
+    )
+    controller = FakeController(config=config)
+    window = build_window(controller, FakeStorage(config=controller.config))
+    qtbot.addWidget(window)
+
+    bot_actions = window._build_web_dashboard_state()["botActions"]
+
+    assert bot_actions["pageTemplates"]["page_ready"]["imageSrc"].startswith(
+        "data:image/png;base64,"
+    )
+    assert bot_actions["pageTemplates"]["page_exit"]["imageSrc"].startswith(
+        "data:image/png;base64,"
+    )
+    assert bot_actions["slots"][0]["imageSrc"].startswith("data:image/png;base64,")
+    assert bot_actions["finishTemplateImageSrc"].startswith("data:image/png;base64,")
+    assert bot_actions["presetCount"] == 2
+    assert bot_actions["finishTemplateSaved"] is True
+
+
+def test_main_window_web_troubleshoot_state_embeds_cldf_capture_previews(
+    qtbot, tmp_path
+) -> None:
+    image_path = tmp_path / "bot_actions" / "troubleshoot" / "cldf_1.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_solid_image(image_path, "#00ff00")
+    controller = FakeController()
+    window = build_window(controller, FakeStorage(config=controller.config, base_dir=tmp_path))
+    qtbot.addWidget(window)
+
+    troubleshoot = window._build_web_dashboard_state()["troubleshoot"]
+
+    assert troubleshoot["cldf"][0]["imageSrc"].startswith("data:image/png;base64,")
+    assert troubleshoot["cldf"][0]["saved"] is True
+
+
+def test_main_window_web_troubleshoot_state_embeds_black_box_capture_preview(
+    qtbot, tmp_path
+) -> None:
+    image_path = tmp_path / "bot_actions" / "troubleshoot" / "black_box_1.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_solid_image(image_path, "#00ff00")
+    controller = FakeController()
+    window = build_window(controller, FakeStorage(config=controller.config, base_dir=tmp_path))
+    qtbot.addWidget(window)
+
+    troubleshoot = window._build_web_dashboard_state()["troubleshoot"]
+
+    assert troubleshoot["black_box"][0]["imageSrc"].startswith("data:image/png;base64,")
+    assert troubleshoot["black_box"][0]["saved"] is True
+
+
+def test_main_window_web_recent_activity_exposes_full_stored_history(qtbot) -> None:
+    base_time = datetime.now().replace(second=0, microsecond=0)
+    activity = [
+        ActivityEntry(
+            timestamp=base_time - timedelta(minutes=11 - index),
+            action="page_ready",
+            url=f"https://x.com/i/status/{index}",
+            reason="page ready",
+        )
+        for index in range(12)
+    ]
+    controller = FakeController()
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(activity=activity),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    entries = window._build_web_dashboard_state()["activity"]
+
+    assert len(entries) == 12
+    assert entries[0]["detail"] == "https://x.com/i/status/11"
+    assert entries[-1]["detail"] == "https://x.com/i/status/0"
+
+
+def test_main_window_web_state_exposes_performance_mode(qtbot) -> None:
+    controller = FakeController(config=build_config(performance_mode_enabled=True))
+    window = build_window(controller, FakeStorage(config=controller.config))
+    qtbot.addWidget(window)
+
+    web_state = window._build_web_dashboard_state()
+
+    assert web_state["performanceMode"] is True
+
+
+def test_main_window_web_state_exposes_app_version(qtbot) -> None:
+    from raidbot.desktop.branding import APP_VERSION_BADGE
+
+    controller = FakeController()
+    window = build_window(controller, FakeStorage(config=controller.config))
+    qtbot.addWidget(window)
+
+    web_state = window._build_web_dashboard_state()
+
+    assert web_state["appVersion"] == APP_VERSION_BADGE
+
+
+def test_main_window_applies_performance_mode_to_attention_buttons(qtbot) -> None:
+    controller = FakeController(config=build_config(performance_mode_enabled=True))
+    window = build_window(controller, FakeStorage(config=controller.config))
+    qtbot.addWidget(window)
+
+    assert window.start_button.pulse_enabled() is False
+    assert window.restart_all_profiles_button.pulse_enabled() is False
+
+    controller.set_performance_mode_enabled(False)
+
+    assert window.start_button.pulse_enabled() is True
+    assert window.restart_all_profiles_button.pulse_enabled() is True
+
+
+def test_main_window_refreshes_web_dashboard_after_cldf_capture(
+    qtbot, tmp_path, monkeypatch
+) -> None:
+    captured_path = tmp_path / "bot_actions" / "troubleshoot" / "cldf_1.png"
+    captured_path.parent.mkdir(parents=True, exist_ok=True)
+    capture_service = OverwritingSlotCaptureService(captured_path, ["#00ff00"])
+    controller = FakeController()
+    window = build_window(
+        controller,
+        FakeStorage(config=controller.config, base_dir=tmp_path),
+        slot_capture_service=capture_service,
+    )
+    qtbot.addWidget(window)
+    refreshed_states = []
+    monkeypatch.setattr(window.dashboard_web, "set_state", refreshed_states.append)
+
+    qtbot.mouseClick(
+        window.bot_actions_page.cldf_boxes[0].capture_button,
+        Qt.MouseButton.LeftButton,
+    )
+
+    assert refreshed_states
+    troubleshoot = refreshed_states[-1]["troubleshoot"]
+    assert troubleshoot["cldf"][0]["imageSrc"].startswith("data:image/png;base64,")
 
 
 def test_main_window_profile_card_click_toggles_failure_reason(qtbot) -> None:
@@ -3118,6 +3319,35 @@ def test_main_window_profile_card_raid_now_button_shows_busy_feedback_and_error(
     assert card.raid_now_button.isEnabled() is True
     assert card.raid_now_feedback_label.text() == "No recent valid raid found"
     assert card.raid_now_feedback_label.isHidden() is False
+
+
+def test_main_window_web_profile_card_exposes_raid_now_feedback_after_error(
+    qtbot,
+) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "green", None),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+    controller.connectionStateChanged.emit("connected")
+
+    window._handle_raid_now_requested("Profile 3")
+    controller.errorRaised.emit("Automation already running")
+
+    web_profile = window._build_web_dashboard_state()["profiles"][0]
+
+    assert web_profile["raidNowFeedback"] == "Automation already running"
 
 
 def test_main_window_profile_card_raid_now_button_transitions_to_raiding_until_completion(
@@ -3604,6 +3834,7 @@ def test_main_window_buttons_reflect_running_state_variants(qtbot) -> None:
 
     assert window.start_button.property("variant") == "primary"
     assert window.stop_button.property("variant") == "secondary"
+    window.controller.botStateChanged.emit("stopped")
 
 
 def test_running_window_minimizes_to_tray_on_minimize(qtbot) -> None:
@@ -4051,9 +4282,10 @@ def test_main_window_uses_top_tab_shell(qtbot) -> None:
 
     assert window.findChild(QWidget, "sidebar") is None
     assert len(window.findChildren(QPushButton, "shellTabButton")) == 3
+    assert window.findChild(QPushButton, "shellAccountButton") is not None
     assert getattr(window, "stack", None) is not None
     assert window.stack.widget(0).findChild(QLabel, "pageTitle") is None
-    assert window.top_tabs.layout().contentsMargins().top() == 12
+    assert window.top_tabs.layout().contentsMargins().top() == 22
     session_stamp = window.top_tabs.findChild(QLabel, "shellSessionStamp")
     assert session_stamp is not None
     assert session_stamp.text().startswith("v")

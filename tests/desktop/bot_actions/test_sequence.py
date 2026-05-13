@@ -59,7 +59,7 @@ def test_build_bot_action_sequence_places_slot_1_last() -> None:
     assert [step.max_click_attempts for step in sequence.steps] == [2, 1]
     assert all(step.post_click_settle_ms == 250 for step in sequence.steps)
     assert [step.pre_confirm_clicks for step in sequence.steps] == [2, 1]
-    assert [step.inter_click_delay_ms for step in sequence.steps] == [500, 500]
+    assert [step.inter_click_delay_ms for step in sequence.steps] == [250, 500]
     assert result.warnings == ()
 
 
@@ -108,6 +108,26 @@ def test_build_bot_action_sequence_chooses_random_slot_1_preset() -> None:
     assert step.preset_image_path == Path("captures/reply.png")
     assert step.finish_template_path == Path("captures/finish.png")
     assert result.warnings == ()
+
+
+def test_build_bot_action_sequence_assigns_slot_1_obstruction_template() -> None:
+    result = build_bot_action_sequence(
+        (
+            BotActionSlotConfig(
+                key="slot_1_r",
+                label="R",
+                enabled=True,
+                template_path=Path("captures/r.png"),
+                finish_template_path=Path("captures/finish.png"),
+                presets=(BotActionPreset(id="preset-1", text="gm"),),
+            ),
+        ),
+        slot_1_obstruction_template_path=Path("captures/black-box.png"),
+    )
+
+    step = result.sequence.steps[0]
+
+    assert step.obstruction_template_path == Path("captures/black-box.png")
 
 
 def test_build_bot_action_sequence_skips_slot_1_when_no_presets_exist() -> None:

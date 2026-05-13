@@ -15,6 +15,7 @@ class HeadlessConfigStore:
         self.desktop_storage = DesktopStorage(self.base_dir)
         self.headless_dir = self.base_dir / "headless"
         self.settings_path = self.headless_dir / "config.json"
+        self.auth_state_path = self.headless_dir / "auth-state.json"
         self.playwright_user_data_dir = self.headless_dir / "playwright-profile"
 
     def load_shared_config(self) -> DesktopAppConfig:
@@ -35,6 +36,7 @@ class HeadlessConfigStore:
 
     def _settings_to_data(self, settings: HeadlessSettings) -> dict[str, Any]:
         return {
+            "chrome_profile_directory": settings.chrome_profile_directory,
             "enabled_actions": {
                 "reply": settings.enabled_actions.reply,
                 "like": settings.enabled_actions.like,
@@ -51,5 +53,11 @@ class HeadlessConfigStore:
                 like=bool(enabled_actions.get("like", True)),
                 repost=bool(enabled_actions.get("repost", True)),
                 bookmark=bool(enabled_actions.get("bookmark", True)),
-            )
+            ),
+            chrome_profile_directory=(
+                str(data.get("chrome_profile_directory")).strip()
+                if data.get("chrome_profile_directory") is not None
+                and str(data.get("chrome_profile_directory")).strip()
+                else None
+            ),
         )

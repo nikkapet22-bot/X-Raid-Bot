@@ -69,6 +69,7 @@ def _build_slot_step(
     *,
     max_search_seconds: float,
     slot_1_finish_delay_seconds: int = 2,
+    slot_1_obstruction_template_path=None,
     choose_preset=choice,
     allow_scroll_retry: bool = False,
 ) -> AutomationStep:
@@ -88,13 +89,16 @@ def _build_slot_step(
         max_click_attempts=2 if is_slot_3 else 1,
         post_click_settle_ms=250,
         pre_confirm_clicks=2 if is_slot_3 else 1,
-        inter_click_delay_ms=500,
+        inter_click_delay_ms=250 if is_slot_3 else 500,
         preset_text=slot_1_preset.text if slot_1_preset is not None else None,
         preset_image_path=(
             slot_1_preset.image_path if slot_1_preset is not None else None
         ),
         finish_template_path=(
             slot.finish_template_path if slot_1_preset is not None else None
+        ),
+        obstruction_template_path=(
+            slot_1_obstruction_template_path if slot_1_preset is not None else None
         ),
         finish_delay_seconds=(
             float(slot_1_finish_delay_seconds)
@@ -108,6 +112,7 @@ def build_bot_action_sequence(
     slots: Sequence[BotActionSlotConfig],
     *,
     slot_1_finish_delay_seconds: int = 2,
+    slot_1_obstruction_template_path=None,
     choose_preset=choice,
     reorder_slot_1_last: bool = True,
 ) -> BotActionSequenceBuildResult:
@@ -150,6 +155,7 @@ def build_bot_action_sequence(
                 slot,
                 max_search_seconds=BOT_ACTION_STEP_SEARCH_SECONDS,
                 slot_1_finish_delay_seconds=slot_1_finish_delay_seconds,
+                slot_1_obstruction_template_path=slot_1_obstruction_template_path,
                 choose_preset=choose_preset,
                 allow_scroll_retry=True,
             )
@@ -168,6 +174,7 @@ def build_slot_test_sequence(
     slot: BotActionSlotConfig,
     *,
     slot_1_finish_delay_seconds: int = 2,
+    slot_1_obstruction_template_path=None,
     choose_preset=choice,
 ) -> AutomationSequence:
     return AutomationSequence(
@@ -178,6 +185,7 @@ def build_slot_test_sequence(
                 slot,
                 max_search_seconds=SLOT_TEST_STEP_SEARCH_SECONDS,
                 slot_1_finish_delay_seconds=slot_1_finish_delay_seconds,
+                slot_1_obstruction_template_path=slot_1_obstruction_template_path,
                 choose_preset=choose_preset,
                 allow_scroll_retry=True,
             )

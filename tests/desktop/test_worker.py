@@ -189,6 +189,36 @@ class FakeWindowManager:
         return WindowInteractionOutcome(success=True, window=window)
 
 
+def _call_run_sequence_callback(
+    callback,
+    sequence: AutomationSequence,
+    selected_window_handle: int | None,
+    *,
+    start_step_index: int,
+    start_step_phase: str | None,
+):
+    try:
+        signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        return callback(
+            sequence,
+            selected_window_handle,
+            start_step_index=start_step_index,
+            start_step_phase=start_step_phase,
+        )
+    parameters = signature.parameters
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    kwargs = {}
+    if accepts_kwargs or "start_step_index" in parameters:
+        kwargs["start_step_index"] = start_step_index
+    if accepts_kwargs or "start_step_phase" in parameters:
+        kwargs["start_step_phase"] = start_step_phase
+    return callback(sequence, selected_window_handle, **kwargs)
+
+
 class FakeAutomationRuntime:
     def __init__(
         self,
@@ -222,6 +252,7 @@ class FakeAutomationRuntime:
         self.run_call_options: list[tuple[str, int | None, int, str | None]] = []
         self.run_sequences: list[AutomationSequence] = []
         self.wait_for_step_calls: list[tuple[Path, int | None]] = []
+        self.wait_for_step_search_seconds: list[float] = []
         self.request_stop_calls = 0
         self._active_handle: int | None = None
         self._pending_window_close_polls: dict[int, int] = {}
@@ -315,6 +346,7 @@ class FakeAutomationRuntime:
     ):
         _ = require_interactable_window
         self.wait_for_step_calls.append((step.template_path, selected_window_handle))
+        self.wait_for_step_search_seconds.append(float(step.max_search_seconds))
         if self.wait_for_step_results:
             return self.wait_for_step_results.pop(0)
         if self.wait_for_step_result is not None:
@@ -340,7 +372,8 @@ class FakeAutomationRuntime:
         self.run_sequences.append(sequence)
         self._active_runner = SimpleNamespace(input_driver=self.input_driver)
         if self.on_run_sequence is not None:
-            result = self.on_run_sequence(
+            result = _call_run_sequence_callback(
+                self.on_run_sequence,
                 sequence,
                 selected_window_handle,
                 start_step_index=start_step_index,
@@ -369,6 +402,7 @@ class MultiProfileRuntime:
         self.closed_window_handles: list[int] = []
         self._active_handle: int | None = None
         self.wait_for_step_calls: list[tuple[Path | None, int | None]] = []
+        self.wait_for_step_search_seconds: list[float] = []
         self.wait_for_step_results: list[RunResult] = []
 
         def _input_init(instance) -> None:
@@ -412,11 +446,20 @@ class MultiProfileRuntime:
     ):
         _ = require_interactable_window
         self.wait_for_step_calls.append((step.template_path, selected_window_handle))
+        self.wait_for_step_search_seconds.append(float(step.max_search_seconds))
         if self.wait_for_step_results:
             return self.wait_for_step_results.pop(0)
         return RunResult(status="dry_run_match_found", window_handle=selected_window_handle)
 
-    def run_sequence(self, sequence: AutomationSequence, selected_window_handle: int | None):
+    def run_sequence(
+        self,
+        sequence: AutomationSequence,
+        selected_window_handle: int | None,
+        *,
+        start_step_index: int = 0,
+        start_step_phase: str | None = None,
+    ):
+        _ = (start_step_index, start_step_phase)
         self.run_calls.append((sequence.id, selected_window_handle))
         self.run_sequences.append(sequence)
         self._active_handle = selected_window_handle
@@ -481,6 +524,8 @@ class FakeChromeOpener:
         self.profile_directory = kwargs.get("profile_directory")
         self.open_calls: list[tuple[str, int | None]] = []
         self.open_raid_window_calls: list[str] = []
+        self.spawn_runtime = kwargs.get("spawn_runtime")
+        self.spawn_handle = kwargs.get("spawn_handle")
 
     def open(self, url: str, *, window_handle: int | None = None) -> OpenedRaidContext:
         self.open_calls.append((url, window_handle))
@@ -493,6 +538,20 @@ class FakeChromeOpener:
 
     def open_raid_window(self, url: str) -> OpenedRaidContext:
         self.open_raid_window_calls.append(url)
+        runtime = getattr(self, "spawn_runtime", None)
+        handle = getattr(self, "spawn_handle", None)
+        if runtime is not None and handle is not None:
+            window = WindowInfo(
+                handle=int(handle),
+                title=f"{self.profile_directory or 'Profile'} - Chrome",
+                bounds=(0, 0, 100, 100),
+                last_focused_at=float(handle),
+            )
+            window_manager = getattr(runtime, "window_manager", None)
+            if window_manager is not None and hasattr(window_manager, "windows"):
+                window_manager.windows.append(window)
+            elif hasattr(runtime, "windows"):
+                runtime.windows.append(window)
         return OpenedRaidContext(
             normalized_url=url,
             opened_at=1.0,
@@ -798,6 +857,26 @@ def write_troubleshoot_templates(
     return tuple(paths)
 
 
+def test_worker_builds_slot_1_sequence_with_black_box_troubleshoot_template(tmp_path) -> None:
+    events: list[dict] = []
+    storage = FakeStorage(base_dir=tmp_path)
+    write_troubleshoot_templates(tmp_path, group_key="black_box", indexes=(0,))
+    config = build_config(bot_action_slots=build_bot_action_slots())
+    worker, *_ = build_worker(
+        storage,
+        events,
+        datetime(2026, 3, 27, 10, 0, 0),
+        config=config,
+    )
+
+    build_result = worker._build_active_bot_action_sequence_result()
+
+    assert build_result is not None
+    assert build_result.sequence.steps[0].obstruction_template_path == (
+        tmp_path / "bot_actions" / "troubleshoot" / "black_box_1.png"
+    )
+
+
 def test_worker_records_sender_rejected_detection() -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 27, 10, 0, 0)
@@ -900,16 +979,11 @@ def test_worker_queues_detected_links_and_processes_fifo(tmp_path) -> None:
     def runtime_factory(_emit_event):
         nonlocal runtime
         runtime = FakeAutomationRuntime(
-            windows=[
-                WindowInfo(
-                    handle=7,
-                    title="RaidBot - Chrome",
-                    bounds=(0, 0, 100, 100),
-                    last_focused_at=1.0,
-                )
-                ],
+            windows=[],
             on_run_sequence=lambda sequence, handle: run_callback(sequence, handle),
         )
+        opener.spawn_runtime = runtime
+        opener.spawn_handle = 7
         return runtime
 
     worker, _created_services, _pipelines, _listeners = build_worker(
@@ -998,6 +1072,7 @@ def test_worker_executes_multi_profile_success_in_order(tmp_path) -> None:
         automation_runtime_factory=lambda _emit_event: runtime,
         chrome_opener_factory=chrome_opener_factory,
         profile_shuffle=lambda profiles: None,
+        action_shuffle=lambda slots: None,
     )
     worker._service = worker._build_service(worker.config)
 
@@ -1062,6 +1137,7 @@ def test_worker_continues_after_profile_failure_and_marks_profile_red(tmp_path) 
         automation_runtime_factory=lambda _emit_event: runtime,
         chrome_opener_factory=chrome_opener_factory,
         profile_shuffle=lambda profiles: None,
+        action_shuffle=lambda slots: None,
     )
     worker._service = worker._build_service(worker.config)
 
@@ -1148,6 +1224,93 @@ def test_worker_continues_after_profile_failure_and_marks_profile_red(tmp_path) 
     assert [event["profile_directory"] for event in succeeded] == [
         "Default",
         "Profile 9",
+    ]
+
+
+def test_worker_stops_remaining_profiles_when_window_not_focusable_blocks_current_raid(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 4, 19, 14, 31, 36)
+    storage = FakeStorage(base_dir=tmp_path)
+    runtime = FakeAutomationRuntime(windows=[], focus_success=False)
+    created_openers: list[FakeChromeOpener] = []
+    handle_by_profile = {
+        "Default": 41,
+        "Profile 1": 43,
+        "Profile 2": 45,
+        "Profile 3": 47,
+        "Profile 5": 49,
+    }
+
+    class FocusFailingChromeOpener(FakeChromeOpener):
+        def open_raid_window(self, url: str) -> OpenedRaidContext:
+            context = super().open_raid_window(url)
+            handle = handle_by_profile[self.profile_directory]
+            runtime.window_manager.windows.append(
+                WindowInfo(
+                    handle=handle,
+                    title=f"{self.profile_directory} - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=float(handle),
+                )
+            )
+            return context
+
+    def chrome_opener_factory(**kwargs):
+        opener = FocusFailingChromeOpener(**kwargs)
+        created_openers.append(opener)
+        return opener
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            chrome_profile_directory="Default",
+            auto_run_enabled=True,
+            raid_profiles=(
+                RaidProfileConfig("Default", "Default", True),
+                RaidProfileConfig("Profile 1", "test1", True),
+                RaidProfileConfig("Profile 2", "test2", True),
+                RaidProfileConfig("Profile 3", "test3", True),
+                RaidProfileConfig("Profile 5", "test4", True),
+            ),
+            bot_action_slots=build_bot_action_slots(),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=lambda _emit_event: runtime,
+        chrome_opener_factory=chrome_opener_factory,
+        profile_shuffle=lambda profiles: None,
+        action_shuffle=lambda slots: None,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/999")
+    )
+
+    assert outcome.kind == "job_detected"
+    assert [opener.profile_directory for opener in created_openers] == ["Default"]
+    assert [opener.open_raid_window_calls for opener in created_openers] == [
+        ["https://x.com/i/status/999"]
+    ]
+    assert runtime.window_manager.maximized_handles == [41]
+    assert runtime.window_manager.focus_attempted_handles == [41]
+    assert worker.state.raid_profile_states == (
+        RaidProfileState("Default", "Default", "red", "window_not_focusable"),
+        RaidProfileState("Profile 1", "test1", "green", None),
+        RaidProfileState("Profile 2", "test2", "green", None),
+        RaidProfileState("Profile 3", "test3", "green", None),
+        RaidProfileState("Profile 5", "test4", "green", None),
+    )
+    assert [entry.action for entry in worker.state.activity] == [
+        "raid_detected",
+        "auto_queued",
+        "automation_failed",
     ]
 
 
@@ -1266,9 +1429,63 @@ def test_worker_action_order_randomized(tmp_path) -> None:
     assert outcome.kind == "job_detected"
     assert runtime is not None
     assert [step.name for step in runtime.run_sequences[0].steps] == [
+        "slot_3_r",
         "slot_2_l",
         "slot_1_r",
+    ]
+
+
+def test_worker_randomizes_non_reply_actions_then_appends_reply_last(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 5, 11, 12, 0, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime = FakeAutomationRuntime(
+        windows=[
+            WindowInfo(
+                handle=21,
+                title="RaidBot - Chrome",
+                bounds=(0, 0, 100, 100),
+                last_focused_at=1.0,
+            )
+        ]
+    )
+    shuffled_slot_orders: list[list[str]] = []
+
+    def reverse_non_reply_actions(slots) -> None:
+        shuffled_slot_orders.append([slot.key for slot in slots])
+        slots.reverse()
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            bot_action_slots=build_bot_action_slots(
+                enabled_keys=("slot_1_r", "slot_2_l", "slot_3_r", "slot_4_b"),
+            ),
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=lambda _emit_event: runtime,
+        chrome_opener_factory=lambda **kwargs: opener,
+        action_shuffle=reverse_non_reply_actions,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/654"))
+
+    assert outcome.kind == "job_detected"
+    assert shuffled_slot_orders == [["slot_2_l", "slot_3_r", "slot_4_b"]]
+    assert [step.name for step in runtime.run_sequences[0].steps] == [
+        "slot_4_b",
         "slot_3_r",
+        "slot_2_l",
+        "slot_1_r",
     ]
 
 
@@ -1833,6 +2050,7 @@ def test_worker_marks_profile_red_when_profile_run_raises_exception(tmp_path) ->
         automation_runtime_factory=lambda _emit_event: runtime,
         chrome_opener_factory=chrome_opener_factory,
         profile_shuffle=lambda profiles: None,
+        action_shuffle=lambda slots: None,
     )
     worker._service = worker._build_service(worker.config)
 
@@ -1906,6 +2124,7 @@ def test_worker_filters_profile_slot_mask_and_skips_all_off_profile(tmp_path) ->
         automation_runtime_factory=lambda _emit_event: runtime,
         chrome_opener_factory=chrome_opener_factory,
         profile_shuffle=lambda profiles: None,
+        action_shuffle=lambda slots: None,
     )
     worker._service = worker._build_service(worker.config)
 
@@ -2308,16 +2527,11 @@ def test_worker_continues_pending_queue_when_only_hidden_auto_run_flag_is_disabl
     def runtime_factory(_emit_event):
         nonlocal runtime
         runtime = FakeAutomationRuntime(
-            windows=[
-                WindowInfo(
-                    handle=11,
-                    title="RaidBot - Chrome",
-                    bounds=(0, 0, 100, 100),
-                    last_focused_at=1.0,
-                )
-            ],
+            windows=[],
             on_run_sequence=lambda sequence, handle: run_callback(sequence, handle),
         )
+        opener.spawn_runtime = runtime
+        opener.spawn_handle = 11
         return runtime
 
     worker, _created_services, _pipelines, _listeners = build_worker(
@@ -2418,16 +2632,11 @@ def test_worker_clear_automation_queue_preserves_running_state(tmp_path) -> None
             return None
 
         runtime = FakeAutomationRuntime(
-            windows=[
-                WindowInfo(
-                    handle=7,
-                    title="RaidBot - Chrome",
-                    bounds=(0, 0, 100, 100),
-                    last_focused_at=1.0,
-                )
-            ],
+            windows=[],
             on_run_sequence=on_run_sequence,
         )
+        opener.spawn_runtime = runtime
+        opener.spawn_handle = 7
         return runtime
 
     worker, _created_services, _pipelines, _listeners = build_worker(
@@ -2775,7 +2984,7 @@ def test_worker_leaves_failed_window_open_and_marks_profile_red(
     assert worker.state.browser_session_failed == 1
     assert worker.state.session_closed == 0
     assert worker.state.last_error == failure_reason
-    assert worker.state.automation_queue_state == "paused"
+    assert worker.state.automation_queue_state == "idle"
     assert worker.state.automation_queue_length == 0
     assert worker.state.automation_current_url is None
     assert worker.state.automation_last_error == failure_reason
@@ -3370,6 +3579,7 @@ def test_worker_page_ready_timeout_runs_cldf_recovery_and_restores_profile(
     assert outcome.kind == "job_detected"
     assert runtime is not None
     assert runtime.wait_for_step_calls == [(page_ready_path, 18), (page_ready_path, 18)]
+    assert runtime.wait_for_step_search_seconds[:2] == [12.0, 12.0]
     assert runtime.run_calls == [
         ("troubleshoot-cldf-1", 18),
         ("troubleshoot-cldf-2", 18),
@@ -3877,6 +4087,7 @@ def test_worker_skips_red_profile_and_continues_remaining_profiles_on_future_rai
         ),
         automation_runtime_factory=lambda _emit_event: runtime,
         chrome_opener_factory=chrome_opener_factory,
+        profile_shuffle=lambda profiles: None,
     )
     worker._service = worker._build_service(worker.config)
 
@@ -4226,15 +4437,10 @@ def test_worker_resume_automation_queue_recovers_after_bot_action_slots_are_conf
     def runtime_factory(_emit_event):
         nonlocal runtime
         runtime = FakeAutomationRuntime(
-            windows=[
-                WindowInfo(
-                    handle=29,
-                    title="RaidBot - Chrome",
-                    bounds=(0, 0, 100, 100),
-                    last_focused_at=1.0,
-                )
-            ],
+            windows=[],
         )
+        opener.spawn_runtime = runtime
+        opener.spawn_handle = 29
         return runtime
 
     worker, _services, _pipelines, _listeners = build_worker(
@@ -4548,20 +4754,15 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener(tmp_path) ->
 
     def chrome_opener_factory(**kwargs):
         opener = FakeChromeOpener(**kwargs)
+        opener.spawn_runtime = runtime
+        opener.spawn_handle = 41
         created_openers.append(opener)
         return opener
 
     def runtime_factory(_emit_event):
         nonlocal runtime
         runtime = FakeAutomationRuntime(
-            windows=[
-                WindowInfo(
-                    handle=41,
-                    title="RaidBot - Chrome",
-                    bounds=(0, 0, 100, 100),
-                    last_focused_at=1.0,
-                )
-            ],
+            windows=[],
         )
         return runtime
 
@@ -4619,20 +4820,15 @@ async def test_worker_apply_config_refreshes_auto_run_chrome_opener_on_telegram_
 
     def chrome_opener_factory(**kwargs):
         opener = FakeChromeOpener(**kwargs)
+        opener.spawn_runtime = runtime
+        opener.spawn_handle = 43
         created_openers.append(opener)
         return opener
 
     def runtime_factory(_emit_event):
         nonlocal runtime
         runtime = FakeAutomationRuntime(
-            windows=[
-                WindowInfo(
-                    handle=43,
-                    title="RaidBot - Chrome",
-                    bounds=(0, 0, 100, 100),
-                    last_focused_at=1.0,
-                )
-            ],
+            windows=[],
         )
         return runtime
 
@@ -5126,11 +5322,9 @@ async def test_worker_run_raid_now_for_profile_executes_latest_valid_recent_raid
 
 
 @pytest.mark.asyncio
-async def test_worker_run_raid_now_marks_url_as_deduped_for_later_auto_detection(
-    tmp_path,
-) -> None:
+async def test_worker_run_raid_now_keeps_reply_last_after_action_randomization(tmp_path) -> None:
     events: list[dict] = []
-    timestamp = datetime(2026, 4, 4, 18, 1, 0)
+    timestamp = datetime(2026, 5, 11, 12, 15, 0)
     storage = FakeStorage(base_dir=tmp_path)
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime = FakeAutomationRuntime(
@@ -5143,6 +5337,71 @@ async def test_worker_run_raid_now_marks_url_as_deduped_for_later_auto_detection
             )
         ]
     )
+    recent_messages_client = FakeRecentMessagesClient(
+        messages_by_chat={
+            -1001: [
+                FakeRecentMessage(
+                    chat_id=-1001,
+                    sender_id=42,
+                    text="Likes 10 | 8 [%]\n\nhttps://x.com/i/status/888",
+                    has_video=True,
+                    date=datetime(2026, 5, 11, 12, 14, 0),
+                ),
+            ]
+        }
+    )
+    listener = FakeListener(client=recent_messages_client)
+
+    def reverse_non_reply_actions(slots) -> None:
+        slots.reverse()
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            page_ready_template_path=None,
+            bot_action_slots=build_bot_action_slots(
+                enabled_keys=("slot_1_r", "slot_2_l", "slot_3_r", "slot_4_b"),
+            ),
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=lambda _emit_event: runtime,
+        chrome_opener_factory=lambda **kwargs: opener,
+        listener_factory=lambda **kwargs: listener,
+        action_shuffle=reverse_non_reply_actions,
+    )
+    worker._service = worker._build_service(worker.config)
+    worker._listener = listener
+
+    await worker.run_raid_now_for_profile("Profile 3")
+
+    assert [step.name for step in runtime.run_sequences[0].steps] == [
+        "slot_4_b",
+        "slot_3_r",
+        "slot_2_l",
+        "slot_1_r",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_worker_run_raid_now_marks_url_as_deduped_for_later_auto_detection(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 4, 4, 18, 1, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime = FakeAutomationRuntime(
+        windows=[],
+    )
+    opener.spawn_runtime = runtime
+    opener.spawn_handle = 31
     recent_messages_client = FakeRecentMessagesClient(
         messages_by_chat={
             -1001: [
@@ -5459,15 +5718,10 @@ async def test_worker_run_raid_now_clears_paused_auto_queue_after_success(tmp_pa
     storage = FakeStorage(base_dir=tmp_path)
     opener = FakeChromeOpener(profile_directory="Profile 3")
     runtime = FakeAutomationRuntime(
-        windows=[
-            WindowInfo(
-                handle=31,
-                title="RaidBot - Chrome",
-                bounds=(0, 0, 100, 100),
-                last_focused_at=1.0,
-            )
-        ]
+        windows=[],
     )
+    opener.spawn_runtime = runtime
+    opener.spawn_handle = 31
     recent_messages_client = FakeRecentMessagesClient(
         messages_by_chat={
             -1001: [

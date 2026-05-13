@@ -25,7 +25,15 @@ class FakeSequenceRunner:
         self.request_stop_called = False
         self.run_result = RunResult(status="completed")
 
-    def run_sequence(self, sequence: AutomationSequence, *, selected_window: WindowInfo | None):
+    def run_sequence(
+        self,
+        sequence: AutomationSequence,
+        *,
+        selected_window: WindowInfo | None,
+        start_step_index: int = 0,
+        start_step_phase: str | None = None,
+    ):
+        self.run_options = (start_step_index, start_step_phase)
         self.run_call = (sequence.id, getattr(selected_window, "handle", None))
         if self.run_result.window_handle is None:
             self.run_result.window_handle = getattr(selected_window, "handle", None)

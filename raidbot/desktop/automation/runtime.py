@@ -40,11 +40,15 @@ class AutomationRuntime:
         selected_window_handle: int | None,
         *,
         require_interactable_window: bool = True,
+        start_step_index: int = 0,
+        start_step_phase: str | None = None,
     ):
         return self.run_sequence_with_options(
             sequence,
             selected_window_handle,
             require_interactable_window=require_interactable_window,
+            start_step_index=start_step_index,
+            start_step_phase=start_step_phase,
         )
 
     def run_sequence_with_options(
@@ -54,6 +58,8 @@ class AutomationRuntime:
         *,
         require_interactable_window: bool = True,
         move_cursor_before_scroll: bool = False,
+        start_step_index: int = 0,
+        start_step_phase: str | None = None,
     ):
         selected_window = self._selected_window(selected_window_handle)
         if selected_window is _MISSING_SELECTED_WINDOW:
@@ -63,7 +69,12 @@ class AutomationRuntime:
             move_cursor_before_scroll=move_cursor_before_scroll,
         )
         self._active_runner = runner
-        return runner.run_sequence(sequence, selected_window=selected_window)
+        return runner.run_sequence(
+            sequence,
+            selected_window=selected_window,
+            start_step_index=start_step_index,
+            start_step_phase=start_step_phase,
+        )
 
     def dry_run_step(self, sequence, step_index: int, selected_window_handle: int | None):
         selected_window = self._selected_window(selected_window_handle)

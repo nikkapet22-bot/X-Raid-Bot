@@ -16,6 +16,7 @@ class HeadlessSettings:
     enabled_actions: HeadlessActionToggles = field(
         default_factory=HeadlessActionToggles
     )
+    chrome_profile_directory: str | None = None
 
 
 @dataclass(frozen=True)

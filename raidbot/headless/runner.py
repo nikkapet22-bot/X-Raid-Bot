@@ -21,12 +21,22 @@ class HeadlessRaidRunner:
         self._enabled_actions = enabled_actions
         self._busy = False
 
+    def set_enabled_actions(self, enabled_actions: HeadlessActionToggles) -> None:
+        self._enabled_actions = enabled_actions
+
     def run(self, job: RaidActionJob) -> HeadlessRunResult:
         if self._busy:
             return HeadlessRunResult(
                 url=job.normalized_url,
                 success=False,
                 reason="runner_busy",
+                completed_actions=(),
+            )
+        if job.requirements.reply:
+            return HeadlessRunResult(
+                url=job.normalized_url,
+                success=False,
+                reason="unsupported_for_now",
                 completed_actions=(),
             )
         auth_state: HeadlessAuthState = self._session_manager.get_auth_state()

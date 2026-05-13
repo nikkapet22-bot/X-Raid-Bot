@@ -77,6 +77,17 @@ def test_bot_actions_page_renders_shared_page_ready_capture(qtbot) -> None:
     assert page.page_ready_status_label.text() == "No template captured."
 
 
+def test_bot_actions_page_renders_shared_page_exit_capture(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+
+    assert page.page_exit_capture_button.text() == "Capture"
+    assert page.page_exit_preview_label.text() == "No image"
+    assert page.page_exit_status_label.text() == "No template captured."
+
+
 def test_bot_actions_page_show_error_updates_status_label(qtbot) -> None:
     from raidbot.desktop.bot_actions.page import BotActionsPage
 
@@ -159,6 +170,22 @@ def test_bot_actions_page_page_ready_capture_emits_signal(qtbot) -> None:
     assert captured == ["capture"]
     assert page.status_label.text() == "Page Ready: capturing"
     assert page.status_latest_value_label.text() == "Page Ready: capturing"
+
+
+def test_bot_actions_page_page_exit_capture_emits_signal(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+    page.show()
+    captured = []
+    page.pageExitCaptureRequested.connect(lambda: captured.append("capture"))
+
+    qtbot.mouseClick(page.page_exit_capture_button, Qt.MouseButton.LeftButton)
+
+    assert captured == ["capture"]
+    assert page.status_label.text() == "Page Exit: capturing"
+    assert page.status_latest_value_label.text() == "Page Exit: capturing"
 
 
 def test_bot_actions_page_shows_presets_button_only_for_slot_1(qtbot) -> None:
@@ -373,6 +400,23 @@ def test_bot_actions_page_refreshes_page_ready_preview_when_same_path_is_overwri
     assert _label_center_hex(page.page_ready_preview_label) == "#00ff00"
 
 
+def test_bot_actions_page_refreshes_page_exit_preview_when_same_path_is_overwritten(
+    qtbot,
+    tmp_path,
+) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    image_path = tmp_path / "page_exit.png"
+    _write_solid_image(image_path, "#ff0000")
+    page = BotActionsPage(config=build_config(page_exit_template_path=image_path))
+    qtbot.addWidget(page)
+
+    _write_solid_image(image_path, "#00ff00")
+    page.set_page_exit_template_path(image_path)
+
+    assert _label_center_hex(page.page_exit_preview_label) == "#00ff00"
+
+
 def test_bot_actions_page_shows_slot_1_finish_preview_tile(qtbot, tmp_path) -> None:
     from raidbot.desktop.bot_actions.page import BotActionsPage
 
@@ -408,7 +452,7 @@ def test_bot_actions_page_shows_empty_slot_1_finish_preview_state(qtbot) -> None
     assert finish_preview_label.text() == "No finish image"
 
 
-def test_bot_actions_page_renders_troubleshoot_cldf_section(qtbot) -> None:
+def test_bot_actions_page_renders_troubleshooting_cldf_section(qtbot) -> None:
     from raidbot.desktop.bot_actions.page import BotActionsPage
 
     page = BotActionsPage(config=build_config())
@@ -416,8 +460,9 @@ def test_bot_actions_page_renders_troubleshoot_cldf_section(qtbot) -> None:
 
     titles = {group.title() for group in page.findChildren(QGroupBox)}
 
-    assert "Troubleshoot" in titles
-    assert "CLDF" in titles
+    assert "Troubleshooting" not in titles
+    assert "CLDF Capture Path" in titles
+    assert "Black Box Escape" in titles
 
 
 def test_bot_actions_page_renders_three_cldf_troubleshoot_cards(qtbot) -> None:
@@ -427,6 +472,16 @@ def test_bot_actions_page_renders_three_cldf_troubleshoot_cards(qtbot) -> None:
     qtbot.addWidget(page)
 
     assert [box.label_text() for box in page.cldf_boxes] == ["1", "2", "3"]
+
+
+def test_bot_actions_page_renders_one_black_box_troubleshoot_card(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+
+    assert [box.label_text() for box in page.black_box_boxes] == ["Box"]
+    assert page.troubleshoot_groups["black_box"] == page.black_box_boxes
 
 
 def test_bot_actions_page_troubleshoot_cards_only_show_preview_capture_and_test(qtbot) -> None:
@@ -478,3 +533,21 @@ def test_bot_actions_page_troubleshoot_test_emits_group_and_index(qtbot) -> None
     assert captured == [("cldf", 2)]
     assert page.status_label.text() == "Troubleshoot CLDF 3: testing"
     assert page.status_latest_value_label.text() == "Troubleshoot CLDF 3: testing"
+
+
+def test_bot_actions_page_black_box_capture_emits_group_and_index(qtbot) -> None:
+    from raidbot.desktop.bot_actions.page import BotActionsPage
+
+    page = BotActionsPage(config=build_config())
+    qtbot.addWidget(page)
+    page.show()
+    captured = []
+    page.troubleshootCaptureRequested.connect(
+        lambda group_key, item_index: captured.append((group_key, item_index))
+    )
+
+    qtbot.mouseClick(page.black_box_boxes[0].capture_button, Qt.MouseButton.LeftButton)
+
+    assert captured == [("black_box", 0)]
+    assert page.status_label.text() == "Troubleshoot BLACK BOX 1: capturing"
+    assert page.status_latest_value_label.text() == "Troubleshoot BLACK BOX 1: capturing"

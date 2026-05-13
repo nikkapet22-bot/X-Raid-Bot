@@ -37,3 +37,21 @@ def test_template_loader_reads_grayscale_image(tmp_path) -> None:
     assert loaded.shape == image.shape
     assert loaded.dtype == np.uint8
     assert np.array_equal(loaded, image)
+
+
+def test_template_loader_preserves_color_image_channels(tmp_path) -> None:
+    image = np.array(
+        [
+            [[0, 0, 255], [0, 129, 0]],
+            [[255, 0, 0], [32, 64, 128]],
+        ],
+        dtype=np.uint8,
+    )
+    path = tmp_path / "template-color.png"
+    assert cv2.imwrite(str(path), image) is True
+
+    loaded = load_template_image(path)
+
+    assert loaded.shape == image.shape
+    assert loaded.dtype == np.uint8
+    assert np.array_equal(loaded, image)

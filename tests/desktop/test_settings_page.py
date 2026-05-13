@@ -53,6 +53,10 @@ def set_selected_chat_rows(page, qtbot, chat_ids: list[int]) -> None:
         combo.setCurrentIndex(index)
 
 
+def emit_apply(page) -> None:
+    page._emit_apply_request()
+
+
 def test_settings_save_emits_sender_entries_and_numeric_sender_ids(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
 
@@ -72,17 +76,146 @@ def test_settings_save_emits_sender_entries_and_numeric_sender_ids(qtbot) -> Non
     page.sender_entry_inputs[0].setText("99")
     qtbot.mouseClick(page.add_sender_button, Qt.MouseButton.LeftButton)
     page.sender_entry_inputs[1].setText("@delugeraidbot")
-    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    emit_apply(page)
 
-    assert applied == [
-        build_config(
-            telegram_api_hash="new-hash",
-            whitelisted_chat_ids=[-1001, -2002],
-            allowed_sender_ids=[99],
-            allowed_sender_entries=("99", "@delugeraidbot"),
-            chrome_profile_directory="Profile 3",
-        )
-    ]
+    assert applied[-1] == build_config(
+        telegram_api_hash="new-hash",
+        whitelisted_chat_ids=[-1001, -2002],
+        allowed_sender_ids=[99],
+        allowed_sender_entries=("99", "@delugeraidbot"),
+        chrome_profile_directory="Profile 3",
+    )
+
+
+def test_settings_page_auto_saves_on_editing_finished(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+
+    applied = []
+    page.applyRequested.connect(applied.append)
+
+    page.api_hash_input.setText("auto-saved-hash")
+    page.api_hash_input.editingFinished.emit()
+
+    assert applied[-1].telegram_api_hash == "auto-saved-hash"
+
+
+def test_settings_hotkey_capture_field_saves_ctrl_combo(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+
+    applied = []
+    page.applyRequested.connect(applied.append)
+
+    qtbot.mouseClick(
+        page.pause_resume_hotkey_input,
+        Qt.MouseButton.LeftButton,
+    )
+    qtbot.keyClick(
+        page.pause_resume_hotkey_input,
+        Qt.Key.Key_P,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+    page.sender_entry_inputs[0].setText("42")
+    emit_apply(page)
+
+    assert applied[-1].pause_resume_hotkey == "Ctrl+P"
+
+
+def test_settings_hotkey_capture_field_auto_saves_ctrl_combo(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+
+    applied = []
+    page.applyRequested.connect(applied.append)
+
+    qtbot.mouseClick(
+        page.pause_resume_hotkey_input,
+        Qt.MouseButton.LeftButton,
+    )
+    qtbot.keyClick(
+        page.pause_resume_hotkey_input,
+        Qt.Key.Key_P,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+
+    assert applied[-1].pause_resume_hotkey == "Ctrl+P"
+
+
+def test_settings_hotkey_capture_field_saves_ctrl_digit_combo(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+
+    applied = []
+    page.applyRequested.connect(applied.append)
+
+    qtbot.mouseClick(
+        page.pause_resume_hotkey_input,
+        Qt.MouseButton.LeftButton,
+    )
+    qtbot.keyClick(
+        page.pause_resume_hotkey_input,
+        Qt.Key.Key_2,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+    page.sender_entry_inputs[0].setText("42")
+    emit_apply(page)
+
+    assert applied[-1].pause_resume_hotkey == "Ctrl+2"
+
+
+def test_settings_hotkey_capture_rejects_non_ctrl_combo(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+
+    applied = []
+    page.applyRequested.connect(applied.append)
+
+    qtbot.mouseClick(
+        page.pause_resume_hotkey_input,
+        Qt.MouseButton.LeftButton,
+    )
+    qtbot.keyClick(page.pause_resume_hotkey_input, Qt.Key.Key_P)
+    page.sender_entry_inputs[0].setText("42")
+    emit_apply(page)
+
+    assert applied == []
+    assert "Ctrl" in page.status_label.text()
 
 
 def test_settings_save_preserves_hidden_bot_action_config(qtbot) -> None:
@@ -113,13 +246,13 @@ def test_settings_save_preserves_hidden_bot_action_config(qtbot) -> None:
     page.api_hash_input.setText("new-hash")
     set_selected_chat_rows(page, qtbot, [-1001, -2002])
     page.sender_entry_inputs[0].setText("99")
-    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    emit_apply(page)
 
-    assert len(applied) == 1
-    assert applied[0].auto_run_enabled is True
-    assert applied[0].default_auto_sequence_id == "seq-9"
-    assert applied[0].auto_run_settle_ms == 2750
-    assert applied[0].bot_action_slots == updated_config.bot_action_slots
+    assert applied
+    assert applied[-1].auto_run_enabled is True
+    assert applied[-1].default_auto_sequence_id == "seq-9"
+    assert applied[-1].auto_run_settle_ms == 2750
+    assert applied[-1].bot_action_slots == updated_config.bot_action_slots
 
 
 def test_settings_save_rejects_invalid_numeric_input_without_crashing(qtbot) -> None:
@@ -139,7 +272,7 @@ def test_settings_save_rejects_invalid_numeric_input_without_crashing(qtbot) -> 
     page.api_id_input.setText("not-a-number")
     set_selected_chat_rows(page, qtbot, [-1001, -2002])
     page.sender_entry_inputs[0].setText("99")
-    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    emit_apply(page)
 
     assert applied == []
     assert "Telegram API ID must be a valid integer." in page.status_label.text()
@@ -162,7 +295,7 @@ def test_settings_save_rejects_blank_telegram_api_hash(qtbot) -> None:
     page.api_hash_input.setText("   ")
     set_selected_chat_rows(page, qtbot, [-1001, -2002])
     page.sender_entry_inputs[0].setText("99")
-    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    emit_apply(page)
 
     assert applied == []
     assert "Telegram API Hash is required." in page.status_label.text()
@@ -183,15 +316,15 @@ def test_settings_save_clears_previous_error_on_success(qtbot) -> None:
     page.applyRequested.connect(applied.append)
 
     page.api_id_input.setText("not-a-number")
-    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    emit_apply(page)
     assert "Telegram API ID must be a valid integer." in page.status_label.text()
 
     page.api_id_input.setText("123456")
     set_selected_chat_rows(page, qtbot, [-1001, -2002])
     page.sender_entry_inputs[0].setText("99")
-    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    emit_apply(page)
 
-    assert len(applied) == 1
+    assert applied
     assert page.status_label.text() == ""
 
 
@@ -212,8 +345,9 @@ def test_settings_save_rejects_when_all_sender_rows_are_blank(qtbot) -> None:
     page.api_id_input.setText("123456")
     page.api_hash_input.setText("new-hash")
     set_selected_chat_rows(page, qtbot, [-1001, -2002])
+    applied.clear()
     page.sender_entry_inputs[0].setText("   ")
-    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    emit_apply(page)
 
     assert applied == []
     assert "At least one allowed sender is required." in page.status_label.text()
@@ -233,7 +367,7 @@ def test_settings_save_rejects_missing_persisted_sender_rows(qtbot) -> None:
     applied = []
     page.applyRequested.connect(applied.append)
 
-    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    emit_apply(page)
 
     assert applied == []
     assert "At least one allowed sender is required." in page.status_label.text()
@@ -255,7 +389,7 @@ def test_settings_save_rejects_stale_allowed_chat_without_crashing(qtbot) -> Non
 
     page.api_id_input.setText("123456")
     page.sender_entry_inputs[0].setText("99")
-    qtbot.mouseClick(page.save_button, Qt.MouseButton.LeftButton)
+    emit_apply(page)
 
     assert applied == []
     assert "Allowed chats contain chats that are no longer available." in page.status_label.text()
@@ -459,7 +593,7 @@ def test_settings_page_rejects_duplicate_profile_add_with_clear_status(qtbot) ->
     assert page.status_label.text() == "Profile already added"
 
 
-def test_settings_page_uses_grouped_sections_and_primary_save(qtbot) -> None:
+def test_settings_page_uses_grouped_sections_without_manual_save(qtbot) -> None:
     from raidbot.desktop.settings_page import SettingsPage
     from raidbot.desktop.theme import SECTION_OBJECT_NAME
 
@@ -477,7 +611,7 @@ def test_settings_page_uses_grouped_sections_and_primary_save(qtbot) -> None:
     assert page.session_surface.objectName() == SECTION_OBJECT_NAME
     assert page.telegram_surface.objectName() == SECTION_OBJECT_NAME
     assert page.routing_surface.objectName() == SECTION_OBJECT_NAME
-    assert page.save_button.property("variant") == "primary"
+    assert not hasattr(page, "save_button")
     assert page.reauthorize_button.property("variant") == "secondary"
 
 
@@ -517,7 +651,7 @@ def test_settings_page_preserves_apply_and_reauthorize_signals(qtbot) -> None:
     page.applyRequested.connect(apply_events.append)
     page.reauthorizeRequested.connect(lambda: reauthorize_events.append(True))
 
-    page.save_button.click()
+    emit_apply(page)
     page.reauthorize_button.click()
 
     assert len(apply_events) == 1

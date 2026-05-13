@@ -58,3 +58,19 @@ def test_matcher_rejects_out_of_range_threshold() -> None:
 
     with pytest.raises(ValueError, match="threshold"):
         TemplateMatcher().find_best_match(frame, template, threshold=1.5)
+
+
+def test_matcher_preserves_color_difference_for_stateful_icons() -> None:
+    frame = np.zeros((20, 20, 3), dtype=np.uint8)
+    template = np.zeros((3, 3, 3), dtype=np.uint8)
+    template[1, 1] = np.array([0, 0, 255], dtype=np.uint8)
+    frame[8:11, 9:12] = np.array(
+        [
+            [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+            [[0, 0, 0], [0, 129, 0], [0, 0, 0]],
+            [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+        ],
+        dtype=np.uint8,
+    )
+
+    assert TemplateMatcher().find_best_match(frame, template, threshold=0.95) is None

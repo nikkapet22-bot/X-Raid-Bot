@@ -194,6 +194,12 @@ class DesktopController(QObject):
             resolve_sender_entries=False,
         )
 
+    def set_performance_mode_enabled(self, enabled: bool) -> None:
+        self._persist_config(
+            replace(self.config, performance_mode_enabled=bool(enabled)),
+            resolve_sender_entries=False,
+        )
+
     def set_default_auto_sequence_id(self, sequence_id: str | None) -> None:
         self.apply_config(replace(self.config, default_auto_sequence_id=sequence_id))
 
@@ -520,7 +526,8 @@ class DesktopController(QObject):
         if self.config is None:
             raise ValueError("No desktop configuration is available")
         normalized_group_key = str(group_key).strip().lower() or "troubleshoot"
-        display_name = f"Troubleshoot {normalized_group_key.upper()} {item_index + 1}"
+        display_group = normalized_group_key.replace("_", " ").upper()
+        display_name = f"Troubleshoot {display_group} {item_index + 1}"
         slot = BotActionSlotConfig(
             key=f"troubleshoot_{normalized_group_key}_{item_index + 1}",
             label=display_name,

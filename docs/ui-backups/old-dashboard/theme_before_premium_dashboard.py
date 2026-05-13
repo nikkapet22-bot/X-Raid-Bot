@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 # ── Core Palette ──────────────────────────────────────────────────────────────
-WINDOW_BG     = "#050914"
-SURFACE_BG    = "#0f1724"
-ELEVATED_BG   = "#151e2d"
-DEEP_BG       = "#030712"
-SIDEBAR_BG    = "#070d19"
+WINDOW_BG     = "#060c18"
+SURFACE_BG    = "#0a1628"
+ELEVATED_BG   = "#0e1e35"
+DEEP_BG       = "#040912"
+SIDEBAR_BG    = "#070e1d"
 
-ACCENT        = "#b8a77a"
-ACCENT_HOVER  = "#eee6d0"
-ACCENT_DIM    = "#746643"
+ACCENT        = "#4f8ef7"
+ACCENT_HOVER  = "#6ba3f9"
+ACCENT_DIM    = "#1a3a7a"
 
-TEXT          = "#f3f4f6"
-MUTED         = "#a7adba"
-SUBTLE        = "#64748b"
-PRIMARY_TEXT  = "#120d05"
+TEXT          = "#dce8ff"
+MUTED         = "#4e6a94"
+SUBTLE        = "#253550"
+PRIMARY_TEXT  = "#ffffff"
 
-BORDER        = "#263142"
-BORDER_MED    = "#3a4352"
-BORDER_FOCUS  = "#b8a77a"
+BORDER        = "#142035"
+BORDER_MED    = "#1e3252"
+BORDER_FOCUS  = "#4f8ef7"
 
 SUCCESS       = "#2dd4bf"
 SUCCESS_DIM   = "#0d3d37"
@@ -38,8 +38,8 @@ SECTION_OBJECT_NAME = "section"
 CARD_OBJECT_NAME    = "card"
 
 # ── Geometry ─────────────────────────────────────────────────────────────────
-SECTION_RADIUS       = 22
-CARD_RADIUS          = 16
+SECTION_RADIUS       = 12
+CARD_RADIUS          = 10
 INPUT_RADIUS         = 8
 GROUP_BOX_RADIUS     = 10
 TAB_RADIUS           = 8
@@ -82,10 +82,6 @@ def build_application_stylesheet() -> str:
     QMainWindow, QDialog {{
         background-color: {WINDOW_BG};
     }}
-    QStackedWidget {{
-        background: transparent;
-        border: none;
-    }}
     QWizard {{
         background-color: {WINDOW_BG};
     }}
@@ -97,17 +93,12 @@ def build_application_stylesheet() -> str:
     }}
 
     {section_selector()} {{
-        background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
-            stop: 0 #17202d,
-            stop: 0.52 #0d1420,
-            stop: 1 #0f1724);
+        background-color: {SURFACE_BG};
         border: 1px solid {BORDER_MED};
         border-radius: {SECTION_RADIUS}px;
     }}
     {card_selector()} {{
-        background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
-            stop: 0 #0b111d,
-            stop: 1 #060b13);
+        background-color: {ELEVATED_BG};
         border: 1px solid {BORDER};
         border-radius: {CARD_RADIUS}px;
     }}
@@ -152,103 +143,34 @@ def build_application_stylesheet() -> str:
     QWidget#profilesHeaderRow,
     QWidget#statusSummaryColumn,
     QWidget#profileCardsContainer,
-    QWidget#statusHeaderButtons,
-    QWidget#commandButtonStack,
-    QWidget#commandMetricsGrid {{
+    QWidget#statusHeaderButtons {{
         background: transparent;
         border: none;
     }}
-    QWidget#topTabStrip {{
-        background-color: #060b16;
-        border-right: 1px solid {BORDER};
-    }}
-    QFrame#shellMonogramHalo {{
-        background-color: qradialgradient(cx: 0.5, cy: 0.5, radius: 0.55,
-            fx: 0.5, fy: 0.5,
-            stop: 0 rgba(184, 167, 122, 0.12),
-            stop: 0.62 rgba(184, 167, 122, 0.08),
-            stop: 1 rgba(184, 167, 122, 0.02));
-        border: 1px solid rgba(184, 167, 122, 0.10);
-        border-radius: 38px;
-    }}
-    QLabel#shellMonogram {{
-        background-color: qradialgradient(cx: 0.35, cy: 0.25, radius: 1.0,
-            fx: 0.35, fy: 0.25,
-            stop: 0 #eee6d0,
-            stop: 0.58 #b8a77a,
-            stop: 1 #746643);
-        border: 1px solid {ACCENT_HOVER};
-        border-radius: 18px;
-        color: {PRIMARY_TEXT};
-        font-size: 18px;
-        font-weight: 900;
-    }}
-    QPushButton#shellTabButton,
-    QPushButton#shellAccountButton {{
-        background-color: transparent;
-        color: {MUTED};
-        border: 1px solid transparent;
-        border-radius: 17px;
+    QPushButton#shellTabButton {{
+        background-color: #081223;
+        color: {TEXT};
+        border: 1px solid {BORDER};
+        border-top-left-radius: 10px;
+        border-top-right-radius: 10px;
+        border-bottom-left-radius: 0px;
+        border-bottom-right-radius: 0px;
         text-align: center;
-        padding: 0;
-        min-height: 48px;
-        min-width: 48px;
-        max-height: 48px;
-        max-width: 48px;
+        padding: 5px 14px;
+        font-size: 12px;
+        font-weight: 600;
+        min-height: 24px;
     }}
-    QPushButton#shellTabButton:hover,
-    QPushButton#shellAccountButton:hover {{
-        background-color: rgba(184, 167, 122, 0.08);
-        color: {ACCENT_HOVER};
+    QPushButton#shellTabButton:hover {{
+        background-color: #0d1a31;
+        color: {TEXT};
         border-color: {BORDER_FOCUS};
     }}
     QPushButton#shellTabButton[active="true"] {{
-        background-color: rgba(184, 167, 122, 0.10);
-        color: {ACCENT_HOVER};
+        background-color: {SURFACE_BG};
+        color: {PRIMARY_TEXT};
         border: 1px solid {BORDER_MED};
-    }}
-    QPushButton#shellTabButton:pressed,
-    QPushButton#shellAccountButton:pressed {{
-        background-color: rgba(184, 167, 122, 0.13);
-        border-color: {ACCENT};
-    }}
-    QLabel#shellSessionStamp {{
-        color: {MUTED};
-        font-size: 11px;
-        font-weight: 800;
-    }}
-    QWidget#dashboardTopbar {{
-        background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-            stop: 0 #090f1a,
-            stop: 1 #111827);
-        border: 1px solid {BORDER_MED};
-        border-radius: 22px;
-    }}
-    QLabel#dashboardAppTitle {{
-        color: {TEXT};
-        font-size: 26px;
-        font-weight: 900;
-    }}
-    QLabel#dashboardAppSubtitle {{
-        color: {MUTED};
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 1.8px;
-        text-transform: uppercase;
-    }}
-    QWidget#dashboardStatePill,
-    QWidget#commandStatusPill {{
-        background-color: rgba(184, 167, 122, 0.08);
-        border: 1px solid {BORDER_MED};
-        border-radius: 16px;
-    }}
-    QLabel#dashboardBotState,
-    QLabel#commandConnectionState {{
-        color: {TEXT};
-        font-size: 12px;
-        font-weight: 800;
-        letter-spacing: 0.8px;
-        text-transform: uppercase;
+        border-bottom-color: {SURFACE_BG};
     }}
     QLabel#raidActivityTitle {{
         font-size: 14px;
@@ -259,27 +181,6 @@ def build_application_stylesheet() -> str:
         font-size: 11px;
         font-weight: 500;
         color: {MUTED};
-    }}
-    QLabel#dashboardKicker {{
-        color: {ACCENT};
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 1.4px;
-        text-transform: uppercase;
-    }}
-    QLabel#dashboardHeroTitle {{
-        color: {TEXT};
-        font-size: 34px;
-        font-weight: 800;
-    }}
-    QLabel#dashboardHeroCopy {{
-        color: {MUTED};
-        font-size: 13px;
-    }}
-    QLabel#dashboardPanelTitle {{
-        color: {TEXT};
-        font-size: 26px;
-        font-weight: 800;
     }}
     QFrame#statusSummaryCard {{
         background: transparent;
@@ -374,16 +275,15 @@ def build_application_stylesheet() -> str:
         color: {TEXT};
     }}
     QLabel#metricValue {{
-        font-size: 22px;
+        font-size: 23px;
         font-weight: 700;
-        color: {ACCENT_HOVER};
+        color: {TEXT};
     }}
     QLabel#metricTitle {{
         font-size: 10px;
-        font-weight: 800;
+        font-weight: 500;
         color: {MUTED};
-        letter-spacing: 0.9px;
-        text-transform: uppercase;
+        letter-spacing: 0.3px;
     }}
     QPushButton#metricResetButton {{
         min-height: 0;
@@ -482,9 +382,9 @@ def build_application_stylesheet() -> str:
         margin: 0 0 4px 0;
     }}
     QFrame#activityCard {{
-        background-color: #101722;
+        background-color: #091427;
         border: 1px solid {BORDER_MED};
-        border-radius: 14px;
+        border-radius: 9px;
     }}
     QLabel#activityTime {{
         color: {MUTED};
@@ -492,23 +392,23 @@ def build_application_stylesheet() -> str:
         letter-spacing: 0.2px;
     }}
     QLabel#activityUrl {{
-        color: {TEXT};
+        color: {ACCENT_HOVER};
         font-size: 11px;
-        font-weight: 700;
+        font-weight: 500;
     }}
     QLabel#activityReason {{
         color: {MUTED};
         font-size: 11px;
     }}
     QFrame#raidActivityCard {{
-        background-color: #090f1a;
+        background-color: #091427;
         border: 1px solid {BORDER_MED};
-        border-radius: 18px;
+        border-radius: 12px;
     }}
     QWidget#raidActivityChart {{
-        background-color: #060b13;
+        background-color: #07111f;
         border: 1px solid {BORDER};
-        border-radius: 14px;
+        border-radius: 10px;
     }}
     QFrame#dashboardErrorCard {{
         background-color: #091427;
@@ -630,7 +530,7 @@ def build_application_stylesheet() -> str:
 
     QPushButton {{
         min-height: 34px;
-        border-radius: 12px;
+        border-radius: {BUTTON_RADIUS}px;
         border: 1px solid {BORDER_MED};
         background-color: {ELEVATED_BG};
         color: {TEXT};
@@ -640,7 +540,7 @@ def build_application_stylesheet() -> str:
     }}
     QPushButton:hover {{
         border-color: {ACCENT};
-        background-color: #1b2534;
+        background-color: #11253f;
     }}
     QPushButton:pressed  {{ background-color: {SURFACE_BG}; }}
     QPushButton:disabled {{
@@ -656,7 +556,7 @@ def build_application_stylesheet() -> str:
     }}
     QPushButton[variant="primary"]:pressed {{ background-color: {ACCENT_DIM}; }}
     QPushButton[variant="danger"] {{
-        background-color: {ERROR}; color: #ffffff;
+        background-color: {ERROR}; color: {PRIMARY_TEXT};
         border-color: {ERROR}; font-weight: 600;
         text-align: center;
     }}
@@ -686,11 +586,11 @@ def build_application_stylesheet() -> str:
         border-width: 1px;
     }}
     QPushButton[dashboardActionButton="true"] {{
-        min-height: 38px;
-        border-radius: 14px;
+        min-height: 28px;
+        border-radius: 10px;
         padding: 0 16px;
-        font-size: 13px;
-        font-weight: 700;
+        font-size: 12px;
+        font-weight: 600;
     }}
     QPushButton[dashboardActionButton="true"][variant="quiet"] {{
         background-color: transparent;

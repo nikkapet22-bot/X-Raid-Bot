@@ -16,7 +16,12 @@ a = Analysis(
     [str(repo_root / "raidbot" / "desktop" / "app.py")],
     pathex=[str(repo_root)],
     binaries=[],
-    datas=[],
+    datas=[
+        (
+            str(repo_root / "docs" / "ui-preview" / "dashboard-refresh-preview.html"),
+            "docs/ui-preview",
+        ),
+    ],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

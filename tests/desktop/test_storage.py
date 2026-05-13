@@ -4,6 +4,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from raidbot.desktop.models import (
     BotActionSlotConfig,
     BotActionPreset,
@@ -416,6 +418,49 @@ def test_storage_round_trips_pause_resume_hotkey(tmp_path) -> None:
     assert loaded.pause_resume_hotkey == "Ctrl+P"
 
 
+def test_storage_round_trips_performance_mode_enabled(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    config = DesktopAppConfig(
+        telegram_api_id=123,
+        telegram_api_hash="hash",
+        telegram_session_path=Path("session.session"),
+        telegram_phone_number=None,
+        whitelisted_chat_ids=[111],
+        allowed_sender_ids=[333],
+        chrome_profile_directory="Default",
+        performance_mode_enabled=True,
+    )
+
+    storage.save_config(config)
+
+    loaded = storage.load_config()
+    assert loaded.performance_mode_enabled is True
+
+
+def test_storage_defaults_performance_mode_enabled_to_false(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        """{
+  "telegram_api_id": 123,
+  "telegram_api_hash": "hash",
+  "telegram_session_path": "session.session",
+  "telegram_phone_number": null,
+  "whitelisted_chat_ids": [111],
+  "allowed_sender_ids": [333],
+  "allowed_sender_entries": ["333"],
+  "chrome_profile_directory": "Default"
+}""",
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+    assert loaded.performance_mode_enabled is False
+
+
 def test_storage_defaults_pause_resume_hotkey_to_none(tmp_path) -> None:
     from raidbot.desktop.storage import DesktopStorage
 
@@ -479,8 +524,8 @@ def test_storage_round_trips_slot_1_presets_and_finish_template(tmp_path) -> Non
     loaded = storage.load_config()
 
     assert loaded.bot_action_slots[0].presets == config.bot_action_slots[0].presets
-    assert loaded.bot_action_slots[0].finish_template_path == Path(
-        "bot_actions/slot_1_r_finish.png"
+    assert loaded.bot_action_slots[0].finish_template_path == (
+        tmp_path / "bot_actions/slot_1_r_finish.png"
     )
 
 
@@ -519,8 +564,8 @@ def test_storage_round_trips_slot_1_finish_template(tmp_path) -> None:
 
     loaded = storage.load_config()
 
-    assert loaded.bot_action_slots[0].finish_template_path == Path(
-        "bot_actions/slot_1_r_finish.png"
+    assert loaded.bot_action_slots[0].finish_template_path == (
+        tmp_path / "bot_actions/slot_1_r_finish.png"
     )
 
 
@@ -544,7 +589,7 @@ def test_storage_round_trips_page_ready_template_path(tmp_path) -> None:
 
     loaded = storage.load_config()
 
-    assert loaded.page_ready_template_path == Path("bot_actions/page_ready.png")
+    assert loaded.page_ready_template_path == tmp_path / "bot_actions/page_ready.png"
 
 
 def test_storage_round_trips_page_exit_template_path(tmp_path) -> None:
@@ -567,7 +612,58 @@ def test_storage_round_trips_page_exit_template_path(tmp_path) -> None:
 
     loaded = storage.load_config()
 
-    assert loaded.page_exit_template_path == Path("bot_actions/page_exit.png")
+    assert loaded.page_exit_template_path == tmp_path / "bot_actions/page_exit.png"
+
+
+def test_storage_resolves_legacy_relative_capture_paths_against_base_dir(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    bot_actions_dir = tmp_path / "bot_actions"
+    bot_actions_dir.mkdir()
+    for name in (
+        "page_ready.png",
+        "page_exit.png",
+        "slot_1_r.png",
+        "slot_1_r_finish.png",
+    ):
+        (bot_actions_dir / name).write_bytes(b"capture")
+
+    storage = DesktopStorage(tmp_path)
+    storage.config_path.write_text(
+        json.dumps(
+            {
+                "telegram_api_id": 123456,
+                "telegram_api_hash": "api-hash",
+                "telegram_session_path": "sessions/raid.session",
+                "telegram_phone_number": "+15555550123",
+                "whitelisted_chat_ids": [1001],
+                "allowed_sender_ids": [424242],
+                "allowed_sender_entries": ["@raidar"],
+                "chrome_profile_directory": "Profile 1",
+                "page_ready_template_path": "bot_actions/page_ready.png",
+                "page_exit_template_path": "bot_actions/page_exit.png",
+                "bot_action_slots": [
+                    {
+                        "key": "slot_1_r",
+                        "label": "R",
+                        "enabled": True,
+                        "template_path": "bot_actions/slot_1_r.png",
+                        "finish_template_path": "bot_actions/slot_1_r_finish.png",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_config()
+
+    assert loaded.page_ready_template_path == tmp_path / "bot_actions/page_ready.png"
+    assert loaded.page_exit_template_path == tmp_path / "bot_actions/page_exit.png"
+    assert loaded.bot_action_slots[0].template_path == tmp_path / "bot_actions/slot_1_r.png"
+    assert loaded.bot_action_slots[0].finish_template_path == (
+        tmp_path / "bot_actions/slot_1_r_finish.png"
+    )
 
 
 def test_state_round_trip_includes_activity_entries(tmp_path) -> None:
@@ -1182,6 +1278,42 @@ def test_storage_load_state_defaults_new_pipeline_counters_to_zero(tmp_path) -> 
     assert loaded.automation_queue_length == 0
     assert loaded.automation_current_url is None
     assert loaded.automation_last_error is None
+
+
+def test_load_state_recovers_from_empty_state_file(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.state_path.write_text("", encoding="utf-8")
+
+    loaded = storage.load_state()
+
+    assert loaded == DesktopAppState()
+    assert json.loads(storage.state_path.read_text(encoding="utf-8"))["bot_state"] == "stopped"
+
+
+def test_save_state_keeps_existing_file_when_atomic_replace_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    storage.save_state(DesktopAppState(raids_detected=7))
+    previous_state_text = storage.state_path.read_text(encoding="utf-8")
+    original_replace = Path.replace
+
+    def fail_state_replace(self: Path, target: Path) -> Path:
+        if Path(target) == storage.state_path:
+            raise OSError("replace failed")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fail_state_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        storage.save_state(DesktopAppState(raids_detected=9))
+
+    assert storage.state_path.read_text(encoding="utf-8") == previous_state_text
 
 
 def test_load_state_resets_stale_automation_queue_runtime_fields(tmp_path) -> None:

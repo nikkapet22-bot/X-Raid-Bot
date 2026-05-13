@@ -47,7 +47,8 @@ def test_headless_config_defaults_enable_all_actions(tmp_path) -> None:
             like=True,
             repost=True,
             bookmark=True,
-        )
+        ),
+        chrome_profile_directory=None,
     )
 
 
@@ -61,7 +62,8 @@ def test_headless_config_round_trips_headless_only_settings(tmp_path) -> None:
             like=True,
             repost=False,
             bookmark=True,
-        )
+        ),
+        chrome_profile_directory="Profile 3",
     )
 
     store.save_settings(settings)
@@ -77,3 +79,11 @@ def test_headless_config_uses_dedicated_playwright_profile_dir(tmp_path) -> None
     store = HeadlessConfigStore(tmp_path)
 
     assert store.playwright_user_data_dir == tmp_path / "headless" / "playwright-profile"
+
+
+def test_headless_config_uses_dedicated_auth_state_path(tmp_path) -> None:
+    from raidbot.headless.config import HeadlessConfigStore
+
+    store = HeadlessConfigStore(tmp_path)
+
+    assert store.auth_state_path == tmp_path / "headless" / "auth-state.json"

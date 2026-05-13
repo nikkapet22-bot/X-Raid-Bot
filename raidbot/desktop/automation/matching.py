@@ -15,10 +15,9 @@ class TemplateMatcher:
     ) -> MatchResult | None:
         if threshold < -1.0 or threshold > 1.0:
             raise ValueError(f"threshold must be between -1.0 and 1.0, got {threshold}")
-        frame_gray = self._ensure_grayscale(frame)
-        template_gray = self._ensure_grayscale(template)
-        self._validate_dimensions(frame_gray, template_gray)
-        result = cv2.matchTemplate(frame_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+        frame_matchable, template_matchable = self._prepare_images_for_matching(frame, template)
+        self._validate_dimensions(frame_matchable, template_matchable)
+        result = cv2.matchTemplate(frame_matchable, template_matchable, cv2.TM_CCOEFF_NORMED)
         _, max_score, _, max_location = cv2.minMaxLoc(result)
         if max_score < threshold:
             return None
@@ -26,17 +25,38 @@ class TemplateMatcher:
             score=float(max_score),
             top_left_x=int(max_location[0]),
             top_left_y=int(max_location[1]),
-            width=int(template_gray.shape[1]),
-            height=int(template_gray.shape[0]),
+            width=int(template_matchable.shape[1]),
+            height=int(template_matchable.shape[0]),
         )
+
+    def _prepare_images_for_matching(
+        self,
+        frame: np.ndarray,
+        template: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        normalized_frame = self._normalize_channels(frame)
+        normalized_template = self._normalize_channels(template)
+        if normalized_frame.ndim == normalized_template.ndim:
+            return normalized_frame, normalized_template
+        return (
+            self._ensure_grayscale(normalized_frame),
+            self._ensure_grayscale(normalized_template),
+        )
+
+    def _normalize_channels(self, image: np.ndarray) -> np.ndarray:
+        if image.ndim == 2:
+            return image
+        if image.ndim == 3 and image.shape[2] == 3:
+            return image
+        if image.ndim == 3 and image.shape[2] == 4:
+            return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+        raise ValueError(f"Unsupported image shape for template matching: {image.shape}")
 
     def _ensure_grayscale(self, image: np.ndarray) -> np.ndarray:
         if image.ndim == 2:
             return image
         if image.ndim == 3 and image.shape[2] == 3:
             return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        if image.ndim == 3 and image.shape[2] == 4:
-            return cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
         raise ValueError(f"Unsupported image shape for template matching: {image.shape}")
 
     def _validate_dimensions(self, frame: np.ndarray, template: np.ndarray) -> None:

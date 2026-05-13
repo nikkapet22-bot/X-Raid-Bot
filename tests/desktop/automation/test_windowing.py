@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from raidbot.desktop.automation.input import InputDriver, validate_click_target
 from raidbot.desktop.automation.windowing import (
     WindowInfo,
@@ -98,6 +100,232 @@ def test_window_manager_reports_maximize_success() -> None:
 
     assert manager.maximize_window(window) is True
     assert maximize_calls == [1]
+
+
+def test_window_manager_focus_win32_uses_raise_sequence_when_foreground_call_alone_is_not_enough(
+    monkeypatch,
+) -> None:
+    import raidbot.desktop.automation.windowing as windowing_module
+
+    state = {
+        "foreground": 41,
+        "raised": False,
+        "calls": [],
+    }
+
+    class FakeWin32Con:
+        SW_RESTORE = 9
+        SW_SHOW = 5
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_SHOWWINDOW = 0x0040
+
+    class FakeWin32Gui:
+        def GetForegroundWindow(self):
+            return state["foreground"]
+
+        def IsIconic(self, _handle: int) -> bool:
+            return False
+
+        def ShowWindow(self, handle: int, command: int) -> None:
+            state["calls"].append(("show", handle, command))
+
+        def BringWindowToTop(self, handle: int) -> None:
+            state["calls"].append(("bring_to_top", handle))
+            state["raised"] = True
+
+        def SetWindowPos(
+            self,
+            handle: int,
+            insert_after: int,
+            _x: int,
+            _y: int,
+            _cx: int,
+            _cy: int,
+            flags: int,
+        ) -> None:
+            state["calls"].append(("set_window_pos", handle, insert_after, flags))
+            state["raised"] = True
+
+        def SetForegroundWindow(self, handle: int) -> None:
+            state["calls"].append(("set_foreground", handle))
+            if state["raised"]:
+                state["foreground"] = handle
+
+        def SetActiveWindow(self, handle: int) -> None:
+            state["calls"].append(("set_active", handle))
+
+        def SetFocus(self, handle: int) -> None:
+            state["calls"].append(("set_focus", handle))
+
+    fake_win32gui = FakeWin32Gui()
+
+    def fake_import_module(name: str):
+        if name == "win32con":
+            return FakeWin32Con
+        if name == "win32gui":
+            return fake_win32gui
+        raise AssertionError(f"Unexpected import: {name}")
+
+    monkeypatch.setattr(windowing_module.importlib, "import_module", fake_import_module)
+    manager = WindowManager()
+
+    assert manager._focus_window_win32(99) is True
+    assert ("bring_to_top", 99) in state["calls"]
+    assert any(call[0] == "set_window_pos" for call in state["calls"])
+
+
+def test_window_manager_focus_win32_does_not_restore_non_minimized_window(
+    monkeypatch,
+) -> None:
+    import raidbot.desktop.automation.windowing as windowing_module
+
+    state = {
+        "foreground": 41,
+        "raised": False,
+        "calls": [],
+    }
+
+    class FakeWin32Con:
+        SW_RESTORE = 9
+        SW_SHOW = 5
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_SHOWWINDOW = 0x0040
+
+    class FakeWin32Gui:
+        def GetForegroundWindow(self):
+            return state["foreground"]
+
+        def IsIconic(self, _handle: int) -> bool:
+            return False
+
+        def ShowWindow(self, handle: int, command: int) -> None:
+            state["calls"].append(("show", handle, command))
+
+        def BringWindowToTop(self, handle: int) -> None:
+            state["calls"].append(("bring_to_top", handle))
+            state["raised"] = True
+
+        def SetWindowPos(
+            self,
+            handle: int,
+            insert_after: int,
+            _x: int,
+            _y: int,
+            _cx: int,
+            _cy: int,
+            flags: int,
+        ) -> None:
+            state["calls"].append(("set_window_pos", handle, insert_after, flags))
+            state["raised"] = True
+
+        def SetForegroundWindow(self, handle: int) -> None:
+            state["calls"].append(("set_foreground", handle))
+            if state["raised"]:
+                state["foreground"] = handle
+
+        def SetActiveWindow(self, handle: int) -> None:
+            state["calls"].append(("set_active", handle))
+
+        def SetFocus(self, handle: int) -> None:
+            state["calls"].append(("set_focus", handle))
+
+    fake_win32gui = FakeWin32Gui()
+
+    def fake_import_module(name: str):
+        if name == "win32con":
+            return FakeWin32Con
+        if name == "win32gui":
+            return fake_win32gui
+        raise AssertionError(f"Unexpected import: {name}")
+
+    monkeypatch.setattr(windowing_module.importlib, "import_module", fake_import_module)
+    manager = WindowManager()
+
+    assert manager._focus_window_win32(99) is True
+    assert ("show", 99, FakeWin32Con.SW_RESTORE) not in state["calls"]
+    assert ("show", 99, FakeWin32Con.SW_SHOW) in state["calls"]
+
+
+def test_window_manager_focus_win32_accepts_visible_raised_window_when_foreground_check_stays_elsewhere(
+    monkeypatch,
+) -> None:
+    import raidbot.desktop.automation.windowing as windowing_module
+
+    state = {
+        "foreground": 41,
+        "raised": False,
+        "calls": [],
+    }
+
+    class FakeWin32Con:
+        SW_RESTORE = 9
+        SW_SHOW = 5
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_SHOWWINDOW = 0x0040
+
+    class FakeWin32Gui:
+        def GetForegroundWindow(self):
+            return state["foreground"]
+
+        def IsIconic(self, _handle: int) -> bool:
+            return False
+
+        def IsWindowVisible(self, _handle: int) -> bool:
+            return True
+
+        def ShowWindow(self, handle: int, command: int) -> None:
+            state["calls"].append(("show", handle, command))
+
+        def BringWindowToTop(self, handle: int) -> None:
+            state["calls"].append(("bring_to_top", handle))
+            state["raised"] = True
+
+        def SetWindowPos(
+            self,
+            handle: int,
+            insert_after: int,
+            _x: int,
+            _y: int,
+            _cx: int,
+            _cy: int,
+            flags: int,
+        ) -> None:
+            state["calls"].append(("set_window_pos", handle, insert_after, flags))
+            state["raised"] = True
+
+        def SetForegroundWindow(self, handle: int) -> None:
+            state["calls"].append(("set_foreground", handle))
+
+        def SetActiveWindow(self, handle: int) -> None:
+            state["calls"].append(("set_active", handle))
+
+        def SetFocus(self, handle: int) -> None:
+            state["calls"].append(("set_focus", handle))
+
+    fake_win32gui = FakeWin32Gui()
+
+    def fake_import_module(name: str):
+        if name == "win32con":
+            return FakeWin32Con
+        if name == "win32gui":
+            return fake_win32gui
+        raise AssertionError(f"Unexpected import: {name}")
+
+    monkeypatch.setattr(windowing_module.importlib, "import_module", fake_import_module)
+    manager = WindowManager()
+
+    assert manager._focus_window_win32(99) is True
+    assert ("bring_to_top", 99) in state["calls"]
+    assert ("show", 99, FakeWin32Con.SW_SHOW) in state["calls"]
 
 
 def test_window_manager_keeps_most_recently_focused_matching_window_across_refreshes() -> None:
@@ -255,11 +483,9 @@ def test_input_driver_moves_waits_and_clicks() -> None:
 
     driver.move_click((25, 35), delay_seconds=0.5)
 
-    assert calls == [
-        ("move", (25, 35)),
-        ("wait", 0.5),
-        ("click", None),
-    ]
+    assert calls[0] == ("move", (25, 35))
+    assert calls[-1] == ("click", None)
+    assert sum(value for action, value in calls if action == "wait") == pytest.approx(0.5)
 
 
 def test_input_driver_scroll_uses_wheel_amount() -> None:

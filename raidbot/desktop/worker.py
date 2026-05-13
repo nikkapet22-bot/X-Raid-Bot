@@ -50,7 +50,7 @@ from raidbot.models import (
 )
 
 _PAGE_READY_POST_MATCH_DELAY_SECONDS = 0.5
-_PAGE_READY_MAX_SEARCH_SECONDS = 5.0
+_PAGE_READY_MAX_SEARCH_SECONDS = 12.0
 _PAGE_EXIT_MAX_SEARCH_SECONDS = 1.0
 _WINDOW_CLOSE_CONFIRM_SECONDS = 0.75
 _WINDOW_CLOSE_CONFIRM_POLL_SECONDS = 0.05
@@ -607,21 +607,38 @@ class DesktopBotWorker:
             self._bot_action_sequence_error = "captured_image_missing"
             return None
         self._bot_action_sequence_error = None
-        reorder_slot_1_last = profile is None
-        if profile is not None:
-            self.action_shuffle(enabled_slots)
+        enabled_slots = self._order_bot_action_slots_for_execution(
+            enabled_slots,
+            randomize=profile is not None,
+        )
         if choose_preset is None:
             return build_bot_action_sequence(
                 enabled_slots,
                 slot_1_finish_delay_seconds=self.config.slot_1_finish_delay_seconds,
-                reorder_slot_1_last=reorder_slot_1_last,
+                slot_1_obstruction_template_path=self._slot_1_obstruction_template_path(),
+                reorder_slot_1_last=True,
             )
         return build_bot_action_sequence(
             enabled_slots,
             slot_1_finish_delay_seconds=self.config.slot_1_finish_delay_seconds,
+            slot_1_obstruction_template_path=self._slot_1_obstruction_template_path(),
             choose_preset=choose_preset,
-            reorder_slot_1_last=reorder_slot_1_last,
-        )
+                reorder_slot_1_last=True,
+            )
+
+    def _order_bot_action_slots_for_execution(
+        self,
+        slots: list[Any],
+        *,
+        randomize: bool,
+    ) -> list[Any]:
+        reply_slots = [slot for slot in slots if getattr(slot, "key", None) == "slot_1_r"]
+        non_reply_slots = [
+            slot for slot in slots if getattr(slot, "key", None) != "slot_1_r"
+        ]
+        if randomize:
+            self.action_shuffle(non_reply_slots)
+        return [*non_reply_slots, *reply_slots]
 
     def _build_active_bot_action_sequence(self):
         build_result = self._build_active_bot_action_sequence_result()
@@ -771,6 +788,8 @@ class DesktopBotWorker:
             if outcome == "failed":
                 last_failure_reason = failure_reason
                 failure_recorded = True
+                if failure_reason == "window_not_focusable":
+                    break
                 continue
             if outcome == "recovered":
                 recovery_performed = True
@@ -1486,6 +1505,10 @@ class DesktopBotWorker:
             item_index,
         )
 
+    def _slot_1_obstruction_template_path(self) -> Path | None:
+        template_path = self._troubleshoot_template_path("black_box", 0)
+        return template_path if template_path.exists() else None
+
     def _build_troubleshoot_sequence(
         self,
         *,
@@ -2067,6 +2090,7 @@ class DesktopBotWorker:
             build_result = build_bot_action_sequence(
                 [slot],
                 slot_1_finish_delay_seconds=self.config.slot_1_finish_delay_seconds,
+                slot_1_obstruction_template_path=self._slot_1_obstruction_template_path(),
                 choose_preset=build_slot_1_preset_chooser(),
                 reorder_slot_1_last=False,
             )

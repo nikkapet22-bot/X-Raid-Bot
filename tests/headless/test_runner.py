@@ -43,14 +43,14 @@ class _FakeActionExecutor:
         return action_names
 
 
-def _build_job() -> RaidActionJob:
+def _build_job(*, require_reply: bool = False) -> RaidActionJob:
     return RaidActionJob(
         normalized_url="https://x.com/i/status/123",
         raw_url="x.com/i/status/123",
         chat_id=1001,
         sender_id=999,
         requirements=RaidActionRequirements(
-            reply=True,
+            reply=require_reply,
             like=True,
             repost=True,
             bookmark=True,
@@ -82,9 +82,9 @@ def test_runner_executes_enabled_actions_in_order() -> None:
         url="https://x.com/i/status/123",
         success=True,
         reason="completed",
-        completed_actions=("reply", "like", "bookmark"),
+        completed_actions=("like", "bookmark"),
     )
-    assert action_executor.calls == [("reply", "like", "bookmark")]
+    assert action_executor.calls == [("like", "bookmark")]
     assert session_manager.session.closed is True
 
 
@@ -132,3 +132,78 @@ def test_runner_returns_structured_failure_when_action_execution_breaks() -> Non
         completed_actions=(),
     )
     assert session_manager.session.closed is True
+
+
+def test_runner_skips_reply_required_raid_as_unsupported_for_now() -> None:
+    from raidbot.headless.runner import HeadlessRaidRunner
+
+    session_manager = _FakeSessionManager(HeadlessAuthState(status="authenticated"))
+    action_executor = _FakeActionExecutor()
+    runner = HeadlessRaidRunner(
+        session_manager=session_manager,
+        action_executor=action_executor,
+        enabled_actions=HeadlessActionToggles(),
+    )
+
+    result = runner.run(_build_job(require_reply=True))
+
+    assert result == HeadlessRunResult(
+        url="https://x.com/i/status/123",
+        success=False,
+        reason="unsupported_for_now",
+        completed_actions=(),
+    )
+    assert action_executor.calls == []
+    assert session_manager.open_calls == 0
+
+
+class _FakeLocator:
+    def __init__(self, label: str, calls: list[tuple[str, str]]) -> None:
+        self.label = label
+        self.calls = calls
+
+    def click(self) -> None:
+        self.calls.append((self.label, "click"))
+
+
+class _FakeActionPage:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.goto_calls: list[str] = []
+
+    def goto(self, url: str) -> None:
+        self.goto_calls.append(url)
+
+    def get_by_test_id(self, test_id: str) -> _FakeLocator:
+        self.calls.append(("get_by_test_id", test_id))
+        return _FakeLocator(f"test_id:{test_id}", self.calls)
+
+    def get_by_role(self, role: str, *, name: str) -> _FakeLocator:
+        self.calls.append(("get_by_role", f"{role}:{name}"))
+        return _FakeLocator(f"role:{role}:{name}", self.calls)
+
+
+def test_action_executor_uses_expected_like_repost_bookmark_locator_flow() -> None:
+    from raidbot.headless.actions import PlaywrightXActionExecutor
+
+    page = _FakeActionPage()
+    executor = PlaywrightXActionExecutor()
+
+    completed = executor.execute(
+        page,
+        _build_job(),
+        ("like", "repost", "bookmark"),
+    )
+
+    assert completed == ("like", "repost", "bookmark")
+    assert page.goto_calls == ["https://x.com/i/status/123"]
+    assert page.calls == [
+        ("get_by_test_id", "like"),
+        ("test_id:like", "click"),
+        ("get_by_test_id", "retweet"),
+        ("test_id:retweet", "click"),
+        ("get_by_role", "menuitem:Repost"),
+        ("role:menuitem:Repost", "click"),
+        ("get_by_test_id", "bookmark"),
+        ("test_id:bookmark", "click"),
+    ]

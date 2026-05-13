@@ -295,7 +295,7 @@ class AutomationPage(QWidget):
             self.default_auto_sequence_combo.setCurrentIndex(index if index >= 0 else 0)
 
     def _refresh_manual_run_buttons(self) -> None:
-        queue_blocks_manual = self._queue_state in {"queued", "running", "paused"}
+        queue_blocks_manual = self._queue_state in {"queued", "running", "paused", "suspended"}
         is_running = self._run_state == "running"
         can_start = not is_running and not queue_blocks_manual
         self.start_button.setEnabled(can_start)
@@ -303,12 +303,12 @@ class AutomationPage(QWidget):
         self.stop_button.setEnabled(is_running)
 
     def _refresh_queue_controls(self) -> None:
-        queue_active = self._queue_state in {"queued", "running", "paused"}
+        queue_active = self._queue_state in {"queued", "running", "paused", "suspended"}
         can_resume = (
             self._auto_run_enabled
             and (
                 (self._queue_state == "queued" and self._queue_length > 0)
-                or self._queue_state == "paused"
+                or self._queue_state in {"paused", "suspended"}
             )
         )
         can_clear = queue_active or self._queue_length > 0

@@ -21,6 +21,7 @@ class HeadlessRaidListenerAdapter:
     ) -> None:
         self.shared_config = shared_config
         self._on_job = on_job
+        self._on_detection = None
         self._listener_factory = listener_factory
         self._service = RaidService(
             allowed_chat_ids=set(shared_config.whitelisted_chat_ids),
@@ -37,9 +38,17 @@ class HeadlessRaidListenerAdapter:
 
     def handle_message(self, message: IncomingMessage) -> RaidDetectionResult:
         result = self._service.handle_message(message)
+        if self._on_detection is not None:
+            self._on_detection(result)
         if result.kind == "job_detected" and result.job is not None:
             self._on_job(result.job)
         return result
+
+    def set_job_consumer(self, on_job: Callable[[RaidActionJob], None]) -> None:
+        self._on_job = on_job
+
+    def set_detection_callback(self, callback: Callable[[RaidDetectionResult], None]) -> None:
+        self._on_detection = callback
 
     def build_listener(self):
         return self._listener_factory(

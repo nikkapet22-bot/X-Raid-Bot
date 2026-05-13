@@ -14,6 +14,12 @@ class PendingRaidWorkItem:
     trace_id: str
 
 
+class UserPauseRequested(Exception):
+    def __init__(self, snapshot=None) -> None:
+        super().__init__("user_pause_requested")
+        self.snapshot = snapshot
+
+
 class AutoRunProcessor:
     def __init__(
         self,
@@ -47,6 +53,8 @@ class AutoRunProcessor:
         self._last_error: str | None = None
         self._failed_item: PendingRaidWorkItem | None = None
         self._failed_context: OpenedRaidContext | None = None
+        self._suspended_item: PendingRaidWorkItem | None = None
+        self._suspended_context: OpenedRaidContext | None = None
 
     @property
     def state(self) -> str:
@@ -83,13 +91,13 @@ class AutoRunProcessor:
             return False
 
         self._pending.append(item)
-        if self._state != "running":
+        if self._state not in {"running", "suspended"}:
             self._state = "queued"
         self._emit_status()
         return True
 
     def process_next(self) -> bool:
-        if self._state in {"paused", "running"} or not self._pending:
+        if self._state in {"paused", "running", "suspended"} or not self._pending:
             return False
         if not self._auto_run_enabled():
             return self._pause_failed_item(
@@ -110,7 +118,7 @@ class AutoRunProcessor:
         return self._run_item(item, sequence_id)
 
     def resume(self) -> bool:
-        if self._state != "paused":
+        if self._state not in {"paused", "suspended"}:
             return False
         if not self._auto_run_enabled():
             self._last_error = "auto_run_disabled"
@@ -122,6 +130,21 @@ class AutoRunProcessor:
             self._last_error = "default_sequence_missing"
             self._emit_status()
             return False
+
+        if self._state == "suspended":
+            if self._suspended_item is None:
+                if self._pending:
+                    self._state = "queued"
+                    self._emit_status()
+                    return self.process_next()
+                self._state = "idle"
+                self._emit_status()
+                return False
+            return self._run_item(
+                self._suspended_item,
+                sequence_id,
+                context=self._suspended_context,
+            )
 
         if self._failed_item is None:
             if self._pending:
@@ -142,9 +165,35 @@ class AutoRunProcessor:
         self._pending.clear()
         self._failed_item = None
         self._failed_context = None
+        self._suspended_item = None
+        self._suspended_context = None
         self._current_url = None
         self._last_error = None
         self._state = "idle"
+        self._emit_status()
+
+    def request_user_pause(
+        self,
+        item: PendingRaidWorkItem,
+        context: OpenedRaidContext | None,
+    ) -> None:
+        self._suspended_item = item
+        self._suspended_context = context
+        self._failed_item = None
+        self._failed_context = None
+        self._state = "suspended"
+        self._current_url = item.normalized_url
+        self._last_error = None
+        self._emit_status()
+
+    def suspend(self) -> None:
+        if self._state == "running":
+            return
+        self._state = "suspended"
+        self._current_url = (
+            self._suspended_item.normalized_url if self._suspended_item is not None else None
+        )
+        self._last_error = None
         self._emit_status()
 
     def _reject(self, item: PendingRaidWorkItem, reason: str) -> None:
@@ -163,11 +212,11 @@ class AutoRunProcessor:
         if opened_context is None:
             snapshot = self._pre_open_check(item)
             if snapshot is None:
-                return self._pause_failed_item(item, "target_window_not_found")
+                return self._fail_item(item, "target_window_not_found")
             try:
                 opened_context = self._open_raid(item, snapshot)
             except Exception as exc:
-                return self._pause_failed_item(
+                return self._fail_item(
                     item,
                     self._reason_from_exception(exc, "chrome_open_failed"),
                 )
@@ -179,15 +228,18 @@ class AutoRunProcessor:
 
         try:
             succeeded, failure_reason = self._execute_raid(item, opened_context, sequence_id)
+        except UserPauseRequested:
+            self.request_user_pause(item, opened_context)
+            return False
         except Exception as exc:
-            return self._pause_failed_item(
+            return self._fail_item(
                 item,
                 self._reason_from_exception(exc, "autorun_execution_failed"),
                 opened_context,
             )
 
         if not succeeded:
-            return self._pause_failed_item(
+            return self._fail_item(
                 item,
                 failure_reason or "autorun_execution_failed",
                 opened_context,
@@ -196,13 +248,15 @@ class AutoRunProcessor:
         try:
             self._close_raid(opened_context)
         except Exception as exc:
-            return self._pause_failed_item(
+            return self._fail_item(
                 item,
                 self._reason_from_exception(exc, "tab_close_failed"),
                 opened_context,
             )
         self._failed_item = None
         self._failed_context = None
+        self._suspended_item = None
+        self._suspended_context = None
         self._current_url = None
         self._last_error = None
         self._state = "queued" if self._pending else "idle"
@@ -224,6 +278,25 @@ class AutoRunProcessor:
         self._last_error = reason
         self._failed_item = item
         self._failed_context = context
+        self._suspended_item = None
+        self._suspended_context = None
+        self._on_failure(item, reason, context)
+        self._emit_status()
+        return False
+
+    def _fail_item(
+        self,
+        item: PendingRaidWorkItem,
+        reason: str,
+        context: OpenedRaidContext | None = None,
+    ) -> bool:
+        self._current_url = None
+        self._last_error = reason
+        self._failed_item = None
+        self._failed_context = None
+        self._suspended_item = None
+        self._suspended_context = None
+        self._state = "queued" if self._pending else "idle"
         self._on_failure(item, reason, context)
         self._emit_status()
         return False

@@ -177,12 +177,72 @@ class WindowManager:
         return not bool(win32gui.IsIconic(handle))
 
     def _focus_window_win32(self, handle: int) -> bool:
+        win32con = importlib.import_module("win32con")
         win32gui = importlib.import_module("win32gui")
+        if int(win32gui.GetForegroundWindow()) == int(handle):
+            return True
+        try:
+            if bool(win32gui.IsIconic(handle)):
+                win32gui.ShowWindow(handle, win32con.SW_RESTORE)
+        except Exception:
+            pass
+        try:
+            win32gui.BringWindowToTop(handle)
+        except Exception:
+            pass
+        try:
+            flags = (
+                int(win32con.SWP_NOMOVE)
+                | int(win32con.SWP_NOSIZE)
+                | int(win32con.SWP_SHOWWINDOW)
+            )
+            win32gui.SetWindowPos(
+                handle,
+                win32con.HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                flags,
+            )
+            win32gui.SetWindowPos(
+                handle,
+                win32con.HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                flags,
+            )
+        except Exception:
+            pass
+        try:
+            win32gui.ShowWindow(handle, win32con.SW_SHOW)
+        except Exception:
+            pass
         try:
             win32gui.SetForegroundWindow(handle)
         except Exception:
+            pass
+        try:
+            win32gui.SetActiveWindow(handle)
+        except Exception:
+            pass
+        try:
+            win32gui.SetFocus(handle)
+        except Exception:
+            pass
+        if int(win32gui.GetForegroundWindow()) == int(handle):
+            return True
+        try:
+            # Windows can refuse foreground ownership even when the window is
+            # visibly raised and usable. Accept that state instead of failing
+            # the raid immediately.
+            return bool(win32gui.IsWindowVisible(handle)) and not bool(
+                win32gui.IsIconic(handle)
+            )
+        except Exception:
             return False
-        return int(win32gui.GetForegroundWindow()) == int(handle)
 
     def _maximize_window_win32(self, handle: int) -> bool:
         win32con = importlib.import_module("win32con")

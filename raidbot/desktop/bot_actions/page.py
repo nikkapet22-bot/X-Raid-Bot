@@ -350,6 +350,7 @@ class TroubleshootBox(QFrame):
 
 class BotActionsPage(QWidget):
     pageReadyCaptureRequested = Signal()
+    pageExitCaptureRequested = Signal()
     slotCaptureRequested = Signal(int)
     slotTestRequested = Signal(int)
     slotPresetsRequested = Signal(int)
@@ -367,6 +368,7 @@ class BotActionsPage(QWidget):
         super().__init__(parent)
         self.slot_boxes: list[SlotBox] = []
         self.cldf_boxes: list[TroubleshootBox] = []
+        self.black_box_boxes: list[TroubleshootBox] = []
         self.troubleshoot_groups: dict[str, list[TroubleshootBox]] = {}
         self.slot_1_finish_delay_input: QSpinBox | None = None
 
@@ -386,6 +388,20 @@ class BotActionsPage(QWidget):
         self.page_ready_status_label.setWordWrap(True)
         self.page_ready_status_label.setProperty("muted", "true")
 
+        self.page_exit_preview_label = QLabel("No image")
+        self.page_exit_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_exit_preview_label.setMinimumSize(120, 72)
+        self.page_exit_preview_label.setProperty("muted", "true")
+
+        self.page_exit_capture_button = QPushButton("Capture")
+        self.page_exit_capture_button.setProperty("variant", "secondary")
+        self.page_exit_capture_button.setProperty("botActionButton", "true")
+        self.page_exit_capture_button.clicked.connect(self._emit_page_exit_capture_request)
+
+        self.page_exit_status_label = QLabel("No template captured.")
+        self.page_exit_status_label.setWordWrap(True)
+        self.page_exit_status_label.setProperty("muted", "true")
+
         self.status_label = QLabel("Configure fixed bot action slots.")
         self.status_label.setWordWrap(True)
         self.status_label.setProperty("muted", "true")
@@ -402,6 +418,7 @@ class BotActionsPage(QWidget):
 
         self._build_layout()
         self.set_page_ready_template_path(config.page_ready_template_path)
+        self.set_page_exit_template_path(config.page_exit_template_path)
         self.set_slots(config.bot_action_slots)
         self.set_slot_1_finish_delay_seconds(config.slot_1_finish_delay_seconds)
         self.set_status_fields(latest_status="Configure fixed bot action slots.")
@@ -436,6 +453,16 @@ class BotActionsPage(QWidget):
             self.page_ready_status_label.setText(str(normalized_template_path))
         else:
             self.page_ready_status_label.setText("No template captured.")
+
+    def set_page_exit_template_path(self, template_path: Path | None) -> None:
+        normalized_template_path = (
+            Path(template_path) if template_path is not None else None
+        )
+        _set_preview_label(self.page_exit_preview_label, normalized_template_path)
+        if normalized_template_path is not None:
+            self.page_exit_status_label.setText(str(normalized_template_path))
+        else:
+            self.page_exit_status_label.setText("No template captured.")
 
     def show_error(self, message: str) -> None:
         self.status_label.setText(message)
@@ -472,6 +499,9 @@ class BotActionsPage(QWidget):
         helper_label.setProperty("muted", "true")
         layout.addWidget(helper_label)
 
+        templates_row = QHBoxLayout()
+        templates_row.setSpacing(12)
+
         # Page ready section
         page_ready_group = QGroupBox("Page Ready")
         page_ready_layout = QVBoxLayout(page_ready_group)
@@ -492,7 +522,29 @@ class BotActionsPage(QWidget):
         pr_info.addStretch()
         page_ready_card_layout.addLayout(pr_info)
         page_ready_layout.addWidget(self.page_ready_card)
-        layout.addWidget(page_ready_group)
+        templates_row.addWidget(page_ready_group)
+
+        page_exit_group = QGroupBox("Page Exit")
+        page_exit_layout = QVBoxLayout(page_exit_group)
+        page_exit_layout.setSpacing(0)
+        page_exit_layout.setContentsMargins(0, 8, 0, 0)
+        self.page_exit_card = QFrame()
+        self.page_exit_card.setObjectName("card")
+        page_exit_card_layout = QHBoxLayout(self.page_exit_card)
+        page_exit_card_layout.setSpacing(12)
+        page_exit_card_layout.setContentsMargins(14, 14, 14, 14)
+        self.page_exit_preview_label.setStyleSheet(
+            "border: 1px dashed #1e3252; border-radius: 6px;"
+        )
+        page_exit_card_layout.addWidget(self.page_exit_preview_label)
+        pe_info = QVBoxLayout()
+        pe_info.addWidget(self.page_exit_capture_button)
+        pe_info.addWidget(self.page_exit_status_label)
+        pe_info.addStretch()
+        page_exit_card_layout.addLayout(pe_info)
+        page_exit_layout.addWidget(self.page_exit_card)
+        templates_row.addWidget(page_exit_group)
+        layout.addLayout(templates_row)
 
         # Slot cards in a 2×2 grid
         slots_group = QGroupBox("Action Slots")
@@ -533,10 +585,7 @@ class BotActionsPage(QWidget):
             slots_layout.addWidget(box, index // 2, index % 2)
         layout.addWidget(slots_group)
 
-        troubleshoot_group = QGroupBox("Troubleshoot")
-        troubleshoot_layout = QVBoxLayout(troubleshoot_group)
-        troubleshoot_layout.setSpacing(12)
-        cldf_group = QGroupBox("CLDF")
+        cldf_group = QGroupBox("CLDF Capture Path")
         cldf_layout = QHBoxLayout(cldf_group)
         cldf_layout.setSpacing(12)
         self.cldf_boxes = []
@@ -557,8 +606,30 @@ class BotActionsPage(QWidget):
             self.cldf_boxes.append(box)
             cldf_layout.addWidget(box)
         self.troubleshoot_groups["cldf"] = self.cldf_boxes
-        troubleshoot_layout.addWidget(cldf_group)
-        layout.addWidget(troubleshoot_group)
+        layout.addWidget(cldf_group)
+
+        black_box_group = QGroupBox("Black Box Escape")
+        black_box_layout = QHBoxLayout(black_box_group)
+        black_box_layout.setSpacing(12)
+        self.black_box_boxes = []
+        for index, label in enumerate(("Box",)):
+            box = TroubleshootBox(label=label)
+            box.capture_button.clicked.connect(
+                lambda _checked=False, item_index=index: self._emit_troubleshoot_capture_request(
+                    "black_box",
+                    item_index,
+                )
+            )
+            box.test_button.clicked.connect(
+                lambda _checked=False, item_index=index: self._emit_troubleshoot_test_request(
+                    "black_box",
+                    item_index,
+                )
+            )
+            self.black_box_boxes.append(box)
+            black_box_layout.addWidget(box)
+        self.troubleshoot_groups["black_box"] = self.black_box_boxes
+        layout.addWidget(black_box_group)
 
         # Status
         status_group = QGroupBox("Status")
@@ -594,6 +665,10 @@ class BotActionsPage(QWidget):
         self.show_status("Page Ready: capturing")
         self.pageReadyCaptureRequested.emit()
 
+    def _emit_page_exit_capture_request(self) -> None:
+        self.show_status("Page Exit: capturing")
+        self.pageExitCaptureRequested.emit()
+
     def _emit_slot_test_request(self, slot_index: int) -> None:
         self.show_status(f"{self._format_slot_name(slot_index)}: testing")
         self.slotTestRequested.emit(slot_index)
@@ -620,4 +695,5 @@ class BotActionsPage(QWidget):
         return f"Slot {slot_index + 1}"
 
     def _format_troubleshoot_name(self, group_key: str, item_index: int) -> str:
-        return f"Troubleshoot {str(group_key).upper()} {item_index + 1}"
+        display_group = str(group_key).replace("_", " ").upper()
+        return f"Troubleshoot {display_group} {item_index + 1}"

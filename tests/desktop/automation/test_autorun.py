@@ -4,6 +4,7 @@ from raidbot.chrome import OpenedRaidContext
 from raidbot.desktop.automation.autorun import (
     AutoRunProcessor,
     PendingRaidWorkItem,
+    UserPauseRequested,
 )
 from raidbot.desktop.automation.windowing import WindowInfo, find_existing_chrome_window
 
@@ -108,7 +109,7 @@ def test_autorun_processor_missing_default_sequence_pauses_without_enqueuing() -
     assert failures == ["default_sequence_missing"]
 
 
-def test_autorun_processor_pauses_when_pre_open_validation_fails_closed() -> None:
+def test_autorun_processor_fails_item_without_pausing_when_pre_open_validation_fails() -> None:
     opened: list[str] = []
     failures: list[str] = []
     processor = AutoRunProcessor(
@@ -127,8 +128,9 @@ def test_autorun_processor_pauses_when_pre_open_validation_fails_closed() -> Non
     processed = processor.process_next()
 
     assert processed is False
-    assert processor.state == "paused"
+    assert processor.state == "idle"
     assert processor.queue_length == 0
+    assert processor.last_error == "target_window_not_found"
     assert failures == ["target_window_not_found"]
     assert opened == []
 
@@ -173,10 +175,11 @@ def test_autorun_processor_success_transitions_running_to_idle_and_closes_contex
     ]
 
 
-def test_autorun_processor_failure_pauses_and_leaves_context_open() -> None:
+def test_autorun_processor_failure_does_not_pause_future_queue_items() -> None:
     statuses: list[tuple[str, int, str | None, str | None]] = []
     failures: list[tuple[str, str, int | None]] = []
     closes: list[int] = []
+    execute_results = [(False, "image_match_not_found"), (True, None)]
     processor = AutoRunProcessor(
         auto_run_enabled=lambda: True,
         default_sequence_id=lambda: "seq-1",
@@ -187,7 +190,7 @@ def test_autorun_processor_failure_pauses_and_leaves_context_open() -> None:
             window_handle=window.handle,
             profile_directory="Profile 3",
         ),
-        execute_raid=lambda _item, _context, _sequence_id: (False, "image_match_not_found"),
+        execute_raid=lambda _item, _context, _sequence_id: execute_results.pop(0),
         close_raid=lambda context: closes.append(context.window_handle),
         on_failure=lambda item, reason, context: failures.append(
             (item.trace_id, reason, getattr(context, "window_handle", None))
@@ -197,23 +200,29 @@ def test_autorun_processor_failure_pauses_and_leaves_context_open() -> None:
         ),
     )
     item = build_item()
+    second = build_item("https://x.com/i/status/999", "raid-2")
 
     assert processor.admit(item) is True
+    assert processor.admit(second) is True
 
     processed = processor.process_next()
 
     assert processed is False
-    assert processor.state == "paused"
-    assert processor.queue_length == 0
+    assert processor.state == "queued"
+    assert processor.queue_length == 1
     assert processor.current_url is None
     assert processor.last_error == "image_match_not_found"
     assert failures == [("raid-1", "image_match_not_found", 12)]
     assert closes == []
     assert statuses == [
         ("queued", 1, None, None),
-        ("running", 0, "https://x.com/i/status/123", None),
-        ("paused", 0, None, "image_match_not_found"),
+        ("queued", 2, None, None),
+        ("running", 1, "https://x.com/i/status/123", None),
+        ("queued", 1, None, "image_match_not_found"),
     ]
+
+    assert processor.process_next() is True
+    assert processor.state == "idle"
 
 
 def test_autorun_processor_keeps_running_state_when_new_admission_fails_mid_run() -> None:
@@ -252,9 +261,11 @@ def test_autorun_processor_keeps_running_state_when_new_admission_fails_mid_run(
     assert processor.state == "idle"
 
 
-def test_autorun_processor_close_failure_pauses_after_successful_execute() -> None:
+def test_autorun_processor_close_failure_does_not_pause_future_queue_items() -> None:
     statuses: list[tuple[str, int, str | None, str | None]] = []
     failures: list[tuple[str, str, int | None]] = []
+    execute_results = [(True, None), (True, None)]
+    close_failures = [True, False]
     processor = AutoRunProcessor(
         auto_run_enabled=lambda: True,
         default_sequence_id=lambda: "seq-1",
@@ -265,8 +276,12 @@ def test_autorun_processor_close_failure_pauses_after_successful_execute() -> No
             window_handle=window.handle,
             profile_directory="Profile 3",
         ),
-        execute_raid=lambda _item, _context, _sequence_id: (True, None),
-        close_raid=lambda _context: (_ for _ in ()).throw(RuntimeError("tab_close_failed")),
+        execute_raid=lambda _item, _context, _sequence_id: execute_results.pop(0),
+        close_raid=lambda _context: (
+            (_ for _ in ()).throw(RuntimeError("tab_close_failed"))
+            if close_failures.pop(0)
+            else None
+        ),
         on_failure=lambda item, reason, context: failures.append(
             (item.trace_id, reason, getattr(context, "window_handle", None))
         ),
@@ -276,20 +291,25 @@ def test_autorun_processor_close_failure_pauses_after_successful_execute() -> No
     )
 
     assert processor.admit(build_item()) is True
+    assert processor.admit(build_item("https://x.com/i/status/999", "raid-2")) is True
 
     processed = processor.process_next()
 
     assert processed is False
-    assert processor.state == "paused"
-    assert processor.queue_length == 0
+    assert processor.state == "queued"
+    assert processor.queue_length == 1
     assert processor.current_url is None
     assert processor.last_error == "tab_close_failed"
     assert failures == [("raid-1", "tab_close_failed", 21)]
     assert statuses == [
         ("queued", 1, None, None),
-        ("running", 0, "https://x.com/i/status/123", None),
-        ("paused", 0, None, "tab_close_failed"),
+        ("queued", 2, None, None),
+        ("running", 1, "https://x.com/i/status/123", None),
+        ("queued", 1, None, "tab_close_failed"),
     ]
+
+    assert processor.process_next() is True
+    assert processor.state == "idle"
 
 
 def test_autorun_processor_success_callback_failure_keeps_stable_success_state() -> None:
@@ -330,32 +350,174 @@ def test_autorun_processor_success_callback_failure_keeps_stable_success_state()
     ]
 
 
-def test_autorun_processor_resume_retries_same_failed_context() -> None:
-    execute_calls: list[tuple[str, int | None]] = []
+def test_autorun_processor_keeps_processing_next_item_after_item_failure() -> None:
+    execute_calls: list[str] = []
     closes: list[int] = []
+    execute_results = [(False, "image_match_not_found"), (True, None)]
     processor = AutoRunProcessor(
         auto_run_enabled=lambda: True,
         default_sequence_id=lambda: "seq-1",
-        pre_open_check=lambda _item: (),
-        open_raid=lambda _item, _snapshot: OpenedRaidContext(
-            normalized_url="https://x.com/i/status/123",
+        pre_open_check=lambda _item: build_window(handle=21),
+        open_raid=lambda item, window: OpenedRaidContext(
+            normalized_url=item.normalized_url,
             opened_at=6.0,
-            window_handle=21,
+            window_handle=window.handle,
             profile_directory="Profile 3",
         ),
-        execute_raid=lambda item, context, _sequence_id: (
-            execute_calls.append((item.trace_id, context.window_handle)),
-            (len(execute_calls) > 1, "image_match_not_found" if len(execute_calls) == 1 else None),
+        execute_raid=lambda item, _context, _sequence_id: (
+            execute_calls.append(item.trace_id),
+            execute_results.pop(0),
         )[1],
         close_raid=lambda context: closes.append(context.window_handle),
     )
 
-    assert processor.admit(build_item()) is True
+    assert processor.admit(build_item(trace_id="raid-1")) is True
+    assert processor.admit(build_item("https://x.com/i/status/999", "raid-2")) is True
     assert processor.process_next() is False
+    assert processor.state == "queued"
+
+    resumed = processor.process_next()
+
+    assert resumed is True
+    assert execute_calls == ["raid-1", "raid-2"]
+    assert closes == [21]
+    assert processor.state == "idle"
+
+
+def test_autorun_processor_user_pause_keeps_accepting_new_items() -> None:
+    statuses: list[tuple[str, int, str | None, str | None]] = []
+    interrupted_item = build_item(trace_id="raid-1")
+    interrupted_context = OpenedRaidContext(
+        normalized_url=interrupted_item.normalized_url,
+        opened_at=7.0,
+        window_handle=33,
+        profile_directory="Profile 3",
+    )
+    processor = AutoRunProcessor(
+        auto_run_enabled=lambda: True,
+        default_sequence_id=lambda: "seq-1",
+        pre_open_check=lambda _item: build_window(handle=33),
+        open_raid=lambda item, window: OpenedRaidContext(
+            normalized_url=item.normalized_url,
+            opened_at=7.0,
+            window_handle=window.handle,
+            profile_directory="Profile 3",
+        ),
+        execute_raid=lambda _item, _context, _sequence_id: (True, None),
+        close_raid=lambda _context: None,
+        on_status=lambda state, queue_length, current_url, last_error: statuses.append(
+            (state, queue_length, current_url, last_error)
+        ),
+    )
+    queued_item = build_item("https://x.com/i/status/999", trace_id="raid-2")
+
+    processor.request_user_pause(interrupted_item, interrupted_context)
+
+    admitted = processor.admit(queued_item)
+
+    assert admitted is True
+    assert processor.state == "suspended"
+    assert processor.current_url == interrupted_item.normalized_url
+    assert processor.pending_items == (queued_item,)
+    assert statuses[-1] == ("suspended", 1, interrupted_item.normalized_url, None)
+
+
+def test_autorun_processor_resume_retries_suspended_item_before_pending_queue() -> None:
+    execute_calls: list[tuple[str, int | None]] = []
+    interrupted_item = build_item(trace_id="raid-1")
+    interrupted_context = OpenedRaidContext(
+        normalized_url=interrupted_item.normalized_url,
+        opened_at=7.5,
+        window_handle=44,
+        profile_directory="Profile 3",
+    )
+    queued_item = build_item("https://x.com/i/status/999", trace_id="raid-2")
+    processor = AutoRunProcessor(
+        auto_run_enabled=lambda: True,
+        default_sequence_id=lambda: "seq-1",
+        pre_open_check=lambda _item: build_window(handle=44),
+        open_raid=lambda item, window: OpenedRaidContext(
+            normalized_url=item.normalized_url,
+            opened_at=7.5,
+            window_handle=window.handle,
+            profile_directory="Profile 3",
+        ),
+        execute_raid=lambda item, context, _sequence_id: (
+            execute_calls.append((item.trace_id, context.window_handle)),
+            (True, None),
+        )[1],
+        close_raid=lambda _context: None,
+    )
+
+    processor.request_user_pause(interrupted_item, interrupted_context)
+    assert processor.admit(queued_item) is True
 
     resumed = processor.resume()
 
     assert resumed is True
-    assert execute_calls == [("raid-1", 21), ("raid-1", 21)]
-    assert closes == [21]
-    assert processor.state == "idle"
+    assert execute_calls == [("raid-1", 44)]
+    assert processor.state == "queued"
+    assert processor.pending_items == (queued_item,)
+
+
+def test_autorun_processor_suspend_keeps_pending_items_queued() -> None:
+    statuses: list[tuple[str, int, str | None, str | None]] = []
+    processor = AutoRunProcessor(
+        auto_run_enabled=lambda: True,
+        default_sequence_id=lambda: "seq-1",
+        pre_open_check=lambda _item: build_window(handle=52),
+        open_raid=lambda item, window: OpenedRaidContext(
+            normalized_url=item.normalized_url,
+            opened_at=8.0,
+            window_handle=window.handle,
+            profile_directory="Profile 3",
+        ),
+        execute_raid=lambda _item, _context, _sequence_id: (True, None),
+        close_raid=lambda _context: None,
+        on_status=lambda state, queue_length, current_url, last_error: statuses.append(
+            (state, queue_length, current_url, last_error)
+        ),
+    )
+    queued_item = build_item("https://x.com/i/status/999", trace_id="raid-2")
+
+    assert processor.admit(queued_item) is True
+
+    processor.suspend()
+
+    assert processor.state == "suspended"
+    assert processor.pending_items == (queued_item,)
+    assert statuses[-1] == ("suspended", 1, None, None)
+
+
+def test_autorun_processor_user_pause_exception_suspends_current_item() -> None:
+    statuses: list[tuple[str, int, str | None, str | None]] = []
+    failures: list[str] = []
+    processor = AutoRunProcessor(
+        auto_run_enabled=lambda: True,
+        default_sequence_id=lambda: "seq-1",
+        pre_open_check=lambda _item: build_window(handle=61),
+        open_raid=lambda item, window: OpenedRaidContext(
+            normalized_url=item.normalized_url,
+            opened_at=8.5,
+            window_handle=window.handle,
+            profile_directory="Profile 3",
+        ),
+        execute_raid=lambda _item, _context, _sequence_id: (_ for _ in ()).throw(
+            UserPauseRequested()
+        ),
+        close_raid=lambda _context: None,
+        on_failure=lambda _item, reason, _context: failures.append(reason),
+        on_status=lambda state, queue_length, current_url, last_error: statuses.append(
+            (state, queue_length, current_url, last_error)
+        ),
+    )
+
+    assert processor.admit(build_item()) is True
+
+    processed = processor.process_next()
+
+    assert processed is False
+    assert failures == []
+    assert processor.state == "suspended"
+    assert processor.current_url == "https://x.com/i/status/123"
+    assert statuses[-1] == ("suspended", 0, "https://x.com/i/status/123", None)

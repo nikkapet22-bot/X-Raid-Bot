@@ -131,6 +131,7 @@ class DesktopAppConfig:
     default_action_reply: bool
     auto_run_enabled: bool
     raid_on_restart_enabled: bool
+    performance_mode_enabled: bool
     default_auto_sequence_id: str | None
     auto_run_settle_ms: int
     slot_1_finish_delay_seconds: int
@@ -161,6 +162,7 @@ class DesktopAppConfig:
         default_action_reply: bool = True,
         auto_run_enabled: bool = False,
         raid_on_restart_enabled: bool = False,
+        performance_mode_enabled: bool = False,
         default_auto_sequence_id: str | None = None,
         auto_run_settle_ms: int = 1500,
         slot_1_finish_delay_seconds: int = 2,
@@ -193,6 +195,7 @@ class DesktopAppConfig:
         self.default_action_reply = default_action_reply
         self.auto_run_enabled = auto_run_enabled
         self.raid_on_restart_enabled = raid_on_restart_enabled
+        self.performance_mode_enabled = bool(performance_mode_enabled)
         self.default_auto_sequence_id = default_auto_sequence_id
         self.auto_run_settle_ms = auto_run_settle_ms
         self.slot_1_finish_delay_seconds = int(slot_1_finish_delay_seconds)

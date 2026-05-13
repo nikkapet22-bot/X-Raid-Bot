@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from raidbot.desktop.automation.models import AutomationSequence, AutomationStep, MatchResult
 from raidbot.desktop.automation.runner import RunResult, SequenceRunner
@@ -82,14 +83,17 @@ class FakeMatcher:
 class FakeInputDriver:
     def __init__(self) -> None:
         self.clicks: list[tuple[int, int]] = []
+        self.click_delays: list[float] = []
         self.cursor_moves: list[tuple[int, int]] = []
         self.scrolls: list[int] = []
         self.pasted_text: list[str] = []
         self.pasted_images: list[Path] = []
         self.file_pasted_images: list[Path] = []
+        self.escapes: list[float | None] = []
 
     def move_click(self, point: tuple[int, int], *, delay_seconds: float = 0.5) -> None:
         self.clicks.append(point)
+        self.click_delays.append(delay_seconds)
 
     def move_cursor(self, point: tuple[int, int]) -> None:
         self.cursor_moves.append(point)
@@ -105,6 +109,9 @@ class FakeInputDriver:
 
     def paste_image_file(self, image_path: Path) -> None:
         self.file_pasted_images.append(image_path)
+
+    def press_escape(self) -> None:
+        self.escapes.append(None)
 
 
 def _step(**overrides) -> AutomationStep:
@@ -151,6 +158,30 @@ def _match(x: int = 20, y: int = 10) -> MatchResult:
     return MatchResult(score=0.95, top_left_x=x, top_left_y=y, width=10, height=10)
 
 
+def test_runner_slot_1_hover_reset_moves_double_distance_left() -> None:
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window(bounds=(0, 0, 200, 100))]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([]),
+        input_driver=FakeInputDriver(),
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=FakeClock().now,
+        sleep=FakeClock().sleep,
+    )
+    finish_match = MatchResult(
+        score=0.98,
+        top_left_x=80,
+        top_left_y=10,
+        width=10,
+        height=10,
+    )
+
+    assert runner._resolve_hover_reset_point(
+        _window(bounds=(0, 0, 200, 100)),
+        finish_match,
+    ) == (20, 15)
+
+
 def test_runner_clicks_match_and_advances_to_next_step() -> None:
     events: list[dict[str, object]] = []
     runner = SequenceRunner(
@@ -169,6 +200,7 @@ def test_runner_clicks_match_and_advances_to_next_step() -> None:
     assert result.status == "completed"
     assert result.window_handle == 7
     assert runner.input_driver.clicks == [(25, 15)]
+    assert runner.input_driver.click_delays == [0.25]
     assert [event["type"] for event in events] == [
         "run_started",
         "target_window_acquired",
@@ -515,6 +547,67 @@ def test_runner_performs_two_clicks_before_confirming_when_step_requires_it() ->
     assert clock.value >= 100.5
 
 
+def test_runner_stops_after_completed_step_and_resumes_from_next_step() -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    runner: SequenceRunner | None = None
+
+    def emit_event(event: dict[str, object]) -> None:
+        if (
+            runner is not None
+            and event.get("type") == "step_succeeded"
+            and event.get("step_index") == 0
+        ):
+            runner.request_stop()
+
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match(), None]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+        emit_event=emit_event,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(name="step-1"),
+            _step(name="step-2", click_offset_x=10),
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "stopped"
+    assert result.step_index == 1
+    assert input_driver.clicks == [(25, 15)]
+
+    resumed_input_driver = FakeInputDriver()
+    resumed_clock = FakeClock()
+    resumed_runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match(), None]),
+        input_driver=resumed_input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=resumed_clock.now,
+        sleep=resumed_clock.sleep,
+    )
+
+    resumed_result = resumed_runner.run_sequence(
+        _sequence(
+            _step(name="step-1"),
+            _step(name="step-2", click_offset_x=10),
+        ),
+        selected_window=_window(),
+        start_step_index=1,
+    )
+
+    assert resumed_result.status == "completed"
+    assert resumed_input_driver.clicks == [(35, 15)]
+
+
 def test_runner_counts_same_position_visual_change_as_success() -> None:
     before = np.zeros((40, 40, 3), dtype=np.uint8)
     after = before.copy()
@@ -575,7 +668,7 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
     assert input_driver.clicks == [(25, 15), (45, 15)]
 
 
-def test_runner_slot_1_pastes_text_and_image_without_extra_waits(
+def test_runner_slot_1_pastes_image_before_finish_probe(
     tmp_path: Path,
 ) -> None:
     clock = FakeClock()
@@ -606,7 +699,7 @@ def test_runner_slot_1_pastes_text_and_image_without_extra_waits(
     runner = SequenceRunner(
         window_manager=FakeWindowManager(windows=[_window()]),
         capture=FakeCapture(),
-        matcher=FakeMatcher([_match(), _match(40, 10), None]),
+        matcher=FakeMatcher([_match(), _match(40, 10), _match(40, 10), None]),
         input_driver=input_driver,
         template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
         now=clock.now,
@@ -631,6 +724,485 @@ def test_runner_slot_1_pastes_text_and_image_without_extra_waits(
         ("text:gm", 100.0),
         (f"file_image:{reply_image_path}", 100.5),
     ]
+
+
+def test_runner_slot_1_scrolls_when_finish_hidden_after_image(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+
+    class TimedInputDriver(FakeInputDriver):
+        def __init__(self, current_time) -> None:
+            super().__init__()
+            self.events: list[tuple[str, float]] = []
+            self._current_time = current_time
+
+        def paste_text(self, text: str) -> None:
+            super().paste_text(text)
+            self.events.append((f"text:{text}", self._current_time()))
+
+        def paste_image_file(self, image_path: Path) -> None:
+            super().paste_image_file(image_path)
+            self.events.append((f"file_image:{image_path}", self._current_time()))
+
+        def scroll(self, amount: int) -> None:
+            super().scroll(amount)
+            self.events.append((f"scroll:{amount}", self._current_time()))
+
+        def press_escape(self) -> None:
+            super().press_escape()
+            self.events.append(("esc", self._current_time()))
+
+    input_driver = TimedInputDriver(clock.now)
+    reply_image_path = tmp_path / "reply.png"
+    reply_image_path.write_bytes(b"reply image")
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match(), None, _match(40, 10), None]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                preset_image_path=reply_image_path,
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.events == [
+        ("text:gm", 100.0),
+        (f"file_image:{reply_image_path}", 100.5),
+        ("scroll:-120", 101.5),
+    ]
+    assert input_driver.escapes == []
+    assert input_driver.clicks == [(25, 15), (45, 15)]
+
+
+def test_runner_slot_1_does_not_blind_escape_when_reply_hidden_after_image(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+
+    class TimedInputDriver(FakeInputDriver):
+        def __init__(self, current_time) -> None:
+            super().__init__()
+            self.events: list[tuple[str, float]] = []
+            self._current_time = current_time
+
+        def paste_text(self, text: str) -> None:
+            super().paste_text(text)
+            self.events.append((f"text:{text}", self._current_time()))
+
+        def paste_image_file(self, image_path: Path) -> None:
+            super().paste_image_file(image_path)
+            self.events.append((f"file_image:{image_path}", self._current_time()))
+
+        def scroll(self, amount: int) -> None:
+            super().scroll(amount)
+            self.events.append((f"scroll:{amount}", self._current_time()))
+
+        def press_escape(self) -> None:
+            super().press_escape()
+            self.events.append(("esc", self._current_time()))
+
+    input_driver = TimedInputDriver(clock.now)
+    reply_image_path = tmp_path / "reply.png"
+    reply_image_path.write_bytes(b"reply image")
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([
+            _match(),
+            None,
+            None,
+            _match(40, 10),
+            None,
+        ]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                preset_image_path=reply_image_path,
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.events == [
+        ("text:gm", 100.0),
+        (f"file_image:{reply_image_path}", 100.5),
+        ("scroll:-120", 101.5),
+    ]
+    assert input_driver.escapes == []
+    assert input_driver.clicks == [(25, 15), (45, 15)]
+
+
+def test_runner_slot_1_escapes_captured_obstruction_before_text_scroll(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    obstruction_template_path = tmp_path / "black-box.png"
+    obstruction_template_path.write_bytes(b"black box image")
+
+    class ObstructionMatcher:
+        def __init__(self) -> None:
+            self.finish_results = [
+                None,
+                _match(40, 10),
+                None,
+                None,
+                None,
+            ]
+            self.obstruction_results = [_match(30, 30)]
+
+        def find_best_match(self, _frame, template, threshold: float):
+            if template == "template.png":
+                return _match()
+            if template == str(obstruction_template_path):
+                return self.obstruction_results.pop(0) if self.obstruction_results else None
+            if template == str(finish_template_path):
+                return self.finish_results.pop(0) if self.finish_results else None
+            return None
+
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=ObstructionMatcher(),
+        input_driver=input_driver,
+        template_loader=lambda path: str(path),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                finish_template_path=finish_template_path,
+                obstruction_template_path=obstruction_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.scrolls == []
+    assert input_driver.escapes == [None]
+    assert input_driver.clicks == [(25, 15), (45, 15)]
+
+
+def test_runner_slot_1_scans_reply_before_obstruction_after_image_paste(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    reply_image_path = tmp_path / "reply.png"
+    reply_image_path.write_bytes(b"reply image")
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    obstruction_template_path = tmp_path / "black-box.png"
+    obstruction_template_path.write_bytes(b"black box image")
+
+    class TimedObstructionMatcher:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, float]] = []
+            self.finish_results = [None, _match(40, 10), None]
+            self.obstruction_results = [_match(30, 30)]
+
+        def find_best_match(self, _frame, template, threshold: float):
+            self.calls.append((str(template), clock.now()))
+            if template == "template.png":
+                return _match()
+            if template == str(obstruction_template_path):
+                return self.obstruction_results.pop(0) if self.obstruction_results else None
+            if template == str(finish_template_path):
+                return self.finish_results.pop(0) if self.finish_results else None
+            return None
+
+    matcher = TimedObstructionMatcher()
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=matcher,
+        input_driver=input_driver,
+        template_loader=lambda path: str(path),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                preset_image_path=reply_image_path,
+                finish_template_path=finish_template_path,
+                obstruction_template_path=obstruction_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert matcher.calls[1:4] == [
+        (str(finish_template_path), 101.5),
+        (str(obstruction_template_path), 101.5),
+        (str(finish_template_path), 101.75),
+    ]
+    assert input_driver.scrolls == []
+    assert input_driver.escapes == [None]
+
+
+def test_runner_slot_1_checks_obstruction_after_scroll_when_initial_after_image_scan_misses(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    reply_image_path = tmp_path / "reply.png"
+    reply_image_path.write_bytes(b"reply image")
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    obstruction_template_path = tmp_path / "black-box.png"
+    obstruction_template_path.write_bytes(b"black box image")
+
+    class TimedObstructionMatcher:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, float]] = []
+            self.finish_results = [None, _match(40, 10), None]
+            self.obstruction_results = [None, _match(30, 30)]
+
+        def find_best_match(self, _frame, template, threshold: float):
+            self.calls.append((str(template), clock.now()))
+            if template == "template.png":
+                return _match()
+            if template == str(obstruction_template_path):
+                return self.obstruction_results.pop(0) if self.obstruction_results else None
+            if template == str(finish_template_path):
+                return self.finish_results.pop(0) if self.finish_results else None
+            return None
+
+    matcher = TimedObstructionMatcher()
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=matcher,
+        input_driver=input_driver,
+        template_loader=lambda path: str(path),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                preset_image_path=reply_image_path,
+                finish_template_path=finish_template_path,
+                obstruction_template_path=obstruction_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert matcher.calls[1:5] == [
+        (str(finish_template_path), 101.5),
+        (str(obstruction_template_path), 101.5),
+        (str(obstruction_template_path), 101.7),
+        (str(finish_template_path), 101.95),
+    ]
+    assert input_driver.scrolls == [-120]
+    assert input_driver.escapes == [None]
+
+
+def test_runner_slot_1_does_not_blind_escape_after_image_when_obstruction_missing(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+
+    class TimedInputDriver(FakeInputDriver):
+        def __init__(self, current_time) -> None:
+            super().__init__()
+            self.events: list[tuple[str, float]] = []
+            self._current_time = current_time
+
+        def paste_text(self, text: str) -> None:
+            super().paste_text(text)
+            self.events.append((f"text:{text}", self._current_time()))
+
+        def paste_image_file(self, image_path: Path) -> None:
+            super().paste_image_file(image_path)
+            self.events.append((f"file_image:{image_path}", self._current_time()))
+
+        def scroll(self, amount: int) -> None:
+            super().scroll(amount)
+            self.events.append((f"scroll:{amount}", self._current_time()))
+
+        def press_escape(self) -> None:
+            super().press_escape()
+            self.events.append(("esc", self._current_time()))
+
+    input_driver = TimedInputDriver(clock.now)
+    reply_image_path = tmp_path / "reply.png"
+    reply_image_path.write_bytes(b"reply image")
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([
+            _match(),
+            None,
+            _match(40, 10),
+            None,
+        ]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                preset_image_path=reply_image_path,
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.events == [
+        ("text:gm", 100.0),
+        (f"file_image:{reply_image_path}", 100.5),
+        ("scroll:-120", 101.5),
+    ]
+    assert input_driver.escapes == []
+    assert input_driver.clicks == [(25, 15), (45, 15)]
+
+
+def test_runner_slot_1_escapes_captured_obstruction_before_image_scroll(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+
+    class TimedInputDriver(FakeInputDriver):
+        def __init__(self, current_time) -> None:
+            super().__init__()
+            self.events: list[tuple[str, float]] = []
+            self._current_time = current_time
+
+        def paste_text(self, text: str) -> None:
+            super().paste_text(text)
+            self.events.append((f"text:{text}", self._current_time()))
+
+        def paste_image_file(self, image_path: Path) -> None:
+            super().paste_image_file(image_path)
+            self.events.append((f"file_image:{image_path}", self._current_time()))
+
+        def scroll(self, amount: int) -> None:
+            super().scroll(amount)
+            self.events.append((f"scroll:{amount}", self._current_time()))
+
+        def press_escape(self) -> None:
+            super().press_escape()
+            self.events.append(("esc", self._current_time()))
+
+    input_driver = TimedInputDriver(clock.now)
+    reply_image_path = tmp_path / "reply.png"
+    reply_image_path.write_bytes(b"reply image")
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    obstruction_template_path = tmp_path / "black-box.png"
+    obstruction_template_path.write_bytes(b"black box image")
+
+    class ObstructionMatcher:
+        def __init__(self) -> None:
+            self.finish_results = [
+                None,
+                _match(40, 10),
+                None,
+            ]
+            self.obstruction_results = [_match(30, 30)]
+
+        def find_best_match(self, _frame, template, threshold: float):
+            if template == "template.png":
+                return _match()
+            if template == str(obstruction_template_path):
+                return self.obstruction_results.pop(0) if self.obstruction_results else None
+            if template == str(finish_template_path):
+                return self.finish_results.pop(0) if self.finish_results else None
+            return None
+
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=ObstructionMatcher(),
+        input_driver=input_driver,
+        template_loader=lambda path: str(path),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                preset_image_path=reply_image_path,
+                finish_template_path=finish_template_path,
+                obstruction_template_path=obstruction_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.events == [
+        ("text:gm", 100.0),
+        (f"file_image:{reply_image_path}", 100.5),
+        ("esc", 101.5),
+    ]
+    assert input_driver.scrolls == []
+    assert input_driver.clicks == [(25, 15), (45, 15)]
 
 
 def test_runner_slot_1_text_only_waits_briefly_before_finish_search(
@@ -715,7 +1287,144 @@ def test_runner_slot_1_clicks_main_image_then_single_finish_image(
 
     assert result.status == "completed"
     assert input_driver.clicks == [(25, 15), (45, 15)]
+    assert input_driver.click_delays == [0.25, 0.5]
     assert clock.value >= 102.0
+
+
+def test_runner_uses_reduced_scroll_settle_seconds() -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([None, _match(), None]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                max_search_seconds=0.0,
+                max_scroll_attempts=1,
+                post_click_settle_ms=100,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert clock.value == pytest.approx(100.6)
+    assert input_driver.scrolls == [-120]
+
+
+def test_runner_uses_reduced_click_confirmation_window() -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match(), *([_match()] * 200)]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                max_click_attempts=1,
+                pre_confirm_clicks=1,
+                post_click_settle_ms=0,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "failed"
+    assert result.failure_reason == "ui_did_not_change"
+    assert clock.value == pytest.approx(101.5)
+
+def test_runner_slot_1_can_resume_after_text_without_repasting_or_reclicking(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "reply.png"
+    image_path.write_bytes(b"reply image")
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    initial_clock = FakeClock()
+    initial_runner: SequenceRunner | None = None
+
+    class StopAfterTextInputDriver(FakeInputDriver):
+        def paste_text(self, text: str) -> None:
+            super().paste_text(text)
+            if initial_runner is not None:
+                initial_runner.request_stop()
+
+    initial_input_driver = StopAfterTextInputDriver()
+    initial_runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match()]),
+        input_driver=initial_input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=initial_clock.now,
+        sleep=initial_clock.sleep,
+    )
+
+    initial_result = initial_runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                preset_image_path=image_path,
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert initial_result.status == "stopped"
+    assert initial_result.step_index == 0
+    assert initial_result.step_phase == "slot1_after_text"
+    assert initial_input_driver.clicks == [(25, 15)]
+    assert initial_input_driver.pasted_text == ["gm"]
+    assert initial_input_driver.file_pasted_images == []
+
+    resumed_input_driver = FakeInputDriver()
+    resumed_clock = FakeClock()
+    resumed_runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([_match(), _match(40, 10), None]),
+        input_driver=resumed_input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=resumed_clock.now,
+        sleep=resumed_clock.sleep,
+    )
+
+    resumed_result = resumed_runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                preset_image_path=image_path,
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+        start_step_phase="slot1_after_text",
+    )
+
+    assert resumed_result.status == "completed"
+    assert resumed_input_driver.clicks == [(45, 15)]
+    assert resumed_input_driver.pasted_text == []
+    assert resumed_input_driver.file_pasted_images == [image_path]
 
 
 def test_runner_slot_1_treats_changed_post_submit_region_as_success_even_when_match_score_stays_high(
@@ -747,6 +1456,7 @@ def test_runner_slot_1_treats_changed_post_submit_region_as_success_even_when_ma
             (_window(), frame, _match()),
             (_window(), frame, initial_finish_match),
             (_window(), gray_frame, equally_strong_gray_match),
+            (_window(), gray_frame, equally_strong_gray_match),
         ]
     )
     monkeypatch.setattr(runner, "_find_match_for_template", lambda *args: next(find_results))
@@ -774,6 +1484,7 @@ def test_runner_slot_1_treats_changed_post_submit_region_as_success_even_when_ma
 
     assert result.status == "completed"
     assert input_driver.clicks == [(25, 15), (45, 15)]
+    assert input_driver.cursor_moves == [(0, 15)]
 
 
 def test_runner_slot_1_retries_when_post_submit_region_stays_visually_identical(
@@ -802,6 +1513,7 @@ def test_runner_slot_1_retries_when_post_submit_region_stays_visually_identical(
         [
             (_window(), frame, _match()),
             (_window(), frame, initial_finish_match),
+            (_window(), frame, similar_finish_match),
             (_window(), frame, similar_finish_match),
             RunResult(
                 status="failed",
@@ -835,7 +1547,76 @@ def test_runner_slot_1_retries_when_post_submit_region_stays_visually_identical(
     )
 
     assert result.status == "completed"
+    assert input_driver.clicks == [(25, 15), (45, 15), (45, 15), (45, 15)]
+    assert input_driver.click_delays == [0.25, 0.5, 0.5, 0.5]
+    assert input_driver.cursor_moves == [(0, 15), (0, 15), (0, 15), (0, 15)]
+
+
+def test_runner_slot_1_reclicks_immediately_when_finish_image_is_still_visible_after_first_click(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher([]),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    finish_match = MatchResult(score=0.98, top_left_x=40, top_left_y=10, width=10, height=10)
+    find_results = iter(
+        [
+            (_window(), np.zeros((60, 60), dtype=np.uint8), _match()),
+            (_window(), np.zeros((60, 60), dtype=np.uint8), finish_match),
+            (_window(), np.zeros((60, 60), dtype=np.uint8), finish_match),
+            RunResult(
+                status="failed",
+                failure_reason="match_not_found",
+                window_handle=_window().handle,
+                step_index=0,
+            ),
+        ]
+    )
+    monkeypatch.setattr(runner, "_find_match_for_template", lambda *args: next(find_results))
+
+    def fake_confirm(*args, **kwargs):
+        if len(input_driver.clicks) < 3:
+            return RunResult(
+                status="failed",
+                failure_reason="ui_did_not_change",
+                window_handle=_window().handle,
+                step_index=0,
+            )
+        return RunResult(
+            status="completed",
+            window_handle=_window().handle,
+            step_index=0,
+        )
+
+    monkeypatch.setattr(runner, "_confirm_ui_changed_after_click", fake_confirm)
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+            )
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
     assert input_driver.clicks == [(25, 15), (45, 15), (45, 15)]
+    assert input_driver.cursor_moves == [(0, 15), (0, 15)]
 
 
 def test_runner_slot_1_fails_when_post_submit_region_stays_visually_identical_after_retry(
@@ -865,6 +1646,7 @@ def test_runner_slot_1_fails_when_post_submit_region_stays_visually_identical_af
             (_window(), frame, initial_finish_match),
             (_window(), frame, similar_finish_match),
             (_window(), frame, similar_finish_match),
+            (_window(), frame, similar_finish_match),
         ]
     )
     monkeypatch.setattr(runner, "_find_match_for_template", lambda *args: next(find_results))
@@ -892,7 +1674,8 @@ def test_runner_slot_1_fails_when_post_submit_region_stays_visually_identical_af
 
     assert result.status == "failed"
     assert result.failure_reason == "reply_submit_not_confirmed"
-    assert input_driver.clicks == [(25, 15), (45, 15), (45, 15)]
+    assert input_driver.clicks == [(25, 15), (45, 15), (45, 15), (45, 15)]
+    assert input_driver.cursor_moves == [(0, 15), (0, 15), (0, 15), (0, 15)]
 
 
 def test_runner_slot_1_uses_configured_finish_delay(
@@ -930,7 +1713,7 @@ def test_runner_slot_1_uses_configured_finish_delay(
     assert clock.value >= 104.0
 
 
-def test_runner_slot_1_waits_briefly_for_finish_image_before_scrolling(
+def test_runner_slot_1_recovery_scroll_can_reveal_finish_before_final_search(
     tmp_path: Path,
 ) -> None:
     clock = FakeClock()
@@ -960,7 +1743,7 @@ def test_runner_slot_1_waits_briefly_for_finish_image_before_scrolling(
     )
 
     assert result.status == "completed"
-    assert input_driver.scrolls == []
+    assert input_driver.scrolls == [-120]
     assert input_driver.clicks == [(25, 15), (45, 15)]
     assert clock.value >= 102.1
 
@@ -998,9 +1781,63 @@ def test_runner_slot_1_scrolls_down_when_finish_image_is_not_initially_visible(
     )
 
     assert result.status == "completed"
-    assert input_driver.scrolls == [-120]
+    assert input_driver.scrolls == [-120, -120]
     assert input_driver.clicks == [(25, 15), (45, 15)]
     assert clock.value >= 102.1
+
+
+def test_runner_scrolls_up_once_when_next_slot_hidden_after_slot_1(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    input_driver = FakeInputDriver()
+    finish_template_path = tmp_path / "finish.png"
+    finish_template_path.write_bytes(b"finish image")
+    runner = SequenceRunner(
+        window_manager=FakeWindowManager(windows=[_window()]),
+        capture=FakeCapture(),
+        matcher=FakeMatcher(
+            [
+                _match(),  # slot 1 entry
+                _match(40, 10),  # finish button
+                None,  # finish disappears for immediate retry check
+                None,  # finish stays gone during confirmation
+                None,  # finish stays gone during submission verification
+                None,  # slot 2 hidden because page is scrolled down
+                _match(20, 40),  # slot 2 becomes visible after scroll up
+                None,  # slot 2 confirm
+            ]
+        ),
+        input_driver=input_driver,
+        template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+    result = runner.run_sequence(
+        _sequence(
+            _step(
+                name="slot_1_r",
+                preset_text="gm",
+                finish_template_path=finish_template_path,
+                max_click_attempts=1,
+                max_search_seconds=0.0,
+                scroll_amount=-120,
+            ),
+            _step(
+                name="slot_2_like",
+                max_search_seconds=0.0,
+                max_scroll_attempts=0,
+                scroll_amount=-120,
+                max_click_attempts=1,
+            ),
+        ),
+        selected_window=_window(),
+    )
+
+    assert result.status == "completed"
+    assert input_driver.scrolls == [120]
+    assert input_driver.clicks == [(25, 15), (45, 15), (25, 45)]
 
 
 def test_runner_slot_1_fails_when_finish_image_is_missing(

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from raidbot.desktop.chrome_profiles import ChromeProfile
+from raidbot.desktop.hotkeys import CtrlHotkeyCaptureField
 from raidbot.desktop.models import DesktopAppConfig, RaidProfileConfig
 from raidbot.desktop.telegram_setup import AccessibleChat
 from raidbot.desktop.theme import SECTION_OBJECT_NAME
@@ -91,6 +92,7 @@ class SettingsPage(QWidget):
         self._reauthorize_available = reauthorize_available
         self._available_profiles: list[ChromeProfile] = []
         self._available_chats: list[AccessibleChat] = []
+        self._auto_apply_suspended = 1
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 24, 12, 24)
@@ -113,12 +115,19 @@ class SettingsPage(QWidget):
 
         session_layout = QFormLayout()
         session_layout.setContentsMargins(0, 0, 0, 0)
+        self.pause_resume_hotkey_input = CtrlHotkeyCaptureField(
+            config.pause_resume_hotkey
+        )
+        self.pause_resume_hotkey_input.hotkeyChanged.connect(
+            lambda _hotkey: self._auto_apply_request()
+        )
         session_layout.addRow("Status", self.session_status_label)
         session_action_row = QHBoxLayout()
         session_action_row.setContentsMargins(0, 0, 0, 0)
         session_action_row.addWidget(self.reauthorize_button, 0)
         session_action_row.addStretch(1)
         session_layout.addRow("Action", session_action_row)
+        session_layout.addRow("Pause / Resume Hotkey", self.pause_resume_hotkey_input)
         session_layout.addRow("", self.reauthorize_hint_label)
         self.session_section, self.session_surface = self._build_section(
             title="Session",
@@ -137,6 +146,8 @@ class SettingsPage(QWidget):
         self.api_hash_input = QLineEdit(config.telegram_api_hash)
         self.api_id_input.setPlaceholderText("Telegram API ID")
         self.api_hash_input.setPlaceholderText("Telegram API Hash")
+        self.api_id_input.editingFinished.connect(self._auto_apply_request)
+        self.api_hash_input.editingFinished.connect(self._auto_apply_request)
         advanced_api_hint = QLabel("Used only for the desktop Telegram session.")
         advanced_api_hint.setProperty("muted", True)
         advanced_api_hint.setWordWrap(True)
@@ -269,24 +280,26 @@ class SettingsPage(QWidget):
         )
         layout.addWidget(self.routing_section)
 
-        self.save_button = QPushButton("Save")
-        self.save_button.setProperty("variant", "primary")
-        self.save_button.clicked.connect(self._emit_apply_request)
-        layout.addWidget(self.save_button)
         layout.addWidget(self.status_label)
         layout.addStretch()
+        self._auto_apply_suspended = 0
 
     def set_session_status(self, status: str) -> None:
         self.session_status_label.setText(status)
 
     def set_config(self, config: DesktopAppConfig) -> None:
-        self._config = config
-        self._rebuild_chat_rows(config.whitelisted_chat_ids)
-        allowed_sender_entries = config.allowed_sender_entries or tuple(
-            str(sender_id) for sender_id in config.allowed_sender_ids
-        )
-        self._rebuild_sender_rows(allowed_sender_entries)
-        self._refresh_raid_profiles_list()
+        self._auto_apply_suspended += 1
+        try:
+            self._config = config
+            self.pause_resume_hotkey_input.set_hotkey(config.pause_resume_hotkey)
+            self._rebuild_chat_rows(config.whitelisted_chat_ids)
+            allowed_sender_entries = config.allowed_sender_entries or tuple(
+                str(sender_id) for sender_id in config.allowed_sender_ids
+            )
+            self._rebuild_sender_rows(allowed_sender_entries)
+            self._refresh_raid_profiles_list()
+        finally:
+            self._auto_apply_suspended -= 1
 
     def set_available_chats(self, chats: list[AccessibleChat]) -> None:
         selected_chat_ids = self._selected_chat_row_ids()
@@ -319,6 +332,11 @@ class SettingsPage(QWidget):
         self.status_label.clear()
         self.status_label.setStyleSheet("")
         self.applyRequested.emit(config)
+
+    def _auto_apply_request(self) -> None:
+        if self._auto_apply_suspended > 0:
+            return
+        self._emit_apply_request()
 
     def show_error(self, message: str) -> None:
         self.status_label.setText(f"⚠  {message}")
@@ -373,6 +391,9 @@ class SettingsPage(QWidget):
         return section, surface
 
     def _build_config(self) -> DesktopAppConfig:
+        hotkey_error = self.pause_resume_hotkey_input.invalid_reason()
+        if hotkey_error:
+            raise ValueError(hotkey_error)
         whitelist = self._parse_required_chat_ids()
         allowed_sender_entries = self._parse_required_sender_entries()
         allowed_sender_ids = [
@@ -392,6 +413,7 @@ class SettingsPage(QWidget):
             whitelisted_chat_ids=whitelist,
             allowed_sender_ids=allowed_sender_ids,
             allowed_sender_entries=allowed_sender_entries,
+            pause_resume_hotkey=self.pause_resume_hotkey_input.hotkey(),
             chrome_profile_directory=(
                 self._config.raid_profiles[0].profile_directory
                 if self._config.raid_profiles
@@ -437,6 +459,7 @@ class SettingsPage(QWidget):
         if not self._available_chats:
             return
         self._add_chat_row(None)
+        self._auto_apply_request()
 
     def _add_chat_row(self, chat_id: int | None) -> None:
         row_widget = QWidget()
@@ -445,6 +468,7 @@ class SettingsPage(QWidget):
         row_layout.setSpacing(8)
         combo = QComboBox()
         self._populate_chat_combo(combo, chat_id)
+        combo.currentIndexChanged.connect(lambda _index: self._auto_apply_request())
         remove_button = QPushButton("Remove")
         remove_button.setProperty("variant", "secondary")
         remove_button.clicked.connect(lambda: self._remove_chat_row(row_widget))
@@ -466,6 +490,7 @@ class SettingsPage(QWidget):
         self.chat_rows_layout.removeWidget(removed_widget)
         removed_widget.deleteLater()
         self._sync_chat_remove_buttons()
+        self._auto_apply_request()
 
     def _sync_chat_remove_buttons(self) -> None:
         allow_remove = len(self.chat_remove_buttons) > 1
@@ -542,6 +567,7 @@ class SettingsPage(QWidget):
 
     def _handle_add_sender_row(self) -> None:
         self._add_sender_row("")
+        self._auto_apply_request()
 
     def _add_sender_row(self, text: str) -> None:
         row_widget = QWidget()
@@ -550,6 +576,7 @@ class SettingsPage(QWidget):
         row_layout.setSpacing(8)
         entry_input = QLineEdit(text)
         entry_input.setPlaceholderText("Sender username or ID")
+        entry_input.editingFinished.connect(self._auto_apply_request)
         scan_button = QPushButton("Scan")
         scan_button.setProperty("variant", "secondary")
         scan_button.clicked.connect(
@@ -588,6 +615,7 @@ class SettingsPage(QWidget):
         self.sender_rows_layout.removeWidget(removed_widget)
         removed_widget.deleteLater()
         self._sync_sender_remove_buttons()
+        self._auto_apply_request()
 
     def _sync_sender_remove_buttons(self) -> None:
         allow_remove = len(self.sender_remove_buttons) > 1
@@ -634,6 +662,7 @@ class SettingsPage(QWidget):
                 continue
             self._add_sender_row(entry)
             seen_entries.add(entry)
+        self._auto_apply_request()
 
     def _normalize_available_profiles(
         self,

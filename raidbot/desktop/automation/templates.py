@@ -9,7 +9,7 @@ import numpy as np
 def load_template_image(path: Path) -> np.ndarray:
     if not path.exists():
         raise FileNotFoundError(f"Template file is missing: {path}")
-    image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is None:
         raise ValueError(f"Template file is unreadable: {path}")
     return image

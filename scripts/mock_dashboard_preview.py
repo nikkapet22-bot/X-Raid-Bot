@@ -275,6 +275,9 @@ class MockController(QObject):
     def set_bot_action_slot_enabled(self, slot_index: int, enabled: bool) -> None:
         return None
 
+    def set_slot_1_finish_delay_seconds(self, delay_seconds: float) -> None:
+        return None
+
     def test_bot_action_slot(self, slot_index: int) -> None:
         return None
 
@@ -290,6 +293,18 @@ class MockController(QObject):
         return None
 
     def restart_raid_profile(self, profile_directory: str) -> None:
+        return None
+
+    def reset_raid_profile(self, profile_directory: str) -> None:
+        return None
+
+    def reset_all_raid_profiles(self) -> None:
+        return None
+
+    def set_raid_on_restart_enabled(self, enabled: bool) -> None:
+        return None
+
+    def toggle_pause_resume(self) -> None:
         return None
 
     def set_raid_profile_raid_on_restart(

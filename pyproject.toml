@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raidbot"
-version = "2.2.21"
+version = "2.2.65"
 description = "Telegram raid opener daemon"
 requires-python = ">=3.10"
 dependencies = [

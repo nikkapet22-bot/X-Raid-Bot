@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -43,32 +44,55 @@ class DesktopStorage:
         return not self.config_path.exists()
 
     def save_config(self, config: DesktopAppConfig) -> None:
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.config_path.write_text(
-            json.dumps(self._config_to_data(config), indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        self._write_json_atomic(self.config_path, self._config_to_data(config))
 
     def load_config(self) -> DesktopAppConfig:
         data = json.loads(self.config_path.read_text(encoding="utf-8"))
         return self._config_from_data(data)
 
     def save_state(self, state: DesktopAppState) -> None:
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(
-            json.dumps(self._state_to_data(state), indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        self._write_json_atomic(self.state_path, self._state_to_data(state))
 
     def load_state(self) -> DesktopAppState:
-        if not self.state_path.exists():
-            return self._normalize_loaded_state(DesktopAppState())
-        data = json.loads(self.state_path.read_text(encoding="utf-8"))
+        data, recovered = self._load_state_data()
         state = self._state_from_data(data)
         normalized_state = self._normalize_loaded_state(state)
-        if normalized_state != state:
+        if recovered or normalized_state != state:
             self.save_state(normalized_state)
         return normalized_state
+
+    def _load_state_data(self) -> tuple[dict[str, Any], bool]:
+        if not self.state_path.exists():
+            return {}, False
+        try:
+            data = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}, True
+        if not isinstance(data, dict):
+            return {}, True
+        return data, False
+
+    def _write_json_atomic(self, path: Path, data: dict[str, Any]) -> None:
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        serialized = json.dumps(data, indent=2, sort_keys=True)
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=self.base_dir,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temp_file:
+                temp_file.write(serialized)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+                temp_path = Path(temp_file.name)
+            temp_path.replace(path)
+        finally:
+            if temp_path is not None and temp_path.exists():
+                temp_path.unlink()
 
     def _config_to_data(self, config: DesktopAppConfig) -> dict[str, Any]:
         return {
@@ -89,6 +113,7 @@ class DesktopStorage:
             "default_action_reply": config.default_action_reply,
             "auto_run_enabled": config.auto_run_enabled,
             "raid_on_restart_enabled": config.raid_on_restart_enabled,
+            "performance_mode_enabled": config.performance_mode_enabled,
             "default_auto_sequence_id": config.default_auto_sequence_id,
             "auto_run_settle_ms": config.auto_run_settle_ms,
             "slot_1_finish_delay_seconds": config.slot_1_finish_delay_seconds,
@@ -148,6 +173,10 @@ class DesktopStorage:
                 data.get("raid_on_restart_enabled"),
                 default=False,
             ),
+            performance_mode_enabled=self._maybe_bool(
+                data.get("performance_mode_enabled"),
+                default=False,
+            ),
             default_auto_sequence_id=data.get("default_auto_sequence_id"),
             auto_run_settle_ms=(
                 int(data["auto_run_settle_ms"])
@@ -165,12 +194,12 @@ class DesktopStorage:
                 else None
             ),
             page_ready_template_path=(
-                Path(data["page_ready_template_path"])
+                self._capture_path_from_data(data["page_ready_template_path"])
                 if data.get("page_ready_template_path") is not None
                 else None
             ),
             page_exit_template_path=(
-                Path(data["page_exit_template_path"])
+                self._capture_path_from_data(data["page_exit_template_path"])
                 if data.get("page_exit_template_path") is not None
                 else None
             ),
@@ -592,13 +621,27 @@ class DesktopStorage:
             key=str(data.get("key") or ""),
             label=str(data.get("label") or ""),
             enabled=self._maybe_bool(data.get("enabled"), default=False),
-            template_path=Path(template_path) if template_path is not None else None,
+            template_path=(
+                self._capture_path_from_data(template_path)
+                if template_path is not None
+                else None
+            ),
             updated_at=data.get("updated_at"),
             presets=presets,
             finish_template_path=(
-                Path(finish_template_path) if finish_template_path is not None else None
+                self._capture_path_from_data(finish_template_path)
+                if finish_template_path is not None
+                else None
             ),
         )
+
+    def _capture_path_from_data(self, value: Any) -> Path:
+        path = Path(str(value))
+        if path.is_absolute():
+            return path
+        if not path.parts or path.parts[0] != "bot_actions":
+            return path
+        return self.base_dir / path
 
     def _raid_profile_config_to_data(self, profile: RaidProfileConfig) -> dict[str, Any]:
         return {
