@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .branding import APP_NAME, APP_VERSION
 
-DEFAULT_BETA_CHANNEL = "beta2"
+DEFAULT_BETA_CHANNEL = "beta4"
 WINDOWS_ARCH_LABEL = "win64"
 
 
