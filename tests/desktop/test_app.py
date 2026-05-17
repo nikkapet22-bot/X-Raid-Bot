@@ -204,6 +204,18 @@ def test_dashboard_performance_mode_uses_aggressive_lightweight_rendering() -> N
     assert "renderProfiles(state.latest)" in runtime
 
 
+def test_dashboard_allowed_chats_do_not_render_numeric_ids_as_secondary_text() -> None:
+    runtime = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
+    preview = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "${html(chat.id)}" not in runtime
+    assert "<span>allowed chat</span>" in runtime
+    assert "<span>-1001942</span>" not in preview
+    assert "<span>-1008841</span>" not in preview
+
+
 def test_dashboard_bot_actions_hides_slot_section_marketing_and_enabled_badges() -> None:
     preview = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
         encoding="utf-8"

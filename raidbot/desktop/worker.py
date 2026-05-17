@@ -1164,6 +1164,14 @@ class DesktopBotWorker:
             normalized_url=detection.job.normalized_url,
             trace_id=detection.job.trace_id,
         )
+        if not self._profiles_missing_success_for_url(item.normalized_url, (profile,)):
+            self._record_activity(
+                "duplicate",
+                reason="already_raided",
+                url=item.normalized_url,
+                profile_directory=profile.profile_directory,
+            )
+            raise ValueError("Profile already raided latest raid")
         self._dedupe_store.mark_if_new(item.normalized_url)
         service_dedupe_store = getattr(self._service, "dedupe_store", None)
         if service_dedupe_store is not None and service_dedupe_store is not self._dedupe_store:

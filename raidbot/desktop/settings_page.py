@@ -231,7 +231,10 @@ class SettingsPage(QWidget):
             available_chats
             if available_chats is not None
             else [
-                AccessibleChat(chat_id=int(chat_id), title=str(chat_id))
+                AccessibleChat(
+                    chat_id=int(chat_id),
+                    title=self._known_chat_title(int(chat_id)) or str(chat_id),
+                )
                 for chat_id in config.whitelisted_chat_ids
             ]
         )
@@ -411,6 +414,7 @@ class SettingsPage(QWidget):
             telegram_session_path=Path(self._session_path),
             telegram_phone_number=self._phone_number,
             whitelisted_chat_ids=whitelist,
+            whitelisted_chat_titles=self._selected_chat_titles(whitelist),
             allowed_sender_ids=allowed_sender_ids,
             allowed_sender_entries=allowed_sender_entries,
             pause_resume_hotkey=self.pause_resume_hotkey_input.hotkey(),
@@ -505,6 +509,20 @@ class SettingsPage(QWidget):
                 selected_chat_ids.append(int(chat_id))
         return selected_chat_ids
 
+    def _known_chat_title(self, chat_id: int) -> str | None:
+        for chat in self._available_chats:
+            if int(chat.chat_id) == int(chat_id):
+                return str(chat.title)
+        return getattr(self._config, "whitelisted_chat_titles", {}).get(int(chat_id))
+
+    def _selected_chat_titles(self, chat_ids: list[int]) -> dict[int, str]:
+        titles: dict[int, str] = {}
+        for chat_id in chat_ids:
+            title = self._known_chat_title(int(chat_id))
+            if title and title != str(chat_id):
+                titles[int(chat_id)] = title
+        return titles
+
     def _rebuild_chat_rows(self, chat_ids: list[int] | tuple[int, ...]) -> None:
         while self.chat_rows_layout.count():
             item = self.chat_rows_layout.takeAt(0)
@@ -527,7 +545,15 @@ class SettingsPage(QWidget):
         combo.setProperty("staleSelection", False)
         available_chat_ids = {chat.chat_id for chat in self._available_chats}
         if selected_chat_id is not None and int(selected_chat_id) not in available_chat_ids:
-            combo.addItem(f"Missing chat [{int(selected_chat_id)}]", int(selected_chat_id))
+            title = self._known_chat_title(int(selected_chat_id))
+            label = (
+                self._format_available_chat(
+                    AccessibleChat(chat_id=int(selected_chat_id), title=title)
+                )
+                if title
+                else f"Missing chat [{int(selected_chat_id)}]"
+            )
+            combo.addItem(label, int(selected_chat_id))
             combo.setProperty("staleSelection", True)
         for chat in self._available_chats:
             combo.addItem(self._format_available_chat(chat), chat.chat_id)

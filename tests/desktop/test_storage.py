@@ -48,6 +48,7 @@ def test_config_round_trip(tmp_path) -> None:
         telegram_session_path=Path("sessions/raid.session"),
         telegram_phone_number="+15555550123",
         whitelisted_chat_ids=[1001, 1002, 1003],
+        whitelisted_chat_titles={1001: "Raid Group", 1002: "Launch Squad"},
         allowed_sender_ids=[424242, 515151],
         allowed_sender_entries=("@raidar", "@delugeraidbot"),
         chrome_profile_directory="Profile 1",

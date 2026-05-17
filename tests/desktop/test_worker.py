@@ -5398,6 +5398,81 @@ async def test_worker_run_raid_now_for_profile_executes_latest_valid_recent_raid
 
 
 @pytest.mark.asyncio
+async def test_worker_run_raid_now_for_profile_skips_when_profile_already_succeeded_same_status(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 5, 17, 12, 0, 0)
+    storage = FakeStorage(
+        DesktopAppState(
+            activity=[
+                ActivityEntry(
+                    timestamp=datetime(2026, 5, 17, 11, 58, 0),
+                    action="automation_succeeded",
+                    url="https://x.com/i/status/777",
+                    reason="automation_succeeded",
+                    profile_directory="Profile 3",
+                )
+            ]
+        ),
+        base_dir=tmp_path,
+    )
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime = FakeAutomationRuntime(
+        windows=[
+            WindowInfo(
+                handle=31,
+                title="RaidBot - Chrome",
+                bounds=(0, 0, 100, 100),
+                last_focused_at=1.0,
+            )
+        ]
+    )
+    recent_messages_client = FakeRecentMessagesClient(
+        messages_by_chat={
+            -1001: [
+                FakeRecentMessage(
+                    chat_id=-1001,
+                    sender_id=42,
+                    text="Likes 10 | 8 [%]\n\nhttps://x.com/BRICSinfo/status/777",
+                    has_video=True,
+                    date=datetime(2026, 5, 17, 11, 59, 0),
+                ),
+            ]
+        }
+    )
+    listener = FakeListener(client=recent_messages_client)
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            page_ready_template_path=None,
+            bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=lambda _emit_event: runtime,
+        chrome_opener_factory=lambda **kwargs: opener,
+        listener_factory=lambda **kwargs: listener,
+    )
+    worker._service = worker._build_service(worker.config)
+    worker._listener = listener
+
+    with pytest.raises(ValueError, match="Profile already raided latest raid"):
+        await worker.run_raid_now_for_profile("Profile 3")
+
+    assert opener.open_raid_window_calls == []
+    assert runtime.run_calls == []
+    assert worker.state.raids_opened == 0
+
+
+@pytest.mark.asyncio
 async def test_worker_run_raid_now_keeps_reply_last_after_action_randomization(tmp_path) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 5, 11, 12, 15, 0)

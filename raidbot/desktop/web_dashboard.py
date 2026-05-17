@@ -632,7 +632,7 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
         <p class="section-copy">Session health and global pause hotkey.</p>
         <div class="field-stack">
           <div class="field-row"><div class="field-label">Status</div><div class="fake-input">${html(settings.sessionStatus || "unknown")}</div></div>
-          <div class="field-row"><div class="field-label">Hotkey</div><div class="fake-input">${html(settings.pauseHotkey || "Not set")}</div></div>
+          <div class="field-row"><div class="field-label">Pause Hotkey</div><div class="fake-input">${html(settings.pauseHotkey || "Not set")}</div></div>
           <div class="field-row"><div class="field-label">Action</div><button class="lux-button" data-web-action="reauthorize">Reauthorize</button></div>
         </div>
       </article>
@@ -654,7 +654,7 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
         </div>
         <p class="section-copy">Allowed chats and senders used for recent-link lookup and automatic raids.</p>
         <div class="field-stack">
-          <div class="field-row"><div class="field-label">Allowed chats</div><div class="fake-list">${chats.length ? chats.map((chat) => `<div class="list-item"><strong>${html(chat.label)}</strong><span>${html(chat.id)}</span></div>`).join("") : `<div class="list-item"><strong>No chats</strong><span>Add one in setup</span></div>`}</div></div>
+          <div class="field-row"><div class="field-label">Allowed chats</div><div class="fake-list">${chats.length ? chats.map((chat) => `<div class="list-item"><strong>${html(chat.label)}</strong><span>allowed chat</span></div>`).join("") : `<div class="list-item"><strong>No chats</strong><span>Add one in setup</span></div>`}</div></div>
           <div class="field-row"><div class="field-label">Allowed senders</div><div class="fake-list">${senders.length ? senders.map((sender) => `<div class="list-item"><strong>${html(sender)}</strong><span>allowed</span></div>`).join("") : `<div class="list-item"><strong>No senders</strong><span>Scan recent messages</span></div>`}</div></div>
         </div>
         <div class="form-actions">

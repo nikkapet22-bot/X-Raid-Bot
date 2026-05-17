@@ -21,6 +21,7 @@ def test_desktop_app_config_holds_required_values() -> None:
         telegram_session_path=Path("session.session"),
         telegram_phone_number="+15555550123",
         whitelisted_chat_ids=[111, 222],
+        whitelisted_chat_titles={111: "Raid Group"},
         allowed_sender_ids=[333, 444],
         chrome_profile_directory="Default",
         browser_mode="launch-only",
@@ -52,6 +53,7 @@ def test_desktop_app_config_holds_required_values() -> None:
     assert config.telegram_session_path == Path("session.session")
     assert config.telegram_phone_number == "+15555550123"
     assert config.whitelisted_chat_ids == [111, 222]
+    assert config.whitelisted_chat_titles == {111: "Raid Group"}
     assert config.allowed_sender_ids == [333, 444]
     assert config.chrome_profile_directory == "Default"
     assert config.browser_mode == "launch-only"

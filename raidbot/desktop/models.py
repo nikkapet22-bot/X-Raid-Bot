@@ -4,7 +4,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 
 class BotRuntimeState(str, Enum):
@@ -119,6 +119,7 @@ class DesktopAppConfig:
     telegram_session_path: Path
     telegram_phone_number: str | None
     whitelisted_chat_ids: list[int]
+    whitelisted_chat_titles: dict[int, str]
     allowed_sender_ids: list[int]
     allowed_sender_entries: tuple[str, ...]
     chrome_profile_directory: str
@@ -151,6 +152,7 @@ class DesktopAppConfig:
         chrome_profile_directory: str,
         allowed_sender_ids: Sequence[int] | None = None,
         allowed_sender_entries: Sequence[str] | None = None,
+        whitelisted_chat_titles: Mapping[int | str, str] | None = None,
         *,
         raidar_sender_id: int | None = None,
         browser_mode: str = "launch-only",
@@ -177,6 +179,10 @@ class DesktopAppConfig:
         self.telegram_session_path = Path(telegram_session_path)
         self.telegram_phone_number = telegram_phone_number
         self.whitelisted_chat_ids = [int(chat_id) for chat_id in whitelisted_chat_ids]
+        self.whitelisted_chat_titles = self._coerce_whitelisted_chat_titles(
+            whitelisted_chat_titles=whitelisted_chat_titles,
+            whitelisted_chat_ids=self.whitelisted_chat_ids,
+        )
         self.allowed_sender_ids = self._coerce_allowed_sender_ids(
             allowed_sender_ids=allowed_sender_ids,
             raidar_sender_id=raidar_sender_id,
@@ -220,6 +226,26 @@ class DesktopAppConfig:
         if not self.allowed_sender_ids:
             return None
         return self.allowed_sender_ids[0]
+
+    def _coerce_whitelisted_chat_titles(
+        self,
+        *,
+        whitelisted_chat_titles: Mapping[int | str, str] | None,
+        whitelisted_chat_ids: Sequence[int],
+    ) -> dict[int, str]:
+        if not whitelisted_chat_titles:
+            return {}
+        allowed_ids = {int(chat_id) for chat_id in whitelisted_chat_ids}
+        titles: dict[int, str] = {}
+        for raw_chat_id, raw_title in whitelisted_chat_titles.items():
+            try:
+                chat_id = int(raw_chat_id)
+            except (TypeError, ValueError):
+                continue
+            title = str(raw_title).strip()
+            if chat_id in allowed_ids and title and title != str(chat_id):
+                titles[chat_id] = title
+        return titles
 
     def _coerce_allowed_sender_ids(
         self,

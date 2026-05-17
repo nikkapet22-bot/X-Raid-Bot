@@ -101,6 +101,10 @@ class DesktopStorage:
             "telegram_session_path": str(config.telegram_session_path),
             "telegram_phone_number": config.telegram_phone_number,
             "whitelisted_chat_ids": list(config.whitelisted_chat_ids),
+            "whitelisted_chat_titles": {
+                str(chat_id): title
+                for chat_id, title in config.whitelisted_chat_titles.items()
+            },
             "allowed_sender_ids": list(config.allowed_sender_ids),
             "allowed_sender_entries": list(config.allowed_sender_entries),
             "chrome_profile_directory": config.chrome_profile_directory,
@@ -152,6 +156,7 @@ class DesktopStorage:
             telegram_session_path=Path(data["telegram_session_path"]),
             telegram_phone_number=data.get("telegram_phone_number"),
             whitelisted_chat_ids=[int(chat_id) for chat_id in data["whitelisted_chat_ids"]],
+            whitelisted_chat_titles=data.get("whitelisted_chat_titles") or {},
             allowed_sender_ids=[int(sender_id) for sender_id in allowed_sender_ids],
             allowed_sender_entries=tuple(str(entry) for entry in allowed_sender_entries),
             chrome_profile_directory=str(data["chrome_profile_directory"]),

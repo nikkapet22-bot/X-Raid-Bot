@@ -81,10 +81,34 @@ def test_settings_save_emits_sender_entries_and_numeric_sender_ids(qtbot) -> Non
     assert applied[-1] == build_config(
         telegram_api_hash="new-hash",
         whitelisted_chat_ids=[-1001, -2002],
+        whitelisted_chat_titles={-1001: "Raid Group", -2002: "Launch Squad"},
         allowed_sender_ids=[99],
         allowed_sender_entries=("99", "@delugeraidbot"),
         chrome_profile_directory="Profile 3",
     )
+
+
+def test_settings_save_persists_allowed_chat_titles(qtbot) -> None:
+    from raidbot.desktop.settings_page import SettingsPage
+
+    page = SettingsPage(
+        config=build_config(),
+        available_profiles=["Default", "Profile 3", "Profile 9"],
+        available_chats=build_available_chats(),
+        session_status="authorized",
+    )
+    qtbot.addWidget(page)
+
+    applied = []
+    page.applyRequested.connect(applied.append)
+
+    set_selected_chat_rows(page, qtbot, [-1001, -2002])
+    emit_apply(page)
+
+    assert applied[-1].whitelisted_chat_titles == {
+        -1001: "Raid Group",
+        -2002: "Launch Squad",
+    }
 
 
 def test_settings_page_auto_saves_on_editing_finished(qtbot) -> None:

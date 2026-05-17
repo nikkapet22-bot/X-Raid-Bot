@@ -175,6 +175,7 @@ class SetupWizard(QWizard):
             telegram_session_path=self.session_path(),
             telegram_phone_number=self.telegram_page.phone_input.text().strip() or None,
             whitelisted_chat_ids=self.chat_page.selected_chat_ids(),
+            whitelisted_chat_titles=self.chat_page.selected_chat_titles(),
             allowed_sender_ids=self.raidar_page.selected_sender_ids(),
             allowed_sender_entries=self.raidar_page.selected_sender_entries(),
             chrome_profile_directory=self.chrome_page.selected_profile_directory(),
@@ -459,6 +460,17 @@ class ChatDiscoveryPage(QWizardPage):
             if item.checkState() == Qt.CheckState.Checked:
                 chat_ids.append(int(item.data(Qt.ItemDataRole.UserRole)))
         return chat_ids
+
+    def selected_chat_titles(self) -> dict[int, str]:
+        chat_titles: dict[int, str] = {}
+        for index in range(self.chat_list.count()):
+            item = self.chat_list.item(index)
+            if item.checkState() == Qt.CheckState.Checked:
+                chat_id = int(item.data(Qt.ItemDataRole.UserRole))
+                title = item.text().strip()
+                if title and title != str(chat_id):
+                    chat_titles[chat_id] = title
+        return chat_titles
 
     def reset_for_telegram_reauth(self) -> None:
         self._loaded = False

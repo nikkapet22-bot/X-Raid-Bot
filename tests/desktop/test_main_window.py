@@ -4320,6 +4320,52 @@ def test_main_window_feeds_settings_page_real_profiles_and_session_status(qtbot)
     assert "restart the app" in window.settings_page.reauthorize_hint_label.text().lower()
 
 
+def test_main_window_web_settings_uses_persisted_allowed_chat_titles(qtbot) -> None:
+    from raidbot.desktop.main_window import MainWindow
+
+    controller = FakeController()
+    controller.config = replace(
+        controller.config,
+        whitelisted_chat_ids=[-1001],
+        whitelisted_chat_titles={-1001: "Raid Group"},
+    )
+    window = MainWindow(
+        controller=controller,
+        storage=FakeStorage(),
+        tray_controller_factory=lambda *args, **kwargs: None,
+        available_chats_loader=lambda: [],
+        session_status_loader=lambda: "authorized",
+    )
+    qtbot.addWidget(window)
+
+    assert window._web_settings_state()["allowedChats"] == [
+        {"id": "-1001", "label": "Raid Group"}
+    ]
+
+
+def test_main_window_web_settings_hides_raw_chat_id_when_title_unknown(qtbot) -> None:
+    from raidbot.desktop.main_window import MainWindow
+
+    controller = FakeController()
+    controller.config = replace(
+        controller.config,
+        whitelisted_chat_ids=[-1001],
+        whitelisted_chat_titles={},
+    )
+    window = MainWindow(
+        controller=controller,
+        storage=FakeStorage(),
+        tray_controller_factory=lambda *args, **kwargs: None,
+        available_chats_loader=lambda: [],
+        session_status_loader=lambda: "authorized",
+    )
+    qtbot.addWidget(window)
+
+    assert window._web_settings_state()["allowedChats"] == [
+        {"id": "-1001", "label": "Saved Telegram chat"}
+    ]
+
+
 def test_main_window_registers_pause_resume_hotkey_from_config(qtbot) -> None:
     registrar = FakeHotkeyRegistrar()
     controller = FakeController(

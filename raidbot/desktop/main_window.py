@@ -2066,12 +2066,17 @@ class MainWindow(QMainWindow):
         allowed_chat_ids = list(getattr(config, "whitelisted_chat_ids", []) or [])
         chats = []
         chats_by_id = {int(chat.chat_id): chat for chat in self._available_chats_cache}
+        chat_titles = getattr(config, "whitelisted_chat_titles", {}) or {}
         for chat_id in allowed_chat_ids:
             chat = chats_by_id.get(int(chat_id))
             chats.append(
                 {
                     "id": str(chat_id),
-                    "label": getattr(chat, "title", None) or str(chat_id),
+                    "label": (
+                        getattr(chat, "title", None)
+                        or chat_titles.get(int(chat_id))
+                        or "Saved Telegram chat"
+                    ),
                 }
             )
         sender_entries = list(

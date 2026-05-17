@@ -668,6 +668,7 @@ def test_review_page_saves_multi_sender_config_and_start_now_flag(qtbot, tmp_pat
         telegram_session_path=tmp_path / "telegram" / "raidbot.session",
         telegram_phone_number="+40123456789",
         whitelisted_chat_ids=[1],
+        whitelisted_chat_titles={1: "Alpha Room"},
         allowed_sender_ids=[10, 20, 77],
         allowed_sender_entries=("@raidar", "@delugeraidbot", "77"),
         chrome_profile_directory="Profile 3",
