@@ -48,6 +48,9 @@ from raidbot.models import (
     RaidDetectionResult,
     RaidExecutionResult,
 )
+from raidbot.parser import raid_status_identity
+from raidbot.service import RaidService
+from raidbot.telegram_client import TelegramRaidListener
 
 _PAGE_READY_POST_MATCH_DELAY_SECONDS = 0.5
 _PAGE_READY_MAX_SEARCH_SECONDS = 12.0
@@ -68,8 +71,6 @@ _WARMUP_HOME_HOLD_SEGMENTS = (
 _WARMUP_FEED_HOLD_SEGMENTS = (("pagedown", 4.0),)
 _PAUSE_WAIT_POLL_SECONDS = 0.1
 _HELD_KEY_REPEAT_INTERVAL_SECONDS = 0.2
-from raidbot.service import RaidService
-from raidbot.telegram_client import TelegramRaidListener
 
 
 EmitEvent = Callable[[dict[str, Any]], None]
@@ -85,6 +86,14 @@ _DEDUPED_ACTIVITY_ACTIONS = {
     "session_closed",
 }
 _SUCCESSFUL_PROFILE_RUN_LIMIT = 5000
+
+
+class _DesktopServiceDedupeBypass:
+    def contains(self, _url: str) -> bool:
+        return False
+
+    def mark_if_new(self, _url: str) -> bool:
+        return True
 
 
 @dataclass(frozen=True)
@@ -267,6 +276,9 @@ class DesktopBotWorker:
             detection.kind == "job_detected"
             and detection.job is not None
             and self._dedupe_store.contains(detection.job.normalized_url)
+            and not self._has_auto_runnable_profiles_missing_success(
+                detection.job.normalized_url
+            )
         ):
             detection = RaidDetectionResult(
                 kind="duplicate",
@@ -652,6 +664,18 @@ class DesktopBotWorker:
             or any(slot.enabled for slot in self.config.bot_action_slots)
         )
 
+    def _has_auto_runnable_profiles_missing_success(self, normalized_url: str) -> bool:
+        if not self._auto_run_requested():
+            return False
+        if not self._has_profile_success_for_url(normalized_url):
+            return False
+        return bool(
+            self._profiles_missing_success_for_url(
+                normalized_url,
+                self._eligible_raid_profiles(),
+            )
+        )
+
     def _translate_automation_reason(self, reason: str | None) -> str | None:
         if reason != "default_sequence_missing":
             return reason
@@ -827,6 +851,21 @@ class DesktopBotWorker:
                 },
             )
         eligible_profiles = self._shuffled_eligible_raid_profiles()
+        if eligible_profiles:
+            profiles_missing_success = self._profiles_missing_success_for_url(
+                item.normalized_url,
+                eligible_profiles,
+            )
+            if not profiles_missing_success and self._has_profile_success_for_url(
+                item.normalized_url
+            ):
+                self._record_activity(
+                    "duplicate",
+                    reason="already_raided",
+                    url=item.normalized_url,
+                )
+                return True, None
+            eligible_profiles = profiles_missing_success
         self._active_execution_source = "auto"
         self._active_execution_url = item.normalized_url
         try:
@@ -1326,11 +1365,12 @@ class DesktopBotWorker:
         normalized_url: str,
         profiles: tuple[RaidProfileConfig, ...],
     ) -> tuple[RaidProfileConfig, ...]:
+        target_identity = raid_status_identity(normalized_url)
         succeeded_profile_directories = {
             str(entry.profile_directory)
             for entry in self.state.activity
             if entry.action == "automation_succeeded"
-            and entry.url == normalized_url
+            and self._raid_urls_match(entry.url, normalized_url, target_identity)
             and entry.profile_directory is not None
         }
         return tuple(
@@ -1338,6 +1378,29 @@ class DesktopBotWorker:
             for profile in profiles
             if profile.profile_directory not in succeeded_profile_directories
         )
+
+    def _has_profile_success_for_url(self, normalized_url: str) -> bool:
+        target_identity = raid_status_identity(normalized_url)
+        return any(
+            entry.action == "automation_succeeded"
+            and self._raid_urls_match(entry.url, normalized_url, target_identity)
+            and entry.profile_directory is not None
+            for entry in self.state.activity
+        )
+
+    def _raid_urls_match(
+        self,
+        candidate_url: str | None,
+        normalized_url: str,
+        target_identity: str | None = None,
+    ) -> bool:
+        if not candidate_url:
+            return False
+        resolved_target_identity = target_identity or raid_status_identity(normalized_url)
+        candidate_identity = raid_status_identity(candidate_url)
+        if resolved_target_identity is not None and candidate_identity is not None:
+            return candidate_identity == resolved_target_identity
+        return candidate_url == normalized_url
 
     def _open_url_in_new_window_for_profile(
         self,
@@ -2533,7 +2596,7 @@ class DesktopBotWorker:
         return RaidService(
             allowed_chat_ids=set(config.whitelisted_chat_ids),
             allowed_sender_ids=set(config.allowed_sender_ids),
-            dedupe_store=self._dedupe_store,
+            dedupe_store=_DesktopServiceDedupeBypass(),
             preset_replies=config.preset_replies,
             default_requirements=self._default_requirements(config),
         )

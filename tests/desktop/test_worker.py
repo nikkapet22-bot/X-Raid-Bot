@@ -1093,6 +1093,82 @@ def test_worker_executes_multi_profile_success_in_order(tmp_path) -> None:
     assert worker.state.automation_queue_state == "idle"
 
 
+def test_worker_auto_run_skips_profiles_that_succeeded_same_status_with_different_url(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 5, 17, 12, 0, 0)
+    storage = FakeStorage(
+        DesktopAppState(
+            activity=[
+                ActivityEntry(
+                    timestamp=timestamp - timedelta(minutes=1),
+                    action="automation_succeeded",
+                    url="https://x.com/i/status/123",
+                    reason="automation_succeeded",
+                    profile_directory="Default",
+                ),
+            ],
+        ),
+        base_dir=tmp_path,
+    )
+    runtime = MultiProfileRuntime(
+        run_results=[
+            RunResult(status="completed", window_handle=43),
+        ]
+    )
+    created_openers: list[WindowSpawningChromeOpener] = []
+    handle_by_profile = {"Profile 3": 43}
+
+    def chrome_opener_factory(**kwargs):
+        opener = WindowSpawningChromeOpener(
+            runtime=runtime,
+            handle_by_profile=handle_by_profile,
+            **kwargs,
+        )
+        created_openers.append(opener)
+        return opener
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            chrome_profile_directory="Default",
+            auto_run_enabled=True,
+            raid_profiles=(
+                RaidProfileConfig("Default", "George", True),
+                RaidProfileConfig("Profile 3", "Maria", True),
+            ),
+            bot_action_slots=build_bot_action_slots(),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=lambda _emit_event: runtime,
+        chrome_opener_factory=chrome_opener_factory,
+        profile_shuffle=lambda profiles: None,
+        action_shuffle=lambda slots: None,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/some_user/status/123")
+    )
+
+    assert outcome.kind == "job_detected"
+    assert [opener.profile_directory for opener in created_openers] == ["Profile 3"]
+    assert [opener.open_raid_window_calls for opener in created_openers] == [
+        ["https://x.com/some_user/status/123"],
+    ]
+    assert runtime.run_calls == [("bot-actions", 43)]
+    assert worker.state.raid_profile_states == (
+        RaidProfileState("Default", "George", "green", None),
+        RaidProfileState("Profile 3", "Maria", "green", None),
+    )
+
+
 def test_worker_continues_after_profile_failure_and_marks_profile_red(tmp_path) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 3, 29, 12, 5, 0)

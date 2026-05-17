@@ -70,5 +70,14 @@ def analyze_raid_message(text: str) -> RaidMessageParseOutcome:
     )
 
 
+def raid_status_identity(url: str | None) -> str | None:
+    if not url:
+        return None
+    url_match = STATUS_URL_RE.search(str(url))
+    if url_match is None:
+        return None
+    return f"x-status:{url_match.group('status_id')}"
+
+
 def parse_raid_message(text: str) -> ParsedRaidMessage | None:
     return analyze_raid_message(text).match

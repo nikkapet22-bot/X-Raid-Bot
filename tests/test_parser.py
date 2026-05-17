@@ -1,4 +1,4 @@
-from raidbot.parser import parse_raid_message
+from raidbot.parser import parse_raid_message, raid_status_identity
 
 
 ACTIVE_MESSAGE = """
@@ -106,3 +106,14 @@ def test_parse_raid_message_accepts_schemeless_twitter_status_url():
 
 def test_parse_raid_message_rejects_next_up_queue_posts():
     assert parse_raid_message(QUEUE_MESSAGE) is None
+
+
+def test_raid_status_identity_matches_status_id_across_x_and_twitter_urls():
+    assert (
+        raid_status_identity("https://x.com/i/status/123456789")
+        == "x-status:123456789"
+    )
+    assert (
+        raid_status_identity("twitter.com/some_user/status/123456789")
+        == "x-status:123456789"
+    )
