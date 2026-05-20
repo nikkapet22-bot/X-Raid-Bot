@@ -113,6 +113,7 @@ def test_dashboard_preview_bot_actions_uses_compact_presets_without_health_aside
     content = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
         encoding="utf-8"
     )
+    runtime = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
 
     assert 'data-page="bot-actions"' in content
     assert "bot-actions-wide" in content
@@ -136,6 +137,8 @@ def test_dashboard_preview_bot_actions_uses_compact_presets_without_health_aside
     assert "When Page Ready Times Out" not in content
     assert "Operator feedback" not in content
     assert "Trouble Status" not in content
+    assert "Page Ready timeout" in runtime
+    assert "setPageReadyTimeout" in runtime
 
 
 def test_dashboard_preview_exposes_performance_mode_toggle() -> None:
@@ -287,6 +290,7 @@ def test_dashboard_bridge_routes_performance_mode_toggle() -> None:
         on_reset_all_profiles=lambda: None,
         on_set_raid_on_restart=lambda _enabled: None,
         on_set_performance_mode=calls.append,
+        on_set_page_ready_timeout=lambda _seconds: None,
         on_reauthorize=lambda: None,
         on_refresh_chats=lambda: None,
         on_scan_senders=lambda: None,
@@ -308,6 +312,44 @@ def test_dashboard_bridge_routes_performance_mode_toggle() -> None:
     assert calls == [True]
 
 
+def test_dashboard_bridge_routes_page_ready_timeout() -> None:
+    from raidbot.desktop.web_dashboard import DashboardBridge
+
+    calls = []
+    bridge = DashboardBridge(
+        on_ready=lambda: None,
+        on_start=lambda: None,
+        on_stop=lambda: None,
+        on_toggle_pause=lambda: None,
+        on_raid_now=lambda: None,
+        on_raid_now_for_profile=lambda _profile: None,
+        on_reset_profile=lambda _profile: None,
+        on_configure_profile=lambda _profile: None,
+        on_reset_all_profiles=lambda: None,
+        on_set_raid_on_restart=lambda _enabled: None,
+        on_set_performance_mode=lambda _enabled: None,
+        on_set_page_ready_timeout=calls.append,
+        on_reauthorize=lambda: None,
+        on_refresh_chats=lambda: None,
+        on_scan_senders=lambda: None,
+        on_add_profile=lambda: None,
+        on_move_profile=lambda _profile, _direction: None,
+        on_remove_profile=lambda _profile: None,
+        on_capture_page_template=lambda _key: None,
+        on_test_page_template=lambda _key: None,
+        on_capture_slot=lambda _slot: None,
+        on_test_slot=lambda _slot: None,
+        on_open_slot_presets=lambda _slot: None,
+        on_capture_slot_finish=lambda _slot: None,
+        on_test_enabled_slots=lambda: None,
+        on_capture_troubleshoot=lambda _group, _index: None,
+        on_test_troubleshoot=lambda _group, _index: None,
+    )
+    bridge.setPageReadyTimeout(45)
+
+    assert calls == [45.0]
+
+
 def test_dashboard_bridge_routes_remove_profile() -> None:
     from raidbot.desktop.web_dashboard import DashboardBridge
 
@@ -324,6 +366,7 @@ def test_dashboard_bridge_routes_remove_profile() -> None:
         on_reset_all_profiles=lambda: None,
         on_set_raid_on_restart=lambda _enabled: None,
         on_set_performance_mode=lambda _enabled: None,
+        on_set_page_ready_timeout=lambda _seconds: None,
         on_reauthorize=lambda: None,
         on_refresh_chats=lambda: None,
         on_scan_senders=lambda: None,

@@ -37,6 +37,7 @@ from raidbot.desktop.models import (
     SuccessfulProfileRun,
     TelegramConnectionState,
     apply_dashboard_metric_reset,
+    normalize_page_ready_timeout_seconds,
     raid_profile_allows_slot,
     raid_profile_has_any_actions_enabled,
 )
@@ -1498,7 +1499,13 @@ class DesktopBotWorker:
                 name="page_ready",
                 template_path=template_path,
                 match_threshold=0.9,
-                max_search_seconds=_PAGE_READY_MAX_SEARCH_SECONDS,
+                max_search_seconds=normalize_page_ready_timeout_seconds(
+                    getattr(
+                        self.config,
+                        "page_ready_timeout_seconds",
+                        _PAGE_READY_MAX_SEARCH_SECONDS,
+                    )
+                ),
                 max_scroll_attempts=0,
                 scroll_amount=-120,
                 max_click_attempts=1,

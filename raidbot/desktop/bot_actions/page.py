@@ -356,6 +356,7 @@ class BotActionsPage(QWidget):
     slotPresetsRequested = Signal(int)
     slotEnabledChanged = Signal(int, bool)
     slot1FinishDelayChanged = Signal(int)
+    pageReadyTimeoutChanged = Signal(float)
     troubleshootCaptureRequested = Signal(str, int)
     troubleshootTestRequested = Signal(str, int)
 
@@ -371,6 +372,12 @@ class BotActionsPage(QWidget):
         self.black_box_boxes: list[TroubleshootBox] = []
         self.troubleshoot_groups: dict[str, list[TroubleshootBox]] = {}
         self.slot_1_finish_delay_input: QSpinBox | None = None
+        self.page_ready_timeout_input = QSpinBox()
+        self.page_ready_timeout_input.setRange(1, 300)
+        self.page_ready_timeout_input.setSuffix(" sec")
+        self.page_ready_timeout_input.valueChanged.connect(
+            lambda value: self.pageReadyTimeoutChanged.emit(float(value))
+        )
 
         self.page_ready_preview_label = QLabel("No image")
         self.page_ready_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -421,6 +428,7 @@ class BotActionsPage(QWidget):
         self.set_page_exit_template_path(config.page_exit_template_path)
         self.set_slots(config.bot_action_slots)
         self.set_slot_1_finish_delay_seconds(config.slot_1_finish_delay_seconds)
+        self.set_page_ready_timeout_seconds(config.page_ready_timeout_seconds)
         self.set_status_fields(latest_status="Configure fixed bot action slots.")
 
     def set_slots(self, slots: Sequence[BotActionSlotConfig]) -> None:
@@ -432,6 +440,10 @@ class BotActionsPage(QWidget):
             return
         with QSignalBlocker(self.slot_1_finish_delay_input):
             self.slot_1_finish_delay_input.setValue(int(finish_delay_seconds))
+
+    def set_page_ready_timeout_seconds(self, seconds: float) -> None:
+        with QSignalBlocker(self.page_ready_timeout_input):
+            self.page_ready_timeout_input.setValue(int(round(float(seconds))))
 
     def set_troubleshoot_template_path(
         self,
@@ -545,6 +557,15 @@ class BotActionsPage(QWidget):
         page_exit_layout.addWidget(self.page_exit_card)
         templates_row.addWidget(page_exit_group)
         layout.addLayout(templates_row)
+
+        timeout_group = QGroupBox("Page Ready Timeout")
+        timeout_layout = QHBoxLayout(timeout_group)
+        timeout_layout.setContentsMargins(14, 14, 14, 14)
+        timeout_label = QLabel("Seconds before CLDF troubleshooting starts")
+        timeout_label.setProperty("muted", "true")
+        timeout_layout.addWidget(timeout_label, 1)
+        timeout_layout.addWidget(self.page_ready_timeout_input)
+        layout.addWidget(timeout_group)
 
         # Slot cards in a 2×2 grid
         slots_group = QGroupBox("Action Slots")

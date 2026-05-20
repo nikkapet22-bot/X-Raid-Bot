@@ -70,6 +70,9 @@ _DEFAULT_BOT_ACTION_SLOT_LAYOUT: tuple[tuple[str, str], ...] = (
     ("slot_3_r", "R"),
     ("slot_4_b", "B"),
 )
+_DEFAULT_PAGE_READY_TIMEOUT_SECONDS = 12.0
+_MIN_PAGE_READY_TIMEOUT_SECONDS = 1.0
+_MAX_PAGE_READY_TIMEOUT_SECONDS = 300.0
 _RAID_PROFILE_ACTION_FIELD_BY_SLOT_KEY: dict[str, str] = {
     "slot_1_r": "reply_enabled",
     "slot_2_l": "like_enabled",
@@ -88,6 +91,17 @@ def default_bot_action_slots() -> tuple[BotActionSlotConfig, ...]:
     return tuple(
         BotActionSlotConfig(key=key, label=label)
         for key, label in _DEFAULT_BOT_ACTION_SLOT_LAYOUT
+    )
+
+
+def normalize_page_ready_timeout_seconds(value: object) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        seconds = _DEFAULT_PAGE_READY_TIMEOUT_SECONDS
+    return max(
+        _MIN_PAGE_READY_TIMEOUT_SECONDS,
+        min(_MAX_PAGE_READY_TIMEOUT_SECONDS, seconds),
     )
 
 
@@ -136,6 +150,7 @@ class DesktopAppConfig:
     default_auto_sequence_id: str | None
     auto_run_settle_ms: int
     slot_1_finish_delay_seconds: int
+    page_ready_timeout_seconds: float
     pause_resume_hotkey: str | None
     page_ready_template_path: Path | None
     page_exit_template_path: Path | None
@@ -168,6 +183,7 @@ class DesktopAppConfig:
         default_auto_sequence_id: str | None = None,
         auto_run_settle_ms: int = 1500,
         slot_1_finish_delay_seconds: int = 2,
+        page_ready_timeout_seconds: float = _DEFAULT_PAGE_READY_TIMEOUT_SECONDS,
         pause_resume_hotkey: str | None = None,
         page_ready_template_path: Path | None = None,
         page_exit_template_path: Path | None = None,
@@ -205,6 +221,9 @@ class DesktopAppConfig:
         self.default_auto_sequence_id = default_auto_sequence_id
         self.auto_run_settle_ms = auto_run_settle_ms
         self.slot_1_finish_delay_seconds = int(slot_1_finish_delay_seconds)
+        self.page_ready_timeout_seconds = normalize_page_ready_timeout_seconds(
+            page_ready_timeout_seconds
+        )
         normalized_pause_resume_hotkey = (
             str(pause_resume_hotkey).strip() if pause_resume_hotkey is not None else ""
         )

@@ -3119,6 +3119,7 @@ def test_worker_waits_for_page_ready_before_running_sequence(tmp_path) -> None:
         config=build_config(
             auto_run_enabled=True,
             page_ready_template_path=page_ready_path,
+            page_ready_timeout_seconds=30,
             bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
         ),
         service_factory=lambda config: FakeService(
@@ -3141,6 +3142,7 @@ def test_worker_waits_for_page_ready_before_running_sequence(tmp_path) -> None:
     assert runtime.window_manager.focus_attempted_handles == [15, 15]
     assert runtime.window_manager.action_order[:2] == [("maximize", 15), ("focus", 15)]
     assert runtime.wait_for_step_calls == [(page_ready_path, 15)]
+    assert runtime.wait_for_step_search_seconds[:1] == [30.0]
     assert waits == [1.5, 0.5]
     assert runtime.input_driver.move_cursor_calls == [(25, 35)]
     assert runtime.run_calls == [("bot-actions", 15)]

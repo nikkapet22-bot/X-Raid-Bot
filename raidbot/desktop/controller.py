@@ -218,6 +218,15 @@ class DesktopController(QObject):
             resolve_sender_entries=False,
         )
 
+    def set_page_ready_timeout_seconds(self, seconds: float) -> None:
+        self._persist_config(
+            replace(
+                self.config,
+                page_ready_timeout_seconds=float(seconds),
+            ),
+            resolve_sender_entries=False,
+        )
+
     def add_raid_profile(self, profile_directory: str, label: str) -> None:
         if self.config is None:
             raise ValueError("No desktop configuration is available")

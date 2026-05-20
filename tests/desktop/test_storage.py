@@ -593,6 +593,29 @@ def test_storage_round_trips_page_ready_template_path(tmp_path) -> None:
     assert loaded.page_ready_template_path == tmp_path / "bot_actions/page_ready.png"
 
 
+def test_storage_round_trips_page_ready_timeout_seconds(tmp_path) -> None:
+    from raidbot.desktop.storage import DesktopStorage
+
+    storage = DesktopStorage(tmp_path)
+    config = DesktopAppConfig(
+        telegram_api_id=123456,
+        telegram_api_hash="api-hash",
+        telegram_session_path=Path("sessions/raid.session"),
+        telegram_phone_number="+15555550123",
+        whitelisted_chat_ids=[1001],
+        allowed_sender_ids=[424242],
+        allowed_sender_entries=("@raidar",),
+        chrome_profile_directory="Profile 1",
+        page_ready_timeout_seconds=45,
+    )
+
+    storage.save_config(config)
+
+    loaded = storage.load_config()
+
+    assert loaded.page_ready_timeout_seconds == 45.0
+
+
 def test_storage_round_trips_page_exit_template_path(tmp_path) -> None:
     from raidbot.desktop.storage import DesktopStorage
 

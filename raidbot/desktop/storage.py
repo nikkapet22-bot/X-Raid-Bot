@@ -121,6 +121,7 @@ class DesktopStorage:
             "default_auto_sequence_id": config.default_auto_sequence_id,
             "auto_run_settle_ms": config.auto_run_settle_ms,
             "slot_1_finish_delay_seconds": config.slot_1_finish_delay_seconds,
+            "page_ready_timeout_seconds": config.page_ready_timeout_seconds,
             "pause_resume_hotkey": config.pause_resume_hotkey,
             "page_ready_template_path": (
                 str(config.page_ready_template_path)
@@ -192,6 +193,11 @@ class DesktopStorage:
                 int(data["slot_1_finish_delay_seconds"])
                 if data.get("slot_1_finish_delay_seconds") is not None
                 else 2
+            ),
+            page_ready_timeout_seconds=(
+                self._maybe_float(data.get("page_ready_timeout_seconds"))
+                if data.get("page_ready_timeout_seconds") is not None
+                else 12.0
             ),
             pause_resume_hotkey=(
                 str(data.get("pause_resume_hotkey")).strip()
@@ -576,6 +582,14 @@ class DesktopStorage:
         if value is None:
             return None
         return int(value)
+
+    def _maybe_float(self, value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     def _maybe_bool(self, value: Any, *, default: bool) -> bool:
         if value is None:

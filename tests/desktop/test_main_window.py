@@ -163,6 +163,7 @@ class FakeController(QObject):
         self.bot_action_slot_enabled_updates = []
         self.auto_run_settle_ms_updates = []
         self.slot_1_finish_delay_seconds_updates = []
+        self.page_ready_timeout_seconds_updates = []
         self.raid_profile_add_calls = []
         self.raid_profile_remove_calls = []
         self.raid_profile_move_calls = []
@@ -294,6 +295,10 @@ class FakeController(QObject):
                 }
             )
         )
+
+    def set_page_ready_timeout_seconds(self, seconds: float) -> None:
+        self.page_ready_timeout_seconds_updates.append(seconds)
+        self.apply_config(replace(self.config, page_ready_timeout_seconds=float(seconds)))
 
     def set_page_ready_template_path(self, template_path: Path | None) -> None:
         self.page_ready_template_updates.append(template_path)
@@ -2846,6 +2851,7 @@ def test_main_window_web_bot_actions_state_embeds_capture_previews_and_preset_co
     config = build_config(
         page_ready_template_path=page_ready_path,
         page_exit_template_path=page_exit_path,
+        page_ready_timeout_seconds=30,
         bot_action_slots=(
             replace(
                 default_slots[0],
@@ -2875,6 +2881,7 @@ def test_main_window_web_bot_actions_state_embeds_capture_previews_and_preset_co
     assert bot_actions["finishTemplateImageSrc"].startswith("data:image/png;base64,")
     assert bot_actions["presetCount"] == 2
     assert bot_actions["finishTemplateSaved"] is True
+    assert bot_actions["pageReadyTimeoutSeconds"] == 30.0
 
 
 def test_main_window_web_troubleshoot_state_embeds_cldf_capture_previews(

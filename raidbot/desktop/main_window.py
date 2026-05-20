@@ -1257,6 +1257,11 @@ class MainWindow(QMainWindow):
                 "set_performance_mode_enabled",
                 lambda _enabled: None,
             ),
+            on_set_page_ready_timeout=getattr(
+                self.controller,
+                "set_page_ready_timeout_seconds",
+                lambda _seconds: None,
+            ),
             on_reauthorize=self._web_reauthorize_requested,
             on_refresh_chats=self._web_refresh_chats_requested,
             on_scan_senders=self._web_scan_senders_requested,
@@ -1316,6 +1321,13 @@ class MainWindow(QMainWindow):
         )
         self.bot_actions_page.slot1FinishDelayChanged.connect(
             self.controller.set_slot_1_finish_delay_seconds
+        )
+        self.bot_actions_page.pageReadyTimeoutChanged.connect(
+            getattr(
+                self.controller,
+                "set_page_ready_timeout_seconds",
+                lambda _seconds: None,
+            )
         )
         self.bot_actions_page.troubleshootCaptureRequested.connect(
             self._capture_troubleshoot_template
@@ -2140,6 +2152,9 @@ class MainWindow(QMainWindow):
                     getattr(config, "page_exit_template_path", None),
                 ),
             },
+            "pageReadyTimeoutSeconds": float(
+                getattr(config, "page_ready_timeout_seconds", 12.0)
+            ),
             "slots": [
                 {
                     "name": slot_names.get(getattr(slot, "key", ""), str(getattr(slot, "label", "?"))),
@@ -3476,6 +3491,9 @@ class MainWindow(QMainWindow):
         self._sync_troubleshoot_templates()
         self.bot_actions_page.set_slot_1_finish_delay_seconds(
             config.slot_1_finish_delay_seconds
+        )
+        self.bot_actions_page.set_page_ready_timeout_seconds(
+            getattr(config, "page_ready_timeout_seconds", 12.0)
         )
         self._sync_performance_mode()
         self._sync_raid_profile_cards(config, self._latest_state)

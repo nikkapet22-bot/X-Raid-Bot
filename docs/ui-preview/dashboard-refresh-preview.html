@@ -1631,6 +1631,30 @@
       gap: 14px;
     }
 
+    .page-ready-timeout-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 130px;
+      align-items: center;
+      gap: 16px;
+      margin-top: 18px;
+      padding: 18px;
+      border: 1px solid rgba(var(--accent-rgb), .14);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, .035);
+    }
+
+    .page-ready-timeout-card strong,
+    .page-ready-timeout-card span {
+      display: block;
+    }
+
+    .page-ready-timeout-card span {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
     .capture-card,
     .slot-card,
     .trouble-card {
@@ -2041,7 +2065,7 @@
       <button class="rail-button performance-toggle" aria-label="Performance mode" aria-pressed="false" data-performance-toggle type="button" title="Performance mode off">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 14a8 8 0 1 1 16 0"/><path d="M12 14 17 9"/><path d="M8 18h8"/></svg>
       </button>
-      <div class="rail-version" data-app-version>v2.2.69</div>
+      <div class="rail-version" data-app-version>v2.2.70</div>
     </aside>
 
     <main>
@@ -2338,6 +2362,13 @@
                   <div class="capture-preview"></div>
                   <div class="mini-button-row"><button class="tiny-button">Capture</button><button class="tiny-button">Test</button></div>
                 </div>
+              </div>
+              <div class="page-ready-timeout-card">
+                <div>
+                  <strong>Page Ready timeout</strong>
+                  <span>Seconds to wait before CLDF troubleshooting starts.</span>
+                </div>
+                <input class="runtime-field-input" type="number" min="1" max="300" step="1" value="12">
               </div>
             </article>
 

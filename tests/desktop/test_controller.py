@@ -1023,13 +1023,16 @@ def test_controller_updates_auto_run_config_through_apply_config(qtbot) -> None:
     controller.set_auto_run_enabled(True)
     controller.set_default_auto_sequence_id("seq-2")
     controller.set_auto_run_settle_ms(2750)
+    controller.set_page_ready_timeout_seconds(30)
 
     assert storage.saved_configs[-1].auto_run_enabled is True
     assert storage.saved_configs[-1].default_auto_sequence_id == "seq-2"
     assert storage.saved_configs[-1].auto_run_settle_ms == 2750
+    assert storage.saved_configs[-1].page_ready_timeout_seconds == 30.0
     assert controller.config.auto_run_enabled is True
     assert controller.config.default_auto_sequence_id == "seq-2"
     assert controller.config.auto_run_settle_ms == 2750
+    assert controller.config.page_ready_timeout_seconds == 30.0
     assert configs[-1] == controller.config
 
 

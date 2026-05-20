@@ -178,6 +178,27 @@ _DASHBOARD_RUNTIME_STYLE = r"""
     letter-spacing: .12em;
     text-transform: uppercase;
   }
+  .page-ready-timeout-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 130px;
+    align-items: center;
+    gap: 16px;
+    margin-top: 18px;
+    padding: 18px;
+    border: 1px solid rgba(var(--accent-rgb), .14);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, .035);
+  }
+  .page-ready-timeout-card strong,
+  .page-ready-timeout-card span {
+    display: block;
+  }
+  .page-ready-timeout-card span {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.35;
+  }
   .activity-feed {
     max-height: 286px;
     overflow-y: auto;
@@ -712,6 +733,7 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
     const grid = page.querySelector(".bot-actions-grid");
     if (!grid) return;
     const slots = bot.slots || [];
+    const pageReadyTimeout = Math.round(Number(bot.pageReadyTimeoutSeconds || 12));
     grid.innerHTML = `
       <article class="preview-panel">
         <div class="panel-title-row">
@@ -730,6 +752,13 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
               </div>
             </div>`;
           }).join("")}
+        </div>
+        <div class="page-ready-timeout-card">
+          <div>
+            <strong>Page Ready timeout</strong>
+            <span>Seconds to wait before CLDF troubleshooting starts.</span>
+          </div>
+          <input class="runtime-field-input" type="number" min="1" max="300" step="1" value="${pageReadyTimeout}" data-page-ready-timeout>
         </div>
       </article>
       <article class="preview-panel">
@@ -767,6 +796,14 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
     `;
     all("[data-page-template-capture]").forEach((button) => button.addEventListener("click", () => call("capturePageTemplate", button.dataset.pageTemplateCapture)));
     all("[data-page-template-test]").forEach((button) => button.addEventListener("click", () => call("testPageTemplate", button.dataset.pageTemplateTest)));
+    all("[data-page-ready-timeout]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const parsed = Number(input.value || 12);
+        const value = Number.isFinite(parsed) ? Math.max(1, Math.min(300, Math.round(parsed))) : 12;
+        input.value = String(value);
+        call("setPageReadyTimeout", value);
+      });
+    });
     all("[data-slot-capture]").forEach((button) => button.addEventListener("click", () => call("captureSlot", Number(button.dataset.slotCapture))));
     all("[data-slot-test]").forEach((button) => button.addEventListener("click", () => call("testSlot", Number(button.dataset.slotTest))));
     all("[data-slot-presets]").forEach((button) => button.addEventListener("click", () => call("openSlotPresets", Number(button.dataset.slotPresets))));
@@ -875,6 +912,7 @@ class DashboardBridge(QObject):
         on_reset_all_profiles: Callable[[], None],
         on_set_raid_on_restart: Callable[[bool], None],
         on_set_performance_mode: Callable[[bool], None],
+        on_set_page_ready_timeout: Callable[[float], None],
         on_reauthorize: Callable[[], None],
         on_refresh_chats: Callable[[], None],
         on_scan_senders: Callable[[], None],
@@ -904,6 +942,7 @@ class DashboardBridge(QObject):
         self._on_reset_all_profiles = on_reset_all_profiles
         self._on_set_raid_on_restart = on_set_raid_on_restart
         self._on_set_performance_mode = on_set_performance_mode
+        self._on_set_page_ready_timeout = on_set_page_ready_timeout
         self._on_reauthorize = on_reauthorize
         self._on_refresh_chats = on_refresh_chats
         self._on_scan_senders = on_scan_senders
@@ -963,6 +1002,10 @@ class DashboardBridge(QObject):
     @Slot(bool)
     def setPerformanceMode(self, enabled: bool) -> None:
         self._on_set_performance_mode(bool(enabled))
+
+    @Slot(float)
+    def setPageReadyTimeout(self, seconds: float) -> None:
+        self._on_set_page_ready_timeout(float(seconds))
 
     @Slot()
     def reauthorize(self) -> None:
@@ -1039,6 +1082,7 @@ class DashboardWebView(QWidget):
         on_reset_all_profiles: Callable[[], None],
         on_set_raid_on_restart: Callable[[bool], None],
         on_set_performance_mode: Callable[[bool], None],
+        on_set_page_ready_timeout: Callable[[float], None],
         on_reauthorize: Callable[[], None],
         on_refresh_chats: Callable[[], None],
         on_scan_senders: Callable[[], None],
@@ -1092,6 +1136,7 @@ class DashboardWebView(QWidget):
             on_reset_all_profiles=on_reset_all_profiles,
             on_set_raid_on_restart=on_set_raid_on_restart,
             on_set_performance_mode=on_set_performance_mode,
+            on_set_page_ready_timeout=on_set_page_ready_timeout,
             on_reauthorize=on_reauthorize,
             on_refresh_chats=on_refresh_chats,
             on_scan_senders=on_scan_senders,
