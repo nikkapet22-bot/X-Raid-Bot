@@ -1100,7 +1100,7 @@ def test_storage_loads_sender_entries_when_present(tmp_path) -> None:
     assert loaded.allowed_sender_entries == ("@raidar", "@delugeraidbot")
 
 
-def test_storage_loads_legacy_bot_action_slots_as_disabled_defaults(tmp_path) -> None:
+def test_storage_loads_legacy_bot_action_slots_as_enabled_defaults(tmp_path) -> None:
     from raidbot.desktop.storage import DesktopStorage
 
     storage = DesktopStorage(tmp_path)
@@ -1125,7 +1125,7 @@ def test_storage_loads_legacy_bot_action_slots_as_disabled_defaults(tmp_path) ->
 
     assert loaded.auto_run_settle_ms == 1800
     assert loaded.bot_action_slots == default_bot_action_slots()
-    assert all(slot.enabled is False for slot in loaded.bot_action_slots)
+    assert all(slot.enabled is True for slot in loaded.bot_action_slots)
     assert all(slot.template_path is None for slot in loaded.bot_action_slots)
     assert all(slot.updated_at is None for slot in loaded.bot_action_slots)
 

@@ -119,7 +119,7 @@ def build_bot_action_sequence(
     warnings: list[BotActionBuildWarning] = []
     enabled_slots: list[tuple[int, BotActionSlotConfig]] = []
     for slot_index, slot in enumerate(slots):
-        if not slot.enabled or slot.template_path is None:
+        if slot.template_path is None:
             continue
         if slot.key == "slot_1_r" and not slot.presets:
             warnings.append(

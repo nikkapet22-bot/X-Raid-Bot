@@ -2453,10 +2453,10 @@ def test_main_window_slot_enabled_changes_persist_through_controller(qtbot) -> N
     window = build_window(controller, FakeStorage())
     qtbot.addWidget(window)
 
-    window.bot_actions_page.slot_boxes[1].enabled_checkbox.setChecked(True)
+    window.bot_actions_page.slot_boxes[1].enabled_checkbox.setChecked(False)
 
-    assert controller.bot_action_slot_enabled_updates == [(1, True)]
-    assert controller.config.bot_action_slots[1].enabled is True
+    assert controller.bot_action_slot_enabled_updates == [(1, False)]
+    assert controller.config.bot_action_slots[1].enabled is False
 
 
 def test_main_window_slot_enabled_change_does_not_reload_available_chats(qtbot) -> None:
@@ -2476,7 +2476,7 @@ def test_main_window_slot_enabled_change_does_not_reload_available_chats(qtbot) 
 
     assert chat_load_calls == ["load"]
 
-    window.bot_actions_page.slot_boxes[1].enabled_checkbox.setChecked(True)
+    window.bot_actions_page.slot_boxes[1].enabled_checkbox.setChecked(False)
 
     assert chat_load_calls == ["load"]
 
@@ -3357,6 +3357,156 @@ def test_main_window_web_profile_card_exposes_raid_now_feedback_after_error(
     assert web_profile["raidNowFeedback"] == "Automation already running"
 
 
+def test_main_window_web_profile_raid_now_explains_stopped_and_disconnected(
+    qtbot,
+) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "green", None),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    web_state = window._build_web_dashboard_state()
+    web_profile = web_state["profiles"][0]
+
+    assert web_state["canRaidNow"] is False
+    assert web_state["raidNowDisabledReason"] == (
+        "Press Start and connect Telegram to use Raid NOW."
+    )
+    assert web_profile["canRaidNow"] is False
+    assert web_profile["raidNowDisabledReason"] == (
+        "Press Start and connect Telegram to use Raid NOW."
+    )
+
+
+def test_main_window_web_profile_raid_now_allows_warmup_when_running_and_connected(
+    qtbot,
+) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(
+                RaidProfileConfig(
+                    "Profile 3",
+                    "Maria",
+                    True,
+                    reply_enabled=False,
+                    like_enabled=False,
+                    repost_enabled=False,
+                    bookmark_enabled=False,
+                    warmup_enabled=True,
+                ),
+            ),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "green", None),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+    try:
+        controller.botStateChanged.emit("running")
+        controller.connectionStateChanged.emit("connected")
+
+        web_profile = window._build_web_dashboard_state()["profiles"][0]
+
+        assert web_profile["statusClass"] == "warmup"
+        assert web_profile["canRaidNow"] is True
+        assert web_profile["raidNowDisabledReason"] == ""
+    finally:
+        controller.botStateChanged.emit("stopped")
+
+
+def test_main_window_web_profile_raid_now_explains_missing_profile_actions(
+    qtbot,
+) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(
+                RaidProfileConfig(
+                    "Profile 3",
+                    "Maria",
+                    True,
+                    reply_enabled=False,
+                    like_enabled=False,
+                    repost_enabled=False,
+                    bookmark_enabled=False,
+                ),
+            ),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "green", None),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+    try:
+        controller.botStateChanged.emit("running")
+        controller.connectionStateChanged.emit("connected")
+
+        web_profile = window._build_web_dashboard_state()["profiles"][0]
+
+        assert web_profile["statusClass"] == "paused"
+        assert web_profile["canRaidNow"] is False
+        assert web_profile["raidNowDisabledReason"] == (
+            "Open the gear and enable at least one action, or Warm me up baby."
+        )
+    finally:
+        controller.botStateChanged.emit("stopped")
+
+
+def test_main_window_web_failed_profile_chip_uses_actual_error_reason(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 1",
+            raid_profiles=(RaidProfileConfig("Profile 1", "Profile 1", True),),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState(
+                    "Profile 1",
+                    "Profile 1",
+                    "red",
+                    "target_window_not_found",
+                ),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    web_profile = window._build_web_dashboard_state()["profiles"][0]
+
+    assert web_profile["chips"][0]["label"] == "Chrome window not found"
+    assert web_profile["chips"][1]["label"] == "Ready to reset"
+    assert web_profile["error"] == "target_window_not_found"
+
+
 def test_main_window_profile_card_raid_now_button_transitions_to_raiding_until_completion(
     qtbot,
 ) -> None:
@@ -3668,10 +3818,10 @@ def test_main_window_profile_action_picker_disables_actions_when_warmup_enabled(
     controller = FakeController(
         config=build_config(
             bot_action_slots=(
-                BotActionSlotConfig(key="slot_1_r", label="Reply", enabled=True),
-                BotActionSlotConfig(key="slot_2_l", label="Like", enabled=True),
-                BotActionSlotConfig(key="slot_3_r", label="Repost", enabled=True),
-                BotActionSlotConfig(key="slot_4_b", label="Bookmark", enabled=True),
+                BotActionSlotConfig(key="slot_1_r", label="Reply", enabled=False),
+                BotActionSlotConfig(key="slot_2_l", label="Like", enabled=False),
+                BotActionSlotConfig(key="slot_3_r", label="Repost", enabled=False),
+                BotActionSlotConfig(key="slot_4_b", label="Bookmark", enabled=False),
             ),
             raid_profiles=(
                 RaidProfileConfig(

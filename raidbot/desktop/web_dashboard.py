@@ -67,6 +67,23 @@ _DASHBOARD_RUNTIME_STYLE = r"""
     letter-spacing: .08em;
     text-transform: uppercase;
   }
+  .profile-raid-now.is-disabled {
+    cursor: help;
+    opacity: .46;
+    transform: none !important;
+    animation: none !important;
+  }
+  .profile-raid-now.is-disabled:hover {
+    border-color: rgba(var(--accent-rgb), .16);
+    box-shadow: none;
+  }
+  .action-chips {
+    cursor: default;
+  }
+  .action-chips .chip {
+    pointer-events: none;
+    user-select: none;
+  }
   .profile-error {
     position: relative;
     z-index: 1;
@@ -412,13 +429,16 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
   const renderCommand = (data) => {
     renderPill(first(".command-card .state-pill"), data.connectionStateText || "Disconnected", data.connectionVariant);
     const buttons = all(".command-stack .wide-button");
+    const raidNowDisabledReason = data.raidNowDisabledReason || "Raid NOW is not available right now.";
     if (buttons[0]) {
       buttons[0].textContent = data.globalRaidNowText || "Raid NOW!";
       buttons[0].disabled = !data.canRaidNow;
+      buttons[0].setAttribute("title", data.canRaidNow ? "Run the next available profile now" : raidNowDisabledReason);
     }
     if (buttons[1]) {
       buttons[1].textContent = "Fetch latest Telegram raid";
       buttons[1].disabled = !data.canRaidNow;
+      buttons[1].setAttribute("title", data.canRaidNow ? "Fetch the latest Telegram raid" : raidNowDisabledReason);
     }
     if (buttons[2]) {
       buttons[2].textContent = data.pauseButtonText || "Pause queue after current action";
@@ -548,11 +568,16 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
           <div class="progress-meta"><span>Warmup progress</span><span>${html(profile.warmupProgress)}%</span></div>
           <div class="progress-bar"><div class="progress-fill" style="width:${Number(profile.warmupProgress || 0)}%"></div></div>
         </div>` : "";
+      const disabledReason = profile.canRaidNow ? "" : (profile.raidNowDisabledReason || "Raid NOW is not available right now.");
       const feedback = profile.error || profile.raidNowFeedback || "";
       const error = feedback ? `<div class="profile-error">${html(feedback)}</div>` : "";
+      const unavailable = !feedback && disabledReason
+        ? `<div class="profile-error profile-raid-now-unavailable">${html(disabledReason)}</div>`
+        : "";
       const preview = lightweightProfiles
         ? ""
         : `<div class="profile-preview"><span class="preview-line one"></span><span class="preview-line two"></span></div>`;
+      const raidNowClasses = `lux-button profile-raid-now ${profile.canRaidNow ? "" : "is-disabled"}`.trim();
       return `
         <article class="profile-card ${html(statusClass)}" data-profile="${html(profile.directory)}">
           <div class="profile-top">
@@ -560,10 +585,11 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
             ${actionButtons}
           </div>
           ${preview}
-          <div class="action-chips">${chips}</div>
+          <div class="action-chips" title="Use the gear icon to choose this profile's actions">${chips}</div>
           ${warmup}
           ${error}
-          <button class="lux-button profile-raid-now" data-raid-profile="${html(profile.directory)}" ${profile.canRaidNow ? "" : "disabled"}>${html(profile.raidNowText || "Raid NOW!")}</button>
+          ${unavailable}
+          <button class="${raidNowClasses}" data-raid-profile="${html(profile.directory)}" data-disabled-reason="${html(disabledReason)}" aria-disabled="${profile.canRaidNow ? "false" : "true"}" title="${html(disabledReason || "Run this profile now")}">${html(profile.raidNowText || "Raid NOW!")}</button>
         </article>`;
     }).join("");
     all("[data-config-profile]").forEach((button) => {
@@ -581,6 +607,18 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
     all("[data-raid-profile]").forEach((button) => {
       button.addEventListener("click", (event) => {
         event.stopPropagation();
+        if (button.getAttribute("aria-disabled") === "true") {
+          const reason = button.dataset.disabledReason || "Raid NOW is not available right now.";
+          const card = button.closest(".profile-card");
+          let feedback = card?.querySelector(".profile-raid-now-unavailable");
+          if (!feedback && card) {
+            feedback = document.createElement("div");
+            feedback.className = "profile-error profile-raid-now-unavailable";
+            button.insertAdjacentElement("beforebegin", feedback);
+          }
+          if (feedback) feedback.textContent = reason;
+          return;
+        }
         call("raidNowForProfile", button.dataset.raidProfile);
       });
     });

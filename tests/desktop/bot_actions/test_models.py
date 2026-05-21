@@ -10,7 +10,7 @@ from raidbot.desktop.models import (
 )
 
 
-def test_default_bot_action_slots_are_fixed_labels_and_disabled() -> None:
+def test_default_bot_action_slots_are_fixed_labels_and_enabled() -> None:
     slots = default_bot_action_slots()
 
     assert slots == (
@@ -19,7 +19,7 @@ def test_default_bot_action_slots_are_fixed_labels_and_disabled() -> None:
         BotActionSlotConfig(key="slot_3_r", label="R"),
         BotActionSlotConfig(key="slot_4_b", label="B"),
     )
-    assert all(slot.enabled is False for slot in slots)
+    assert all(slot.enabled is True for slot in slots)
     assert all(slot.template_path is None for slot in slots)
     assert all(slot.updated_at is None for slot in slots)
 

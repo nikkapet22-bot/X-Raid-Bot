@@ -72,6 +72,8 @@ _WARMUP_HOME_HOLD_SEGMENTS = (
 _WARMUP_FEED_HOLD_SEGMENTS = (("pagedown", 4.0),)
 _PAUSE_WAIT_POLL_SECONDS = 0.1
 _HELD_KEY_REPEAT_INTERVAL_SECONDS = 0.2
+_OPENED_WINDOW_DISCOVERY_TIMEOUT_SECONDS = 5.0
+_OPENED_WINDOW_DISCOVERY_INTERVAL_SECONDS = 0.25
 
 
 EmitEvent = Callable[[dict[str, Any]], None]
@@ -596,22 +598,48 @@ class DesktopBotWorker:
         return tuple(runtime.list_target_windows())
 
     def _bot_action_sequence_id(self) -> str | None:
-        build_result = self._build_active_bot_action_sequence_result()
-        if build_result is None:
-            return None
-        return build_result.sequence.id
+        eligible_profiles = self._eligible_raid_profiles()
+        if not eligible_profiles and any(
+            profile.enabled and self._profile_has_runnable_mode(profile)
+            for profile in self.config.raid_profiles
+        ):
+            self._bot_action_sequence_error = None
+            return "bot-actions"
+        for profile in eligible_profiles:
+            if self._profile_runs_warmup(profile):
+                self._bot_action_sequence_error = None
+                return "bot-actions"
+            build_result = self._build_active_bot_action_sequence_result(
+                profile=profile,
+                randomize_actions=False,
+            )
+            if build_result is not None:
+                return build_result.sequence.id
+        return None
+
+    def _emit_bot_action_build_warnings(self, build_result: Any) -> None:
+        for warning in getattr(build_result, "warnings", ()):
+            self._emit(
+                "automation_runtime_event",
+                event={
+                    "type": "slot_skipped",
+                    "step_index": warning.slot_index,
+                    "reason": warning.reason,
+                },
+            )
 
     def _build_active_bot_action_sequence_result(
         self,
         *,
         choose_preset=None,
         profile: RaidProfileConfig | None = None,
+        randomize_actions: bool | None = None,
     ):
         enabled_slots = [
             slot
             for slot in self.config.bot_action_slots
-            if slot.enabled
-            and (profile is None or raid_profile_allows_slot(profile, slot.key))
+            if profile is None or raid_profile_allows_slot(profile, slot.key)
+            if slot.enabled or slot.template_path is not None
         ]
         if not enabled_slots:
             self._bot_action_sequence_error = "bot_action_not_configured"
@@ -620,9 +648,12 @@ class DesktopBotWorker:
             self._bot_action_sequence_error = "captured_image_missing"
             return None
         self._bot_action_sequence_error = None
+        should_randomize = (
+            profile is not None if randomize_actions is None else randomize_actions
+        )
         enabled_slots = self._order_bot_action_slots_for_execution(
             enabled_slots,
-            randomize=profile is not None,
+            randomize=should_randomize,
         )
         if choose_preset is None:
             return build_bot_action_sequence(
@@ -636,8 +667,8 @@ class DesktopBotWorker:
             slot_1_finish_delay_seconds=self.config.slot_1_finish_delay_seconds,
             slot_1_obstruction_template_path=self._slot_1_obstruction_template_path(),
             choose_preset=choose_preset,
-                reorder_slot_1_last=True,
-            )
+            reorder_slot_1_last=True,
+        )
 
     def _order_bot_action_slots_for_execution(
         self,
@@ -765,6 +796,8 @@ class DesktopBotWorker:
                             choose_preset=preset_chooser,
                             profile=profile,
                         )
+                        if profile_sequence is not None:
+                            self._emit_bot_action_build_warnings(profile_sequence)
                         sequence = (
                             profile_sequence.sequence if profile_sequence is not None else None
                         )
@@ -839,18 +872,8 @@ class DesktopBotWorker:
         if runtime is None:
             return False, "automation_runtime_unavailable"
         self._automation_failure_already_recorded = False
-        build_result = self._build_active_bot_action_sequence_result()
-        if build_result is None or build_result.sequence.id != sequence_id:
+        if sequence_id != "bot-actions":
             return False, self._translate_automation_reason("default_sequence_missing")
-        for warning in build_result.warnings:
-            self._emit(
-                "automation_runtime_event",
-                event={
-                    "type": "slot_skipped",
-                    "step_index": warning.slot_index,
-                    "reason": warning.reason,
-                },
-            )
         eligible_profiles = self._shuffled_eligible_raid_profiles()
         if eligible_profiles:
             profiles_missing_success = self._profiles_missing_success_for_url(
@@ -1364,7 +1387,8 @@ class DesktopBotWorker:
         return bool(
             raid_profile_has_any_actions_enabled(profile)
             and any(
-                slot.enabled and raid_profile_allows_slot(profile, slot.key)
+                raid_profile_allows_slot(profile, slot.key)
+                and (slot.enabled or slot.template_path is not None)
                 for slot in self.config.bot_action_slots
             )
         )
@@ -1435,6 +1459,11 @@ class DesktopBotWorker:
         if opened_window is None and len(current_windows) == 1:
             opened_window = current_windows[0]
         if opened_window is None:
+            opened_window = self._wait_for_opened_raid_window(
+                runtime,
+                previous_windows,
+            )
+        if opened_window is None:
             return context, None, "target_window_not_found"
         window_manager = getattr(runtime, "window_manager", None)
         if window_manager is not None and hasattr(window_manager, "maximize_window"):
@@ -1454,6 +1483,31 @@ class DesktopBotWorker:
                 opened_window = interacted_window
         return replace(context, window_handle=opened_window.handle), opened_window, None
 
+    def _wait_for_opened_raid_window(
+        self,
+        runtime: Any,
+        previous_windows,
+    ) -> Any | None:
+        attempts = max(
+            1,
+            int(
+                _OPENED_WINDOW_DISCOVERY_TIMEOUT_SECONDS
+                / _OPENED_WINDOW_DISCOVERY_INTERVAL_SECONDS
+            ),
+        )
+        for _attempt in range(attempts):
+            self.auto_run_wait(_OPENED_WINDOW_DISCOVERY_INTERVAL_SECONDS)
+            current_windows = runtime.list_target_windows()
+            opened_window = find_opened_raid_window(
+                list(previous_windows or ()),
+                current_windows,
+            )
+            if opened_window is None and len(current_windows) == 1:
+                opened_window = current_windows[0]
+            if opened_window is not None:
+                return opened_window
+        return None
+
     def _open_raid_for_profile(
         self,
         item: PendingRaidWorkItem,
@@ -1466,21 +1520,70 @@ class DesktopBotWorker:
             previous_windows,
         )
 
+    def _resolve_window_after_profile_navigation(
+        self,
+        runtime: Any,
+        previous_windows,
+        *,
+        preferred_window_handle: int | None,
+    ) -> Any | None:
+        preferred_window = self._find_runtime_window_by_handle(
+            runtime,
+            preferred_window_handle,
+        )
+        if preferred_window is not None:
+            return preferred_window
+        current_windows = runtime.list_target_windows()
+        opened_window = find_opened_raid_window(
+            list(previous_windows or ()),
+            current_windows,
+        )
+        if opened_window is not None:
+            return opened_window
+        if len(current_windows) == 1:
+            return current_windows[0]
+        if current_windows:
+            return max(
+                current_windows,
+                key=lambda window: getattr(window, "last_focused_at", 0.0),
+            )
+        return self._wait_for_opened_raid_window(runtime, previous_windows)
+
     def _open_url_in_existing_profile_window(
         self,
+        runtime: Any,
         profile: RaidProfileConfig,
         url: str,
         *,
         window_handle: int | None,
-    ) -> str | None:
+    ) -> tuple[Any | None, str | None]:
+        previous_windows = tuple(runtime.list_target_windows())
         opener = self._build_chrome_opener_for_profile(profile.profile_directory)
         try:
-            opener.open(url, window_handle=window_handle)
+            context = opener.open(url, window_handle=window_handle)
         except Exception as exc:
-            return self._reason_from_exception(exc, "chrome_open_failed")
+            return None, self._reason_from_exception(exc, "chrome_open_failed")
         if self.config.auto_run_settle_ms > 0:
             self.auto_run_wait(self.config.auto_run_settle_ms / 1000.0)
-        return None
+        opened_window = self._resolve_window_after_profile_navigation(
+            runtime,
+            previous_windows,
+            preferred_window_handle=(
+                getattr(context, "window_handle", None) or window_handle
+            ),
+        )
+        if opened_window is None:
+            return None, "target_window_not_found"
+        window_manager = getattr(runtime, "window_manager", None)
+        if window_manager is not None and hasattr(window_manager, "ensure_interactable_window"):
+            try:
+                interaction = window_manager.ensure_interactable_window(opened_window)
+            except Exception:
+                interaction = None
+            if interaction is None or not getattr(interaction, "success", False):
+                return None, "window_not_focusable"
+            opened_window = getattr(interaction, "window", None) or opened_window
+        return opened_window, None
 
     def _wait_for_page_ready(
         self,
@@ -2050,19 +2153,21 @@ class DesktopBotWorker:
 
         if current_mode == "warmup_feed_open":
             self._raise_if_pause_requested(warmup_snapshot("warmup_feed_open"))
-            open_feed_failure_reason = self._open_url_in_existing_profile_window(
+            opened_window, open_feed_failure_reason = self._open_url_in_existing_profile_window(
+                runtime,
                 profile,
                 _WARMUP_FEED_URL,
                 window_handle=opened_window.handle,
             )
-            if open_feed_failure_reason is not None:
+            if open_feed_failure_reason is not None or opened_window is None:
+                failure_reason = open_feed_failure_reason or "target_window_not_found"
                 self._record_raid_profile_failure(
                     item,
                     profile,
-                    open_feed_failure_reason,
+                    failure_reason,
                     sequence_id="warmup-mode",
                 )
-                return "failed", True, open_feed_failure_reason
+                return "failed", True, failure_reason
             current_mode = "warmup_feed"
 
         warmup_failure_reason = self._run_warmup_hold_block(
@@ -2155,8 +2260,7 @@ class DesktopBotWorker:
         candidate_slots = [
             slot
             for slot in self.config.bot_action_slots
-            if slot.enabled
-            and slot.key != "slot_4_b"
+            if slot.key != "slot_4_b"
             and slot.template_path is not None
             and slot.template_path.exists()
         ]

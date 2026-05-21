@@ -47,19 +47,20 @@ def test_build_bot_action_sequence_places_slot_1_last() -> None:
 
     assert sequence.id == "bot-actions"
     assert sequence.name == "Bot Actions"
-    assert [step.name for step in sequence.steps] == ["slot_3_r", "slot_1_r"]
+    assert [step.name for step in sequence.steps] == ["slot_2_l", "slot_3_r", "slot_1_r"]
     assert [step.template_path for step in sequence.steps] == [
+        Path("captures/l.png"),
         Path("captures/r2.png"),
         Path("captures/r.png"),
     ]
     assert all(step.match_threshold == 0.9 for step in sequence.steps)
     assert all(step.max_search_seconds == 2.0 for step in sequence.steps)
-    assert [step.max_scroll_attempts for step in sequence.steps] == [4, 4]
+    assert [step.max_scroll_attempts for step in sequence.steps] == [4, 4, 4]
     assert all(step.scroll_amount == -360 for step in sequence.steps)
-    assert [step.max_click_attempts for step in sequence.steps] == [2, 1]
+    assert [step.max_click_attempts for step in sequence.steps] == [1, 2, 1]
     assert all(step.post_click_settle_ms == 250 for step in sequence.steps)
-    assert [step.pre_confirm_clicks for step in sequence.steps] == [2, 1]
-    assert [step.inter_click_delay_ms for step in sequence.steps] == [250, 500]
+    assert [step.pre_confirm_clicks for step in sequence.steps] == [1, 2, 1]
+    assert [step.inter_click_delay_ms for step in sequence.steps] == [500, 250, 500]
     assert result.warnings == ()
 
 

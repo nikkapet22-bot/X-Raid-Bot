@@ -35,7 +35,7 @@ class BotActionPreset:
 class BotActionSlotConfig:
     key: str
     label: str
-    enabled: bool = False
+    enabled: bool = True
     template_path: Path | None = None
     updated_at: str | None = None
     presets: tuple[BotActionPreset, ...] = ()
@@ -301,7 +301,11 @@ class DesktopAppConfig:
                 BotActionSlotConfig(
                     key=default_slot.key,
                     label=default_slot.label,
-                    enabled=bool(provided_slot.enabled) if provided_slot is not None else False,
+                    enabled=(
+                        bool(provided_slot.enabled)
+                        if provided_slot is not None
+                        else bool(default_slot.enabled)
+                    ),
                     template_path=(
                         Path(provided_slot.template_path)
                         if provided_slot is not None and provided_slot.template_path is not None

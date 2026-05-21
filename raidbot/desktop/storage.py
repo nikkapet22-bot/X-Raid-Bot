@@ -151,6 +151,14 @@ class DesktopStorage:
             allowed_sender_entries = [str(sender_id) for sender_id in allowed_sender_ids]
         bot_action_slots_data = data.get("bot_action_slots") or ()
         raid_profiles_data = data.get("raid_profiles") or ()
+        bot_action_slots = tuple(
+            self._bot_action_slot_from_data(slot_data)
+            for slot_data in bot_action_slots_data
+            if isinstance(slot_data, dict)
+        )
+        if bot_action_slots and not any(slot.enabled for slot in bot_action_slots):
+            bot_action_slots = tuple(replace(slot, enabled=True) for slot in bot_action_slots)
+
         return DesktopAppConfig(
             telegram_api_id=int(data["telegram_api_id"]),
             telegram_api_hash=str(data["telegram_api_hash"]),
@@ -214,11 +222,7 @@ class DesktopStorage:
                 if data.get("page_exit_template_path") is not None
                 else None
             ),
-            bot_action_slots=tuple(
-                self._bot_action_slot_from_data(slot_data)
-                for slot_data in bot_action_slots_data
-                if isinstance(slot_data, dict)
-            ),
+            bot_action_slots=bot_action_slots,
             raid_profiles=tuple(
                 self._raid_profile_config_from_data(profile_data)
                 for profile_data in raid_profiles_data
@@ -639,7 +643,7 @@ class DesktopStorage:
         return BotActionSlotConfig(
             key=str(data.get("key") or ""),
             label=str(data.get("label") or ""),
-            enabled=self._maybe_bool(data.get("enabled"), default=False),
+            enabled=self._maybe_bool(data.get("enabled"), default=True),
             template_path=(
                 self._capture_path_from_data(template_path)
                 if template_path is not None

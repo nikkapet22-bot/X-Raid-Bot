@@ -1310,11 +1310,11 @@ def test_controller_slot_enabled_updates_bot_action_slot_and_saves(qtbot) -> Non
     updated_configs = []
     controller.configChanged.connect(updated_configs.append)
 
-    controller.set_bot_action_slot_enabled(1, True)
+    controller.set_bot_action_slot_enabled(1, False)
 
-    assert storage.saved_configs[-1].bot_action_slots[1].enabled is True
-    assert controller.config.bot_action_slots[1].enabled is True
-    assert updated_configs[-1].bot_action_slots[1].enabled is True
+    assert storage.saved_configs[-1].bot_action_slots[1].enabled is False
+    assert controller.config.bot_action_slots[1].enabled is False
+    assert updated_configs[-1].bot_action_slots[1].enabled is False
     assert storage.saved_configs[-1].bot_action_slots[0] == config.bot_action_slots[0]
     assert storage.saved_configs[-1].bot_action_slots[2:] == config.bot_action_slots[2:]
 

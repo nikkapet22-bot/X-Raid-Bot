@@ -274,6 +274,16 @@ def test_dashboard_runtime_renders_profile_raid_now_feedback() -> None:
     assert "profile-error" in content
 
 
+def test_dashboard_runtime_profile_raid_now_disabled_state_has_feedback() -> None:
+    content = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
+
+    assert 'data-disabled-reason="${html(disabledReason)}"' in content
+    assert 'aria-disabled="${profile.canRaidNow ? "false" : "true"}"' in content
+    assert "profile-raid-now-unavailable" in content
+    assert "Use the gear icon to choose this profile's actions" in content
+    assert 'profile.canRaidNow ? "" : "disabled"' not in content
+
+
 def test_dashboard_bridge_routes_performance_mode_toggle() -> None:
     from raidbot.desktop.web_dashboard import DashboardBridge
 

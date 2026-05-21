@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta
 import inspect
 from pathlib import Path
@@ -1645,6 +1646,175 @@ def test_worker_warmup_mode_browses_with_held_page_keys_instead_of_running_actio
     assert waits.count(1.0) == 2
 
 
+def test_worker_warmup_mode_waits_for_delayed_home_window_discovery(tmp_path) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 5, 21, 15, 30, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+
+    class DelayedWindowRuntime(MultiProfileRuntime):
+        def __init__(self) -> None:
+            super().__init__(run_results=[])
+            self.list_calls = 0
+            self.hidden_populated_window_once = False
+
+        def list_target_windows(self) -> list[WindowInfo]:
+            self.list_calls += 1
+            if self.windows and not self.hidden_populated_window_once:
+                self.hidden_populated_window_once = True
+                return []
+            return super().list_target_windows()
+
+    runtime = DelayedWindowRuntime()
+    waits: list[float] = []
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            chrome_profile_directory="Default",
+            auto_run_enabled=True,
+            page_ready_template_path=Path(__file__),
+            raid_profiles=(
+                RaidProfileConfig("Default", "George", True, warmup_enabled=True),
+            ),
+            bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=lambda _emit_event: runtime,
+        chrome_opener_factory=lambda **kwargs: WindowSpawningChromeOpener(
+            runtime=runtime,
+            handle_by_profile={"Default": 41},
+            **kwargs,
+        ),
+        auto_run_wait=waits.append,
+        profile_shuffle=lambda profiles: None,
+        action_shuffle=lambda slots: None,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/654"))
+
+    assert outcome.kind == "job_detected"
+    assert runtime.list_calls >= 3
+    assert 0.25 in waits
+    assert runtime.closed_window_handles == [41]
+    assert worker.state.raid_profile_states == (
+        RaidProfileState("Default", "George", "green", None),
+    )
+
+
+def test_worker_warmup_mode_reacquires_window_after_feed_navigation_replaces_handle(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 5, 22, 10, 5, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+
+    class StrictWindowRuntime(MultiProfileRuntime):
+        def wait_for_step_match(
+            self,
+            step: AutomationStep,
+            selected_window_handle: int | None,
+            *,
+            require_interactable_window: bool = True,
+        ):
+            if selected_window_handle not in {
+                window.handle for window in self.list_target_windows()
+            }:
+                self.wait_for_step_calls.append((step.template_path, selected_window_handle))
+                self.wait_for_step_search_seconds.append(float(step.max_search_seconds))
+                return RunResult(
+                    status="failed",
+                    failure_reason="target_window_not_found",
+                    window_handle=selected_window_handle,
+                )
+            return super().wait_for_step_match(
+                step,
+                selected_window_handle,
+                require_interactable_window=require_interactable_window,
+            )
+
+    class ReplacingFeedChromeOpener(WindowSpawningChromeOpener):
+        def open(self, url: str, *, window_handle: int | None = None) -> OpenedRaidContext:
+            self.open_calls.append((url, window_handle))
+            replacement_handle = 99
+            self.runtime.windows = [
+                window
+                for window in self.runtime.windows
+                if window.handle != window_handle
+            ]
+            self.runtime.windows.append(
+                WindowInfo(
+                    handle=replacement_handle,
+                    title=f"{self.profile_directory} - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=float(replacement_handle),
+                )
+            )
+            return OpenedRaidContext(
+                normalized_url=url,
+                opened_at=1.0,
+                window_handle=replacement_handle,
+                profile_directory=self.profile_directory,
+            )
+
+    runtime = StrictWindowRuntime(run_results=[])
+    waits: list[float] = []
+    created_openers: list[ReplacingFeedChromeOpener] = []
+
+    def chrome_opener_factory(**kwargs):
+        opener = ReplacingFeedChromeOpener(
+            runtime=runtime,
+            handle_by_profile={"Default": 41},
+            **kwargs,
+        )
+        created_openers.append(opener)
+        return opener
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            chrome_profile_directory="Default",
+            auto_run_enabled=True,
+            page_ready_template_path=Path(__file__),
+            raid_profiles=(
+                RaidProfileConfig("Default", "George", True, warmup_enabled=True),
+            ),
+            bot_action_slots=build_bot_action_slots(enabled_keys=("slot_2_l",)),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=lambda _emit_event: runtime,
+        chrome_opener_factory=chrome_opener_factory,
+        auto_run_wait=waits.append,
+        profile_shuffle=lambda profiles: None,
+        action_shuffle=lambda slots: None,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/654"))
+
+    assert outcome.kind == "job_detected"
+    assert created_openers[0].open_raid_window_calls == ["https://x.com"]
+    assert created_openers[0].open_calls == [("https://x.com/BRICSinfo", 41)]
+    assert runtime.wait_for_step_calls[:2] == [
+        (Path(__file__), 41),
+        (Path(__file__), 99),
+    ]
+    assert runtime.closed_window_handles == [99]
+    assert worker.state.raid_profile_states == (
+        RaidProfileState("Default", "George", "green", None),
+    )
+
+
 def test_worker_warmup_mode_fails_when_home_page_ready_is_missing(tmp_path) -> None:
     events: list[dict] = []
     timestamp = datetime(2026, 4, 9, 21, 15, 0)
@@ -2851,6 +3021,70 @@ def test_worker_prefers_bot_action_auto_run_when_slots_are_enabled_even_if_hidde
     assert opener.open_raid_window_calls == ["https://x.com/i/status/515"]
     assert runtime is not None
     assert runtime.run_calls == [("bot-actions", 17)]
+
+
+def test_worker_runs_profile_actions_from_legacy_disabled_slots_when_capture_exists(
+    tmp_path,
+) -> None:
+    events: list[dict] = []
+    timestamp = datetime(2026, 5, 21, 15, 15, 0)
+    storage = FakeStorage(base_dir=tmp_path)
+    opener = FakeChromeOpener(profile_directory="Profile 3")
+    runtime: FakeAutomationRuntime | None = None
+    slots = list(build_bot_action_slots(enabled_keys=("slot_2_l",)))
+    slots[1] = replace(slots[1], enabled=False)
+
+    def runtime_factory(_emit_event):
+        nonlocal runtime
+        runtime = FakeAutomationRuntime(
+            windows=[
+                WindowInfo(
+                    handle=18,
+                    title="RaidBot - Chrome",
+                    bounds=(0, 0, 100, 100),
+                    last_focused_at=1.0,
+                )
+            ],
+        )
+        return runtime
+
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=build_config(
+            auto_run_enabled=True,
+            bot_action_slots=tuple(slots),
+            raid_profiles=(
+                RaidProfileConfig(
+                    "Profile 3",
+                    "Maria",
+                    True,
+                    reply_enabled=False,
+                    like_enabled=True,
+                    repost_enabled=False,
+                    bookmark_enabled=False,
+                ),
+            ),
+        ),
+        service_factory=lambda config: FakeService(
+            config,
+            detection_result_factory=detect_job_from_message,
+        ),
+        automation_runtime_factory=runtime_factory,
+        chrome_opener_factory=lambda **kwargs: opener,
+    )
+    worker._service = worker._build_service(worker.config)
+
+    outcome = worker._handle_message(
+        build_message("Likes 10 | 8 [%]\n\nhttps://x.com/i/status/525")
+    )
+
+    assert outcome.kind == "job_detected"
+    assert opener.open_raid_window_calls == ["https://x.com/i/status/525"]
+    assert runtime is not None
+    assert runtime.run_calls == [("bot-actions", 18)]
+    assert worker.state.automation_last_error is None
 
 
 def test_worker_preserves_reserved_url_duplicate_guard_when_auto_run_is_disabled(
@@ -4386,6 +4620,17 @@ def test_worker_skips_slot_1_when_no_presets_exist_but_runs_later_slots() -> Non
         timestamp,
         config=build_config(
             auto_run_enabled=True,
+            raid_profiles=(
+                RaidProfileConfig(
+                    "Profile 3",
+                    "Profile 3",
+                    True,
+                    reply_enabled=True,
+                    like_enabled=True,
+                    repost_enabled=False,
+                    bookmark_enabled=False,
+                ),
+            ),
             bot_action_slots=build_bot_action_slots(
                 enabled_keys=("slot_1_r", "slot_2_l"),
                 slot_1_presets=(),

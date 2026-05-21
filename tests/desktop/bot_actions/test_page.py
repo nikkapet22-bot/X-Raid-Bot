@@ -117,7 +117,7 @@ def test_bot_actions_page_checkbox_emits_slot_enabled_signal_with_index_and_stat
     qtbot.mouseClick(page.slot_boxes[1].enabled_checkbox, Qt.MouseButton.LeftButton)
     qtbot.mouseClick(page.slot_boxes[1].enabled_checkbox, Qt.MouseButton.LeftButton)
 
-    assert captured == [(1, True), (1, False)]
+    assert captured == [(1, False), (1, True)]
 
 
 def test_bot_actions_page_capture_button_emits_slot_capture_signal_with_index(

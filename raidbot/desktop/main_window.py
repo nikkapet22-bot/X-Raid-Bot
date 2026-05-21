@@ -1800,6 +1800,7 @@ class MainWindow(QMainWindow):
             and self.bot_state in {"starting", "running"},
             "pauseButtonText": self._web_pause_button_text(),
             "canRaidNow": self._web_can_raid_now(),
+            "raidNowDisabledReason": self._web_raid_now_disabled_reason(),
             "globalRaidNowText": self._web_global_raid_now_text(),
             "raidOnRestart": bool(
                 getattr(self.controller.config, "raid_on_restart_enabled", False)
@@ -1851,6 +1852,9 @@ class MainWindow(QMainWindow):
         return (
             self.connection_state == "connected"
             and self.bot_state in {"starting", "running"}
+            and self._automation_queue_state not in {"paused", "suspended"}
+            and self._raid_now_pending_profile_directory is None
+            and self._raid_now_started_profile_directory is None
             and self._first_raid_now_profile_directory() is not None
         )
 
@@ -1932,6 +1936,7 @@ class MainWindow(QMainWindow):
                 profile,
                 state,
             )
+            can_raid_now = self._web_profile_can_raid_now(profile, profile_status)
             cards.append(
                 {
                     "directory": profile.profile_directory,
@@ -1939,7 +1944,11 @@ class MainWindow(QMainWindow):
                     "statusClass": profile_status,
                     "dotVariant": dot_variant,
                     "statusText": status_text,
-                    "chips": self._web_profile_chips(profile, profile_status),
+                    "chips": self._web_profile_chips(
+                        profile,
+                        profile_status,
+                        state.last_error,
+                    ),
                     "warmup": bool(getattr(profile, "warmup_enabled", False)),
                     "warmupProgress": self._web_warmup_progress(profile),
                     "error": state.last_error if profile_status == "failed" else None,
@@ -1947,8 +1956,12 @@ class MainWindow(QMainWindow):
                         profile.profile_directory,
                         "",
                     ),
-                    "canRaidNow": self._web_can_raid_now()
-                    and profile_status not in {"failed", "stopped"},
+                    "canRaidNow": can_raid_now,
+                    "raidNowDisabledReason": (
+                        ""
+                        if can_raid_now
+                        else self._web_raid_now_disabled_reason(profile, profile_status)
+                    ),
                     "raidNowText": self._web_profile_raid_now_text(
                         profile.profile_directory
                     ),
@@ -1978,10 +1991,11 @@ class MainWindow(QMainWindow):
         self,
         profile: RaidProfileConfig,
         profile_status: str,
+        failure_reason: str | None = None,
     ) -> list[dict[str, str]]:
         if profile_status == "failed":
             return [
-                {"label": "Window close failed", "tone": ""},
+                {"label": self._web_profile_failure_chip_label(failure_reason), "tone": ""},
                 {"label": "Ready to reset", "tone": ""},
             ]
         if bool(getattr(profile, "warmup_enabled", False)):
@@ -1996,6 +2010,21 @@ class MainWindow(QMainWindow):
         if not chips:
             chips.append({"label": "Paused", "tone": ""})
         return chips
+
+    def _web_profile_failure_chip_label(self, failure_reason: str | None) -> str:
+        normalized_reason = str(failure_reason or "").strip()
+        labels = {
+            "target_window_not_found": "Chrome window not found",
+            "window_not_focusable": "Chrome window not focusable",
+            "window_close_failed": "Window close failed",
+            "bot_action_not_configured": "Bot action not configured",
+            "page_ready_not_found": "Page ready not found",
+        }
+        if normalized_reason in labels:
+            return labels[normalized_reason]
+        if normalized_reason:
+            return normalized_reason.replace("_", " ").title()
+        return "Automation failed"
 
     def _web_warmup_progress(self, profile: RaidProfileConfig) -> int:
         warmup_completed_cycles = max(
@@ -2018,6 +2047,49 @@ class MainWindow(QMainWindow):
         if profile_directory == self._raid_now_pending_profile_directory:
             return "Fetching..."
         return "Raid NOW!"
+
+    def _web_profile_has_runnable_mode(self, profile: RaidProfileConfig) -> bool:
+        return bool(getattr(profile, "warmup_enabled", False)) or raid_profile_has_any_actions_enabled(
+            profile
+        )
+
+    def _web_profile_can_raid_now(
+        self,
+        profile: RaidProfileConfig,
+        profile_status: str,
+    ) -> bool:
+        if not self._web_can_raid_now():
+            return False
+        if profile_status in {"failed", "paused", "stopped"}:
+            return False
+        return self._web_profile_has_runnable_mode(profile)
+
+    def _web_raid_now_disabled_reason(
+        self,
+        profile: RaidProfileConfig | None = None,
+        profile_status: str | None = None,
+    ) -> str:
+        if self._raid_now_started_profile_directory is not None:
+            return "Raid NOW is already running."
+        if self._raid_now_pending_profile_directory is not None:
+            return "Raid NOW is fetching the latest Telegram raid."
+        if self._automation_queue_state == "suspended":
+            return "Bot is paused. Resume before using Raid NOW."
+        if self._automation_queue_state == "paused":
+            return "Bot is stopped. Press Start before using Raid NOW."
+        if self.bot_state not in {"starting", "running"} and self.connection_state != "connected":
+            return "Press Start and connect Telegram to use Raid NOW."
+        if self.bot_state not in {"starting", "running"}:
+            return "Press Start to use Raid NOW."
+        if self.connection_state != "connected":
+            return "Connect Telegram to use Raid NOW."
+        if profile_status == "failed":
+            return "Restart this profile before using Raid NOW."
+        if profile is not None and not self._web_profile_has_runnable_mode(profile):
+            return "Open the gear and enable at least one action, or Warm me up baby."
+        if self._first_raid_now_profile_directory() is None:
+            return "No healthy profile is ready for Raid NOW."
+        return ""
 
     def _web_activity_entries(self) -> list[dict[str, str]]:
         entries = []
@@ -2062,6 +2134,8 @@ class MainWindow(QMainWindow):
         }
         for profile in self.controller.config.raid_profiles:
             if not bool(getattr(profile, "enabled", True)):
+                continue
+            if not self._web_profile_has_runnable_mode(profile):
                 continue
             state = states_by_directory.get(profile.profile_directory)
             if state is not None and state.status == "red":
@@ -3238,15 +3312,15 @@ class MainWindow(QMainWindow):
         for field_name, label, slot_key in raid_profile_action_specs():
             slot = slots_by_key.get(slot_key)
             checkbox = QCheckBox(label, dialog)
-            globally_enabled = bool(slot.enabled) if slot is not None else False
+            action_available = slot is not None
             checkbox.setChecked(
-                bool(getattr(profile, field_name, True)) if globally_enabled else False
+                bool(getattr(profile, field_name, True)) if action_available else False
             )
-            checkbox.setEnabled(globally_enabled)
-            if not globally_enabled:
-                checkbox.setToolTip("Enable this action globally in Bot Actions first.")
+            checkbox.setEnabled(action_available)
+            if not action_available:
+                checkbox.setToolTip("This action slot is not available.")
             layout.addWidget(checkbox)
-            checkbox_map[field_name] = (checkbox, globally_enabled)
+            checkbox_map[field_name] = (checkbox, action_available)
         warmup_checkbox = QCheckBox("Warm me up baby", dialog)
         warmup_checkbox.setChecked(bool(getattr(profile, "warmup_enabled", False)))
         layout.addWidget(warmup_checkbox)
