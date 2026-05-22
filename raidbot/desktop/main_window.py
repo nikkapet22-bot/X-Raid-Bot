@@ -63,6 +63,7 @@ from raidbot.desktop.bot_actions.presets_dialog import Slot1PresetsDialog
 from raidbot.desktop.animated_button import AttentionPulseButton
 from raidbot.desktop.branding import APP_NAME, APP_VERSION_BADGE
 from raidbot.desktop.chrome_profiles import ChromeProfile, detect_chrome_environment
+from raidbot.desktop.diagnostics import export_diagnostics
 from raidbot.desktop.hotkeys import WindowsGlobalHotkeyRegistrar
 from raidbot.desktop.models import (
     BotActionSlotConfig,
@@ -1123,6 +1124,7 @@ class MainWindow(QMainWindow):
         session_status_loader=None,
         slot_capture_service=None,
         sender_candidate_picker=None,
+        profile_add_picker=None,
         profile_action_picker=None,
         hotkey_registrar_factory=None,
         parent: QWidget | None = None,
@@ -1141,6 +1143,9 @@ class MainWindow(QMainWindow):
         )
         self.sender_candidate_picker = (
             sender_candidate_picker or self._pick_sender_candidates
+        )
+        self.profile_add_picker = (
+            profile_add_picker or self._pick_raid_profile_to_add
         )
         self.profile_action_picker = (
             profile_action_picker or self._pick_profile_action_overrides
@@ -1263,6 +1268,7 @@ class MainWindow(QMainWindow):
                 lambda _seconds: None,
             ),
             on_reauthorize=self._web_reauthorize_requested,
+            on_export_diagnostics=self._web_export_diagnostics_requested,
             on_refresh_chats=self._web_refresh_chats_requested,
             on_scan_senders=self._web_scan_senders_requested,
             on_add_profile=self._web_add_profile_requested,
@@ -2216,6 +2222,11 @@ class MainWindow(QMainWindow):
         first_slot = slots[0] if slots else None
         presets = list(getattr(first_slot, "presets", ()) or ())
         return {
+            "status": {
+                "latest": self._bot_actions_status_text,
+                "currentSlot": self._bot_actions_current_slot_text,
+                "lastError": self._bot_actions_last_error_text,
+            },
             "pageTemplates": {
                 "page_ready": self._web_template_state(
                     "Page Ready",
@@ -2331,6 +2342,20 @@ class MainWindow(QMainWindow):
             return
         self._show_bot_actions_error("Reauthorize is not available in this build.")
 
+    def _web_export_diagnostics_requested(self) -> None:
+        try:
+            archive_path = export_diagnostics(
+                Path(getattr(self.storage, "base_dir", Path(".")))
+            )
+        except Exception as exc:
+            message = f"Diagnostic export failed: {exc}"
+            self._show_bot_actions_error(message)
+            QMessageBox.warning(self, "Diagnostics", message)
+            return
+        message = f"Diagnostics exported: {archive_path}"
+        self._show_bot_actions_error(message)
+        QMessageBox.information(self, "Diagnostics", message)
+
     def _web_refresh_chats_requested(self) -> None:
         self._available_chats_cache = list(self.available_chats_loader())
         self.settings_page.set_available_chats(self._available_chats_cache)
@@ -2358,20 +2383,29 @@ class MainWindow(QMainWindow):
         self._refresh_web_dashboard()
 
     def _web_add_profile_requested(self) -> None:
-        self._refresh_available_profiles_for_settings()
+        available_profiles = self._refresh_available_profiles_for_settings()
         configured_directories = {
             profile.profile_directory for profile in self.controller.config.raid_profiles
         }
-        for profile in self.available_profiles_loader():
-            directory = (
-                profile.directory_name if isinstance(profile, ChromeProfile) else str(profile)
-            )
-            label = profile.label if isinstance(profile, ChromeProfile) else directory
-            if directory in configured_directories:
-                continue
-            self.controller.add_raid_profile(directory, label)
+        candidates = [
+            profile
+            for profile in available_profiles
+            if profile.directory_name not in configured_directories
+        ]
+        if not candidates:
+            self.settings_page.show_error("No unused Chrome profile found.")
             return
-        self.settings_page.show_error("No unused Chrome profile found.")
+        selected_profile = self.profile_add_picker(candidates)
+        if selected_profile is None:
+            self.settings_page.show_error("Profile add cancelled.")
+            return
+        directory = selected_profile.directory_name
+        label = selected_profile.label
+        if directory in configured_directories:
+            self.settings_page.show_error("Profile already added.")
+            return
+        self.controller.add_raid_profile(directory, label)
+        self.settings_page.show_success(f"Profile added: {label} [{directory}]")
 
     def _web_move_profile_requested(self, profile_directory: str, direction: str) -> None:
         if not profile_directory:
@@ -3188,8 +3222,24 @@ class MainWindow(QMainWindow):
             )
         return profiles
 
-    def _refresh_available_profiles_for_settings(self) -> None:
-        self.settings_page.set_available_profiles(self.available_profiles_loader())
+    def _refresh_available_profiles_for_settings(self) -> list[ChromeProfile]:
+        profiles = self._normalize_chrome_profiles(self.available_profiles_loader())
+        self.settings_page.set_available_profiles(profiles)
+        return profiles
+
+    def _normalize_chrome_profiles(self, profiles) -> list[ChromeProfile]:
+        normalized_profiles: list[ChromeProfile] = []
+        for profile in profiles:
+            if isinstance(profile, ChromeProfile):
+                normalized_profiles.append(profile)
+                continue
+            directory_name = str(profile).strip()
+            if not directory_name:
+                continue
+            normalized_profiles.append(
+                ChromeProfile(directory_name=directory_name, label=directory_name)
+            )
+        return normalized_profiles
 
     def _load_session_status(self) -> str:
         try:
@@ -3350,6 +3400,45 @@ class MainWindow(QMainWindow):
             )
             for field_name, (checkbox, globally_enabled) in checkbox_map.items()
         } | {"warmup_enabled": warmup_checkbox.isChecked()}
+
+    def _pick_raid_profile_to_add(
+        self,
+        profiles: list[ChromeProfile],
+    ) -> ChromeProfile | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add Raid Profile")
+        dialog.setModal(True)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        helper_label = QLabel("Select the Chrome profile to add for raiding.", dialog)
+        helper_label.setWordWrap(True)
+        helper_label.setProperty("muted", "true")
+        layout.addWidget(helper_label)
+        profile_list = QListWidget(dialog)
+        for profile in profiles:
+            item = QListWidgetItem(f"{profile.label} [{profile.directory_name}]")
+            item.setData(Qt.ItemDataRole.UserRole, profile)
+            profile_list.addItem(item)
+        if profile_list.count():
+            profile_list.setCurrentRow(0)
+        layout.addWidget(profile_list)
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+        profile_list.itemDoubleClicked.connect(lambda _item: dialog.accept())
+        if dialog.exec() != int(QDialog.DialogCode.Accepted):
+            return None
+        item = profile_list.currentItem()
+        if item is None:
+            return None
+        selected_profile = item.data(Qt.ItemDataRole.UserRole)
+        return selected_profile if isinstance(selected_profile, ChromeProfile) else None
 
     def _configure_profile_action_overrides(self, profile_directory: str) -> None:
         profile = next(
@@ -3729,9 +3818,16 @@ class MainWindow(QMainWindow):
                 self._raid_now_pending_profile_directory = None
                 self._raid_now_started_profile_directory = None
         if event_type in {"slot_test_started", "slot_test_succeeded", "slot_test_failed"}:
-            self._bot_actions_status_text = str(event.get("message", "Idle"))
+            if event_type == "slot_test_failed":
+                display_name = self._slot_test_display_name(event.get("slot_index"))
+                self._bot_actions_status_text = f"{display_name}: test failed"
+                self._bot_actions_last_error_text = str(
+                    event.get("message") or event.get("reason") or "Slot test failed"
+                )
+            else:
+                self._bot_actions_status_text = str(event.get("message", "Idle"))
+                self._bot_actions_last_error_text = None
             self._bot_actions_current_slot_text = None
-            self._bot_actions_last_error_text = None
             self._clear_bot_actions_run_snapshot()
         elif event_type == "automation_run_started":
             self._bot_actions_status_text = "Running"
@@ -3781,6 +3877,14 @@ class MainWindow(QMainWindow):
 
     def _format_bot_action_slot(self, slot_index: int, slot_label: str) -> str:
         return f"Slot {slot_index + 1} ({slot_label})"
+
+    def _slot_test_display_name(self, slot_index: object) -> str:
+        if isinstance(slot_index, int) and 0 <= slot_index < len(
+            self.controller.config.bot_action_slots
+        ):
+            slot = self.controller.config.bot_action_slots[slot_index]
+            return self._format_bot_action_slot(slot_index, str(slot.label))
+        return "Slot test"
 
     def _format_troubleshoot_name(self, group_key: str, item_index: int) -> str:
         display_group = str(group_key).replace("_", " ").upper()

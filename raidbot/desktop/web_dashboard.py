@@ -692,7 +692,7 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
         <div class="field-stack">
           <div class="field-row"><div class="field-label">Status</div><div class="fake-input">${html(settings.sessionStatus || "unknown")}</div></div>
           <div class="field-row"><div class="field-label">Pause Hotkey</div><div class="fake-input">${html(settings.pauseHotkey || "Not set")}</div></div>
-          <div class="field-row"><div class="field-label">Action</div><button class="lux-button" data-web-action="reauthorize">Reauthorize</button></div>
+          <div class="field-row"><div class="field-label">Action</div><div class="form-actions compact"><button class="lux-button" data-web-action="reauthorize">Reauthorize</button><button class="lux-button" data-web-action="export-diagnostics">Export diagnostics</button></div></div>
         </div>
       </article>
       <article class="preview-panel">
@@ -748,6 +748,7 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
     if (firstProfileButton) firstProfileButton.classList.add("active");
     const actions = {
       "reauthorize": () => call("reauthorize"),
+      "export-diagnostics": () => call("exportDiagnostics"),
       "refresh-chats": () => call("refreshChats"),
       "scan-senders": () => call("scanSenders"),
       "add-profile": () => call("addProfile"),
@@ -771,8 +772,20 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
     const grid = page.querySelector(".bot-actions-grid");
     if (!grid) return;
     const slots = bot.slots || [];
+    const status = bot.status || {};
     const pageReadyTimeout = Math.round(Number(bot.pageReadyTimeoutSeconds || 12));
+    const statusLastError = status.lastError || "";
     grid.innerHTML = `
+      <article class="preview-panel" style="grid-column: 1 / -1;">
+        <div class="panel-title-row">
+          <div><div class="eyebrow">Action Test Status</div><h2 class="panel-title">${html(status.latest || "Idle")}</h2></div>
+          <span class="toggle-pill">${statusLastError ? "Error" : "Ready"}</span>
+        </div>
+        <div class="slot-meta">
+          <div class="meta-box"><strong>${html(status.currentSlot || "Waiting")}</strong><span>Current slot</span></div>
+          <div class="meta-box"><strong>${html(statusLastError || "No errors")}</strong><span>Last error</span></div>
+        </div>
+      </article>
       <article class="preview-panel">
         <div class="panel-title-row">
           <div><div class="eyebrow">Page Templates</div></div>
@@ -966,6 +979,7 @@ class DashboardBridge(QObject):
         on_test_enabled_slots: Callable[[], None],
         on_capture_troubleshoot: Callable[[str, int], None],
         on_test_troubleshoot: Callable[[str, int], None],
+        on_export_diagnostics: Callable[[], None] | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -982,6 +996,7 @@ class DashboardBridge(QObject):
         self._on_set_performance_mode = on_set_performance_mode
         self._on_set_page_ready_timeout = on_set_page_ready_timeout
         self._on_reauthorize = on_reauthorize
+        self._on_export_diagnostics = on_export_diagnostics or (lambda: None)
         self._on_refresh_chats = on_refresh_chats
         self._on_scan_senders = on_scan_senders
         self._on_add_profile = on_add_profile
@@ -1048,6 +1063,10 @@ class DashboardBridge(QObject):
     @Slot()
     def reauthorize(self) -> None:
         self._on_reauthorize()
+
+    @Slot()
+    def exportDiagnostics(self) -> None:
+        self._on_export_diagnostics()
 
     @Slot()
     def refreshChats(self) -> None:
@@ -1136,6 +1155,7 @@ class DashboardWebView(QWidget):
         on_test_enabled_slots: Callable[[], None],
         on_capture_troubleshoot: Callable[[str, int], None],
         on_test_troubleshoot: Callable[[str, int], None],
+        on_export_diagnostics: Callable[[], None] | None = None,
         html_path: Path | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -1176,6 +1196,7 @@ class DashboardWebView(QWidget):
             on_set_performance_mode=on_set_performance_mode,
             on_set_page_ready_timeout=on_set_page_ready_timeout,
             on_reauthorize=on_reauthorize,
+            on_export_diagnostics=on_export_diagnostics,
             on_refresh_chats=on_refresh_chats,
             on_scan_senders=on_scan_senders,
             on_add_profile=on_add_profile,

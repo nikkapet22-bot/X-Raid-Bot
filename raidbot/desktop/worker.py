@@ -27,6 +27,7 @@ from raidbot.desktop.automation.autorun import (
 from raidbot.desktop.automation.models import AutomationSequence, AutomationStep
 from raidbot.desktop.automation.runtime import AutomationRuntime
 from raidbot.desktop.automation.windowing import find_opened_raid_window
+from raidbot.desktop.diagnostics import DiagnosticsLogger
 from raidbot.desktop.models import (
     ActivityEntry,
     BotRuntimeState,
@@ -144,6 +145,7 @@ class DesktopBotWorker:
         profile_shuffle: Callable[[list[Any]], None] | None = None,
         action_shuffle: Callable[[list[Any]], None] | None = None,
         now: NowFactory = datetime.now,
+        diagnostics_logger: DiagnosticsLogger | None = None,
     ) -> None:
         self.config = config
         self.storage = storage
@@ -162,6 +164,10 @@ class DesktopBotWorker:
         self.profile_shuffle = profile_shuffle or random.shuffle
         self.action_shuffle = action_shuffle or random.shuffle
         self.now = now
+        self.diagnostics = diagnostics_logger or DiagnosticsLogger(
+            getattr(storage, "base_dir", Path(".")),
+            now=self.now,
+        )
 
         self.state = self.storage.load_state()
         self._dedupe_store = InMemoryOpenedUrlStore()
@@ -194,6 +200,29 @@ class DesktopBotWorker:
             if not url or action not in _DEDUPED_ACTIVITY_ACTIONS:
                 continue
             self._dedupe_store.mark_if_new(url)
+
+    def _log_diagnostic(self, event: str, **fields: Any) -> None:
+        try:
+            self.diagnostics.log(event, **fields)
+        except Exception:
+            return
+
+    def _window_debug_data(self, window: Any | None) -> dict[str, Any] | None:
+        if window is None:
+            return None
+        return {
+            "handle": getattr(window, "handle", None),
+            "title": getattr(window, "title", None),
+            "bounds": list(getattr(window, "bounds", ()) or ()),
+            "last_focused_at": getattr(window, "last_focused_at", None),
+            "is_minimized": getattr(window, "is_minimized", None),
+        }
+
+    def _windows_debug_data(self, windows: Any) -> list[dict[str, Any] | None]:
+        try:
+            return [self._window_debug_data(window) for window in list(windows or ())]
+        except Exception:
+            return []
 
     async def run(self) -> None:
         self._stop_requested = False
@@ -1441,17 +1470,50 @@ class DesktopBotWorker:
         url: str,
         previous_windows,
     ) -> tuple[Any | None, Any | None, str | None]:
+        self._log_diagnostic(
+            "chrome_open_start",
+            profile_directory=profile.profile_directory,
+            url=url,
+            previous_windows=self._windows_debug_data(previous_windows),
+        )
         runtime = self._automation_runtime
         if runtime is None:
+            self._log_diagnostic(
+                "chrome_open_failed",
+                profile_directory=profile.profile_directory,
+                url=url,
+                reason="automation_runtime_unavailable",
+            )
             return None, None, "automation_runtime_unavailable"
         opener = self._build_chrome_opener_for_profile(profile.profile_directory)
+        self._log_diagnostic(
+            "chrome_opener_resolved",
+            profile_directory=profile.profile_directory,
+            url=url,
+            chrome_path=getattr(opener, "chrome_path", None),
+            user_data_dir=getattr(opener, "user_data_dir", None),
+        )
         try:
             context = opener.open_raid_window(url)
         except Exception as exc:
-            return None, None, self._reason_from_exception(exc, "chrome_open_failed")
+            reason = self._reason_from_exception(exc, "chrome_open_failed")
+            self._log_diagnostic(
+                "chrome_open_failed",
+                profile_directory=profile.profile_directory,
+                url=url,
+                reason=reason,
+                exception=exc,
+            )
+            return None, None, reason
         if self.config.auto_run_settle_ms > 0:
             self.auto_run_wait(self.config.auto_run_settle_ms / 1000.0)
         current_windows = runtime.list_target_windows()
+        self._log_diagnostic(
+            "chrome_open_windows",
+            profile_directory=profile.profile_directory,
+            url=url,
+            current_windows=self._windows_debug_data(current_windows),
+        )
         opened_window = find_opened_raid_window(
             list(previous_windows or ()),
             current_windows,
@@ -1464,6 +1526,13 @@ class DesktopBotWorker:
                 previous_windows,
             )
         if opened_window is None:
+            self._log_diagnostic(
+                "chrome_open_failed",
+                profile_directory=profile.profile_directory,
+                url=url,
+                reason="target_window_not_found",
+                current_windows=self._windows_debug_data(current_windows),
+            )
             return context, None, "target_window_not_found"
         window_manager = getattr(runtime, "window_manager", None)
         if window_manager is not None and hasattr(window_manager, "maximize_window"):
@@ -1477,10 +1546,23 @@ class DesktopBotWorker:
             except Exception:
                 interaction = None
             if interaction is None or not getattr(interaction, "success", False):
+                self._log_diagnostic(
+                    "chrome_window_focus_failed",
+                    profile_directory=profile.profile_directory,
+                    url=url,
+                    reason=getattr(interaction, "reason", None) or "window_not_focusable",
+                    window=self._window_debug_data(opened_window),
+                )
                 return context, None, "window_not_focusable"
             interacted_window = getattr(interaction, "window", None)
             if interacted_window is not None:
                 opened_window = interacted_window
+        self._log_diagnostic(
+            "chrome_window_selected",
+            profile_directory=profile.profile_directory,
+            url=url,
+            window=self._window_debug_data(opened_window),
+        )
         return replace(context, window_handle=opened_window.handle), opened_window, None
 
     def _wait_for_opened_raid_window(
@@ -1558,11 +1640,34 @@ class DesktopBotWorker:
         window_handle: int | None,
     ) -> tuple[Any | None, str | None]:
         previous_windows = tuple(runtime.list_target_windows())
+        self._log_diagnostic(
+            "chrome_navigation_start",
+            profile_directory=profile.profile_directory,
+            url=url,
+            requested_window_handle=window_handle,
+            previous_windows=self._windows_debug_data(previous_windows),
+        )
         opener = self._build_chrome_opener_for_profile(profile.profile_directory)
+        self._log_diagnostic(
+            "chrome_opener_resolved",
+            profile_directory=profile.profile_directory,
+            url=url,
+            chrome_path=getattr(opener, "chrome_path", None),
+            user_data_dir=getattr(opener, "user_data_dir", None),
+            requested_window_handle=window_handle,
+        )
         try:
             context = opener.open(url, window_handle=window_handle)
         except Exception as exc:
-            return None, self._reason_from_exception(exc, "chrome_open_failed")
+            reason = self._reason_from_exception(exc, "chrome_open_failed")
+            self._log_diagnostic(
+                "chrome_navigation_failed",
+                profile_directory=profile.profile_directory,
+                url=url,
+                reason=reason,
+                exception=exc,
+            )
+            return None, reason
         if self.config.auto_run_settle_ms > 0:
             self.auto_run_wait(self.config.auto_run_settle_ms / 1000.0)
         opened_window = self._resolve_window_after_profile_navigation(
@@ -1573,6 +1678,13 @@ class DesktopBotWorker:
             ),
         )
         if opened_window is None:
+            self._log_diagnostic(
+                "chrome_navigation_failed",
+                profile_directory=profile.profile_directory,
+                url=url,
+                reason="target_window_not_found",
+                current_windows=self._windows_debug_data(runtime.list_target_windows()),
+            )
             return None, "target_window_not_found"
         window_manager = getattr(runtime, "window_manager", None)
         if window_manager is not None and hasattr(window_manager, "ensure_interactable_window"):
@@ -1581,8 +1693,21 @@ class DesktopBotWorker:
             except Exception:
                 interaction = None
             if interaction is None or not getattr(interaction, "success", False):
+                self._log_diagnostic(
+                    "chrome_navigation_failed",
+                    profile_directory=profile.profile_directory,
+                    url=url,
+                    reason=getattr(interaction, "reason", None) or "window_not_focusable",
+                    window=self._window_debug_data(opened_window),
+                )
                 return None, "window_not_focusable"
             opened_window = getattr(interaction, "window", None) or opened_window
+        self._log_diagnostic(
+            "chrome_navigation_window_selected",
+            profile_directory=profile.profile_directory,
+            url=url,
+            window=self._window_debug_data(opened_window),
+        )
         return opened_window, None
 
     def _wait_for_page_ready(
@@ -1591,24 +1716,50 @@ class DesktopBotWorker:
         opened_window: Any,
     ) -> tuple[str | None, tuple[int, int] | None]:
         template_path = self.config.page_ready_template_path
+        timeout_seconds = normalize_page_ready_timeout_seconds(
+            getattr(
+                self.config,
+                "page_ready_timeout_seconds",
+                _PAGE_READY_MAX_SEARCH_SECONDS,
+            )
+        )
+        self._log_diagnostic(
+            "page_ready_scan_start",
+            window=self._window_debug_data(opened_window),
+            template_path=template_path,
+            timeout_seconds=timeout_seconds,
+        )
         if template_path is None:
+            self._log_diagnostic(
+                "page_ready_scan_result",
+                status="skipped",
+                failure_reason="template_not_configured",
+                window=self._window_debug_data(opened_window),
+            )
             return None, None
         if not hasattr(runtime, "wait_for_step_match"):
+            self._log_diagnostic(
+                "page_ready_scan_result",
+                status="failed",
+                failure_reason="automation_runtime_unavailable",
+                window=self._window_debug_data(opened_window),
+            )
             return "automation_runtime_unavailable", None
         if not template_path.exists():
+            self._log_diagnostic(
+                "page_ready_scan_result",
+                status="failed",
+                failure_reason="page_ready_not_found",
+                window=self._window_debug_data(opened_window),
+                template_path=template_path,
+            )
             return "page_ready_not_found", None
         result = runtime.wait_for_step_match(
             AutomationStep(
                 name="page_ready",
                 template_path=template_path,
                 match_threshold=0.9,
-                max_search_seconds=normalize_page_ready_timeout_seconds(
-                    getattr(
-                        self.config,
-                        "page_ready_timeout_seconds",
-                        _PAGE_READY_MAX_SEARCH_SECONDS,
-                    )
-                ),
+                max_search_seconds=timeout_seconds,
                 max_scroll_attempts=0,
                 scroll_amount=-120,
                 max_click_attempts=1,
@@ -1620,12 +1771,38 @@ class DesktopBotWorker:
         status = getattr(result, "status", None)
         if status == "dry_run_match_found":
             self.auto_run_wait(_PAGE_READY_POST_MATCH_DELAY_SECONDS)
-            return None, self._resolve_page_ready_anchor(opened_window, getattr(result, "match", None))
+            anchor = self._resolve_page_ready_anchor(opened_window, getattr(result, "match", None))
+            self._log_diagnostic(
+                "page_ready_scan_result",
+                status=status,
+                failure_reason=None,
+                window=self._window_debug_data(opened_window),
+                anchor=anchor,
+            )
+            return None, anchor
         if status == "stopped":
+            self._log_diagnostic(
+                "page_ready_scan_result",
+                status=status,
+                failure_reason="stopped",
+                window=self._window_debug_data(opened_window),
+            )
             return "stopped", None
         failure_reason = getattr(result, "failure_reason", None)
         if failure_reason in {None, "match_not_found"}:
+            self._log_diagnostic(
+                "page_ready_scan_result",
+                status=status,
+                failure_reason="page_ready_not_found",
+                window=self._window_debug_data(opened_window),
+            )
             return "page_ready_not_found", None
+        self._log_diagnostic(
+            "page_ready_scan_result",
+            status=status,
+            failure_reason=str(failure_reason),
+            window=self._window_debug_data(opened_window),
+        )
         return failure_reason, None
 
     def _run_sequence_with_runtime_resume(
@@ -1894,11 +2071,22 @@ class DesktopBotWorker:
         ]
         | None = None,
     ) -> str | None:
+        self._log_diagnostic(
+            "warmup_hold_start",
+            window=self._window_debug_data(opened_window),
+            segments=[{"key": key, "seconds": seconds} for key, seconds in segments],
+        )
         page_ready_failure_reason, scroll_anchor = self._wait_for_page_ready(
             runtime,
             opened_window,
         )
         if page_ready_failure_reason == "stopped":
+            self._log_diagnostic(
+                "warmup_hold_result",
+                status="paused",
+                failure_reason="stopped",
+                window=self._window_debug_data(opened_window),
+            )
             raise UserPauseRequested(
                 snapshot=(
                     pause_snapshot_factory(tuple(segments))
@@ -1907,6 +2095,12 @@ class DesktopBotWorker:
                 )
             )
         if page_ready_failure_reason is not None:
+            self._log_diagnostic(
+                "warmup_hold_result",
+                status="failed",
+                failure_reason=page_ready_failure_reason,
+                window=self._window_debug_data(opened_window),
+            )
             return page_ready_failure_reason
         anchor_failure_reason = self._move_cursor_to_scroll_anchor(
             runtime,
@@ -1914,6 +2108,12 @@ class DesktopBotWorker:
             scroll_anchor,
         )
         if anchor_failure_reason is not None:
+            self._log_diagnostic(
+                "warmup_hold_result",
+                status="failed",
+                failure_reason=anchor_failure_reason,
+                window=self._window_debug_data(opened_window),
+            )
             return anchor_failure_reason
         self._wait_or_pause(
             _WARMUP_PAGE_SETTLE_SECONDS,
@@ -1945,7 +2145,20 @@ class DesktopBotWorker:
                 pause_snapshot_factory=snapshot_for_remaining_duration,
             )
             if hold_failure_reason is not None:
+                self._log_diagnostic(
+                    "warmup_hold_result",
+                    status="failed",
+                    failure_reason=hold_failure_reason,
+                    window=self._window_debug_data(opened_window),
+                    failed_segment={"key": key, "seconds": seconds},
+                )
                 return hold_failure_reason
+        self._log_diagnostic(
+            "warmup_hold_result",
+            status="succeeded",
+            failure_reason=None,
+            window=self._window_debug_data(opened_window),
+        )
         return None
 
     def _close_automation_window_for_profile(
@@ -1955,6 +2168,22 @@ class DesktopBotWorker:
         *,
         try_page_exit: bool = False,
     ) -> str | None:
+        self._log_diagnostic(
+            "window_close_start",
+            window=self._window_debug_data(opened_window),
+            try_page_exit=try_page_exit,
+        )
+
+        def finish(failure_reason: str | None) -> str | None:
+            self._log_diagnostic(
+                "window_close_result",
+                status="succeeded" if failure_reason is None else "failed",
+                failure_reason=failure_reason,
+                window=self._window_debug_data(opened_window),
+                try_page_exit=try_page_exit,
+            )
+            return failure_reason
+
         window_manager = getattr(runtime, "window_manager", None)
         if window_manager is not None and hasattr(window_manager, "ensure_interactable_window"):
             try:
@@ -1962,7 +2191,7 @@ class DesktopBotWorker:
             except Exception:
                 interaction = None
             if interaction is None or not getattr(interaction, "success", False):
-                return "window_not_focusable"
+                return finish("window_not_focusable")
             opened_window = getattr(interaction, "window", None) or opened_window
         window_handle = getattr(opened_window, "handle", None)
         input_driver = self._resolve_runtime_input_driver(runtime)
@@ -1976,15 +2205,15 @@ class DesktopBotWorker:
                 close_failure_reason = self._reason_from_exception(exc, "window_close_failed")
             else:
                 if self._wait_for_runtime_window_to_close(runtime, window_handle):
-                    return None
+                    return finish(None)
         else:
             close_failure_reason = "window_close_failed"
         if try_page_exit:
             current_window = self._find_runtime_window_by_handle(runtime, window_handle) or opened_window
             if self._click_page_exit_for_profile(runtime, current_window):
                 if self._wait_for_runtime_window_to_close(runtime, window_handle):
-                    return None
-        return close_failure_reason or "window_close_failed"
+                    return finish(None)
+        return finish(close_failure_reason or "window_close_failed")
 
     def _click_page_exit_for_profile(
         self,
@@ -2301,6 +2530,13 @@ class DesktopBotWorker:
                 duration_seconds=duration_seconds,
             )
         )
+        self._log_diagnostic(
+            "profile_run_succeeded",
+            sequence_id=sequence_id,
+            profile_directory=profile.profile_directory,
+            url=item.normalized_url,
+            duration_seconds=duration_seconds,
+        )
         self.state.raids_completed += 1
         self._set_raid_profile_state(
             profile,
@@ -2361,6 +2597,14 @@ class DesktopBotWorker:
             profile.profile_directory,
         )
         translated_reason = self._translate_automation_reason(reason) or "automation_execution_failed"
+        self._log_diagnostic(
+            "profile_run_failed",
+            sequence_id=sequence_id,
+            profile_directory=profile.profile_directory,
+            url=item.normalized_url,
+            reason=translated_reason,
+            raw_reason=reason,
+        )
         self.state.raids_failed += 1
         self._set_raid_profile_state(
             profile,
@@ -2650,6 +2894,14 @@ class DesktopBotWorker:
             reason=reason,
             profile_directory=profile_directory,
         )
+        self._log_diagnostic(
+            "activity_added",
+            action=action,
+            reason=reason,
+            url=url,
+            profile_directory=profile_directory,
+            emit_error=emit_error,
+        )
         self.state.activity = [*self.state.activity, entry][-200:]
         self._persist_state_snapshot()
         self._emit("activity_added", entry=entry)
@@ -2902,6 +3154,7 @@ class DesktopBotWorker:
         self.emit_event({"type": event_type, **payload})
 
     def _handle_run_failure(self, exc: Exception) -> None:
+        self._log_diagnostic("worker_run_failure", exception=exc)
         self.state.last_error = str(exc)
         self._set_bot_state(BotRuntimeState.error)
         self._emit("error", message=self.state.last_error)

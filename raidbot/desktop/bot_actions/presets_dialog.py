@@ -225,12 +225,24 @@ class Slot1PresetsDialog(QDialog):
     def upload_image_for_selected_preset(self) -> None:
         row = self._current_row
         if row < 0 or row >= len(self._presets):
+            self.preset_image_status_label.setText("Select a preset before adding an image")
             return
-        image_path = self._choose_image_file()
+        self.raise_()
+        self.activateWindow()
+        try:
+            image_path = self._choose_image_file()
+        except Exception as exc:
+            self.preset_image_status_label.setText(f"Image picker failed: {exc}")
+            return
         if image_path is None:
+            self.preset_image_status_label.setText("No image selected")
+            return
+        image_path = Path(image_path)
+        if not image_path.exists():
+            self.preset_image_status_label.setText(f"Image not found: {image_path}")
             return
         current = self._presets[row]
-        updated = replace(current, image_path=Path(image_path))
+        updated = replace(current, image_path=image_path)
         self._presets[row] = updated
         self.preset_image_status_label.setText(str(updated.image_path))
 
@@ -246,8 +258,9 @@ class Slot1PresetsDialog(QDialog):
         selected_path, _selected_filter = QFileDialog.getOpenFileName(
             self,
             "Choose preset image",
-            "",
+            str(Path.home()),
             "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)",
+            options=QFileDialog.Option.DontUseNativeDialog,
         )
         if not selected_path:
             return None

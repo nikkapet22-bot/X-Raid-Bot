@@ -2381,7 +2381,7 @@ def test_main_window_slot_test_events_show_simple_status(qtbot) -> None:
         }
     )
     assert window.bot_actions_page.status_label.text() == (
-        "Status: Slot 1 (R): image not found"
+        "Status: Slot 1 (R): test failed\nLast error: Slot 1 (R): image not found"
     )
 
     window.controller.botActionRunEvent.emit(
@@ -2392,6 +2392,26 @@ def test_main_window_slot_test_events_show_simple_status(qtbot) -> None:
         }
     )
     assert window.bot_actions_page.status_label.text() == "Status: Slot 1 (R): success"
+
+
+def test_main_window_web_bot_actions_state_exposes_slot_test_failure(qtbot) -> None:
+    window = build_window(FakeController(), FakeStorage())
+    qtbot.addWidget(window)
+
+    window.controller.botActionRunEvent.emit(
+        {
+            "type": "slot_test_failed",
+            "slot_index": 0,
+            "reason": "match_not_found",
+            "message": "Slot 1 (R): image not found",
+        }
+    )
+
+    assert window._web_bot_actions_state()["status"] == {
+        "latest": "Slot 1 (R): test failed",
+        "currentSlot": None,
+        "lastError": "Slot 1 (R): image not found",
+    }
 
 
 def test_main_window_capture_cancel_with_existing_path_does_not_persist_noop(qtbot) -> None:
@@ -2713,6 +2733,76 @@ def test_main_window_routes_detected_raid_profile_add_and_reorder_actions(qtbot)
         "Pasok [Profile 9]",
         "Maria [Profile 3]",
     ]
+
+
+def test_main_window_web_add_profile_uses_user_selected_profile(qtbot) -> None:
+    from raidbot.desktop.chrome_profiles import ChromeProfile
+
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Default",
+            raid_profiles=(
+                RaidProfileConfig(
+                    profile_directory="Default",
+                    label="George",
+                    enabled=True,
+                ),
+            ),
+        )
+    )
+    picker_calls: list[list[str]] = []
+
+    def pick_profile(profiles):
+        picker_calls.append([profile.directory_name for profile in profiles])
+        return profiles[1]
+
+    window = build_window(
+        controller,
+        FakeStorage(config=controller.config),
+        available_profiles_loader=lambda: [
+            ChromeProfile(directory_name="Default", label="George"),
+            ChromeProfile(directory_name="Profile 3", label="Maria"),
+            ChromeProfile(directory_name="Profile 9", label="Pasok"),
+        ],
+        profile_add_picker=pick_profile,
+    )
+    qtbot.addWidget(window)
+
+    window._web_add_profile_requested()
+
+    assert picker_calls == [["Profile 3", "Profile 9"]]
+    assert controller.raid_profile_add_calls == [("Profile 9", "Pasok")]
+
+
+def test_main_window_web_add_profile_cancel_does_not_add_first_unused_profile(qtbot) -> None:
+    from raidbot.desktop.chrome_profiles import ChromeProfile
+
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Default",
+            raid_profiles=(
+                RaidProfileConfig(
+                    profile_directory="Default",
+                    label="George",
+                    enabled=True,
+                ),
+            ),
+        )
+    )
+    window = build_window(
+        controller,
+        FakeStorage(config=controller.config),
+        available_profiles_loader=lambda: [
+            ChromeProfile(directory_name="Default", label="George"),
+            ChromeProfile(directory_name="Profile 3", label="Maria"),
+        ],
+        profile_add_picker=lambda _profiles: None,
+    )
+    qtbot.addWidget(window)
+
+    window._web_add_profile_requested()
+
+    assert controller.raid_profile_add_calls == []
 
 
 def test_main_window_refreshes_available_profiles_when_profile_picker_opens(qtbot) -> None:

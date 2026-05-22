@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 import inspect
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -522,6 +523,8 @@ class WindowSpawningChromeOpener:
 
 class FakeChromeOpener:
     def __init__(self, *_, **kwargs) -> None:
+        self.chrome_path = kwargs.get("chrome_path")
+        self.user_data_dir = kwargs.get("user_data_dir")
         self.profile_directory = kwargs.get("profile_directory")
         self.open_calls: list[tuple[str, int | None]] = []
         self.open_raid_window_calls: list[str] = []
@@ -745,6 +748,68 @@ def build_worker(
         now=lambda: now,
     )
     return worker, created_services, created_pipelines, created_listeners
+
+
+def test_worker_writes_diagnostics_for_window_open_page_ready_and_close(
+    tmp_path: Path,
+) -> None:
+    ready_template = tmp_path / "page-ready.png"
+    ready_template.write_bytes(b"template")
+    config = build_config(page_ready_template_path=ready_template)
+    storage = FakeStorage(base_dir=tmp_path)
+    events: list[dict] = []
+    timestamp = datetime(2026, 5, 22, 12, 0, 0)
+    worker, _services, _pipelines, _listeners = build_worker(
+        storage,
+        events,
+        timestamp,
+        config=config,
+    )
+    runtime = FakeAutomationRuntime(windows=[])
+    worker._automation_runtime = runtime
+    worker._chrome_openers[config.chrome_profile_directory] = FakeChromeOpener(
+        chrome_path=Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+        user_data_dir=Path(r"C:\Chrome\User Data"),
+        profile_directory=config.chrome_profile_directory,
+        spawn_runtime=runtime,
+        spawn_handle=91,
+    )
+
+    _context, opened_window, open_failure_reason = worker._open_url_in_new_window_for_profile(
+        config.raid_profiles[0],
+        "https://x.com/i/status/123",
+        previous_windows=tuple(),
+    )
+    page_ready_failure_reason, _anchor = worker._wait_for_page_ready(runtime, opened_window)
+    close_failure_reason = worker._close_automation_window_for_profile(
+        runtime,
+        opened_window,
+    )
+
+    assert open_failure_reason is None
+    assert page_ready_failure_reason is None
+    assert close_failure_reason is None
+    log_path = tmp_path / "logs" / "raidbot-2026-05-22.jsonl"
+    diagnostic_events = [
+        json.loads(line)["event"]
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert "chrome_open_start" in diagnostic_events
+    records = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    resolved = next(
+        record for record in records if record["event"] == "chrome_opener_resolved"
+    )
+    assert resolved["chrome_path"] == r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    assert resolved["user_data_dir"] == r"C:\Chrome\User Data"
+    assert resolved["profile_directory"] == config.chrome_profile_directory
+    assert "chrome_window_selected" in diagnostic_events
+    assert "page_ready_scan_start" in diagnostic_events
+    assert "page_ready_scan_result" in diagnostic_events
+    assert "window_close_start" in diagnostic_events
+    assert "window_close_result" in diagnostic_events
 
 
 def build_default_worker(

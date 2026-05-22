@@ -1,6 +1,8 @@
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from raidbot.chrome import ChromeOpener, OpenedRaidContext
 
 
@@ -74,3 +76,12 @@ def test_chrome_opener_defaults_launcher_to_popen():
     )
 
     assert opener.launcher is subprocess.Popen
+
+
+def test_chrome_opener_rejects_non_chrome_executable():
+    with pytest.raises(RuntimeError, match="Chrome executable must be chrome.exe"):
+        ChromeOpener(
+            chrome_path=Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+            user_data_dir=Path(r"C:\ChromeProfile"),
+            profile_directory="Profile 3",
+        )

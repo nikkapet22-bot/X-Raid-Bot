@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QStyle
 
 from raidbot.desktop.branding import APP_NAME
 from raidbot.desktop.controller import DesktopController
+from raidbot.desktop.diagnostics import DiagnosticsLogger
 from raidbot.desktop.main_window import MainWindow
 from raidbot.desktop.storage import DesktopStorage, default_base_dir
 from raidbot.desktop.theme import build_application_stylesheet
@@ -46,22 +47,29 @@ def show_startup_window(
     controller_factory: Callable[..., object] = DesktopController,
     main_window_factory: Callable[..., object] = MainWindow,
 ):
-    window = create_startup_window(
-        storage=storage,
-        wizard_factory=wizard_factory,
-        controller_factory=controller_factory,
-        main_window_factory=main_window_factory,
-    )
-    if choose_startup_view(is_first_run=storage.is_first_run()) == "wizard":
-        if hasattr(window, "accepted"):
-            _wire_wizard_completion(
-                wizard=window,
-                storage=storage,
-                controller_factory=controller_factory,
-                main_window_factory=main_window_factory,
-            )
-    _present_window(window)
-    return window
+    try:
+        window = create_startup_window(
+            storage=storage,
+            wizard_factory=wizard_factory,
+            controller_factory=controller_factory,
+            main_window_factory=main_window_factory,
+        )
+        if choose_startup_view(is_first_run=storage.is_first_run()) == "wizard":
+            if hasattr(window, "accepted"):
+                _wire_wizard_completion(
+                    wizard=window,
+                    storage=storage,
+                    controller_factory=controller_factory,
+                    main_window_factory=main_window_factory,
+                )
+        _present_window(window)
+        return window
+    except Exception as exc:
+        DiagnosticsLogger(Path(getattr(storage, "base_dir", Path(".")))).log(
+            "startup_failure",
+            exception=exc,
+        )
+        raise
 
 
 def _wire_wizard_completion(

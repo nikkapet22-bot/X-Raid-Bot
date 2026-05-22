@@ -13,7 +13,8 @@ from .windowing import WindowInfo, WindowManager, choose_window_for_rule
 
 _SLOT_1_FINISH_SCROLL_ATTEMPTS = 4
 _SLOT_1_FINISH_SEARCH_SECONDS = 1.0
-_SLOT_1_TEXT_TO_IMAGE_DELAY_SECONDS = 0.5
+_SLOT_1_REPLY_COMPOSER_SETTLE_SECONDS = 0.5
+_SLOT_1_TEXT_TO_IMAGE_DELAY_SECONDS = 1.0
 _SLOT_1_FINISH_POST_CLICK_DELAY_SECONDS = 2.0
 _SLOT_1_REPLY_SUBMIT_RECHECK_SECONDS = 0.0
 _SLOT_1_REPLY_SUBMIT_RETRY_DELAY_SECONDS = 2.0
@@ -618,6 +619,14 @@ class SequenceRunner:
             )
         pasted_image = False
         if step.preset_text is not None and not skip_text_paste:
+            stopped_result = self._sleep_or_stop(
+                _SLOT_1_REPLY_COMPOSER_SETTLE_SECONDS,
+                window,
+                step_index,
+                step_phase="slot1_after_open_click",
+            )
+            if stopped_result is not None:
+                return stopped_result
             stopped_result = self._try_input_action(
                 lambda: self.input_driver.paste_text(step.preset_text),
                 window,

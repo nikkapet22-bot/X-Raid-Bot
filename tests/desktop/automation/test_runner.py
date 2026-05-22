@@ -721,8 +721,8 @@ def test_runner_slot_1_pastes_image_before_finish_probe(
 
     assert result.status == "completed"
     assert input_driver.events == [
-        ("text:gm", 100.0),
-        (f"file_image:{reply_image_path}", 100.5),
+        ("text:gm", 100.5),
+        (f"file_image:{reply_image_path}", 101.5),
     ]
 
 
@@ -783,9 +783,9 @@ def test_runner_slot_1_scrolls_when_finish_hidden_after_image(
 
     assert result.status == "completed"
     assert input_driver.events == [
-        ("text:gm", 100.0),
-        (f"file_image:{reply_image_path}", 100.5),
-        ("scroll:-120", 101.5),
+        ("text:gm", 100.5),
+        (f"file_image:{reply_image_path}", 101.5),
+        ("scroll:-120", 102.5),
     ]
     assert input_driver.escapes == []
     assert input_driver.clicks == [(25, 15), (45, 15)]
@@ -854,9 +854,9 @@ def test_runner_slot_1_does_not_blind_escape_when_reply_hidden_after_image(
 
     assert result.status == "completed"
     assert input_driver.events == [
-        ("text:gm", 100.0),
-        (f"file_image:{reply_image_path}", 100.5),
-        ("scroll:-120", 101.5),
+        ("text:gm", 100.5),
+        (f"file_image:{reply_image_path}", 101.5),
+        ("scroll:-120", 102.5),
     ]
     assert input_driver.escapes == []
     assert input_driver.clicks == [(25, 15), (45, 15)]
@@ -976,9 +976,9 @@ def test_runner_slot_1_scans_reply_before_obstruction_after_image_paste(
 
     assert result.status == "completed"
     assert matcher.calls[1:4] == [
-        (str(finish_template_path), 101.5),
-        (str(obstruction_template_path), 101.5),
-        (str(finish_template_path), 101.75),
+        (str(finish_template_path), 102.5),
+        (str(obstruction_template_path), 102.5),
+        (str(finish_template_path), 102.75),
     ]
     assert input_driver.scrolls == []
     assert input_driver.escapes == [None]
@@ -1039,10 +1039,10 @@ def test_runner_slot_1_checks_obstruction_after_scroll_when_initial_after_image_
 
     assert result.status == "completed"
     assert matcher.calls[1:5] == [
-        (str(finish_template_path), 101.5),
-        (str(obstruction_template_path), 101.5),
-        (str(obstruction_template_path), 101.7),
-        (str(finish_template_path), 101.95),
+        (str(finish_template_path), 102.5),
+        (str(obstruction_template_path), 102.5),
+        (str(obstruction_template_path), 102.7),
+        (str(finish_template_path), 102.95),
     ]
     assert input_driver.scrolls == [-120]
     assert input_driver.escapes == [None]
@@ -1110,9 +1110,9 @@ def test_runner_slot_1_does_not_blind_escape_after_image_when_obstruction_missin
 
     assert result.status == "completed"
     assert input_driver.events == [
-        ("text:gm", 100.0),
-        (f"file_image:{reply_image_path}", 100.5),
-        ("scroll:-120", 101.5),
+        ("text:gm", 100.5),
+        (f"file_image:{reply_image_path}", 101.5),
+        ("scroll:-120", 102.5),
     ]
     assert input_driver.escapes == []
     assert input_driver.clicks == [(25, 15), (45, 15)]
@@ -1197,9 +1197,9 @@ def test_runner_slot_1_escapes_captured_obstruction_before_image_scroll(
 
     assert result.status == "completed"
     assert input_driver.events == [
-        ("text:gm", 100.0),
-        (f"file_image:{reply_image_path}", 100.5),
-        ("esc", 101.5),
+        ("text:gm", 100.5),
+        (f"file_image:{reply_image_path}", 101.5),
+        ("esc", 102.5),
     ]
     assert input_driver.scrolls == []
     assert input_driver.clicks == [(25, 15), (45, 15)]

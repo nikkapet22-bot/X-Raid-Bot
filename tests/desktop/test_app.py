@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
+
+import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -360,6 +363,45 @@ def test_dashboard_bridge_routes_page_ready_timeout() -> None:
     assert calls == [45.0]
 
 
+def test_dashboard_bridge_routes_export_diagnostics() -> None:
+    from raidbot.desktop.web_dashboard import DashboardBridge
+
+    calls = []
+    bridge = DashboardBridge(
+        on_ready=lambda: None,
+        on_start=lambda: None,
+        on_stop=lambda: None,
+        on_toggle_pause=lambda: None,
+        on_raid_now=lambda: None,
+        on_raid_now_for_profile=lambda _profile: None,
+        on_reset_profile=lambda _profile: None,
+        on_configure_profile=lambda _profile: None,
+        on_reset_all_profiles=lambda: None,
+        on_set_raid_on_restart=lambda _enabled: None,
+        on_set_performance_mode=lambda _enabled: None,
+        on_set_page_ready_timeout=lambda _seconds: None,
+        on_reauthorize=lambda: None,
+        on_export_diagnostics=lambda: calls.append("export"),
+        on_refresh_chats=lambda: None,
+        on_scan_senders=lambda: None,
+        on_add_profile=lambda: None,
+        on_move_profile=lambda _profile, _direction: None,
+        on_remove_profile=lambda _profile: None,
+        on_capture_page_template=lambda _key: None,
+        on_test_page_template=lambda _key: None,
+        on_capture_slot=lambda _slot: None,
+        on_test_slot=lambda _slot: None,
+        on_open_slot_presets=lambda _slot: None,
+        on_capture_slot_finish=lambda _slot: None,
+        on_test_enabled_slots=lambda: None,
+        on_capture_troubleshoot=lambda _group, _index: None,
+        on_test_troubleshoot=lambda _group, _index: None,
+    )
+    bridge.exportDiagnostics()
+
+    assert calls == ["export"]
+
+
 def test_dashboard_bridge_routes_remove_profile() -> None:
     from raidbot.desktop.web_dashboard import DashboardBridge
 
@@ -467,6 +509,34 @@ def test_create_startup_window_uses_main_window_for_configured_app() -> None:
     assert isinstance(window, FakeWindow)
     assert isinstance(created["window_controller"], FakeController)
     assert created["controller_storage"] is created["window_storage"]
+
+
+def test_show_startup_window_logs_startup_failure(tmp_path) -> None:
+    from raidbot.desktop.app import show_startup_window
+
+    class FakeStorage:
+        base_dir = tmp_path
+
+        def is_first_run(self) -> bool:
+            return False
+
+    def failing_controller_factory(**_kwargs):
+        raise RuntimeError("startup boom")
+
+    with pytest.raises(RuntimeError, match="startup boom"):
+        show_startup_window(
+            storage=FakeStorage(),
+            controller_factory=failing_controller_factory,
+        )
+
+    log_path = next((tmp_path / "logs").glob("raidbot-*.jsonl"))
+    records = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert records[-1]["event"] == "startup_failure"
+    assert records[-1]["exception"]["message"] == "startup boom"
 
 
 def test_create_startup_window_main_window_path_can_expose_bot_actions_surface() -> None:

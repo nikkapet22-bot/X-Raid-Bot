@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QFileDialog
 
 from raidbot.desktop.models import BotActionPreset, BotActionSlotConfig
 
@@ -72,6 +73,54 @@ def test_slot_1_presets_dialog_uploads_image_to_selected_preset(
 
     assert updated_slot.presets[0].image_path == image_path
     assert dialog.preset_image_status_label.text() == str(image_path)
+
+
+def test_slot_1_presets_dialog_default_picker_uses_qt_file_dialog(
+    qtbot,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from raidbot.desktop.bot_actions.presets_dialog import Slot1PresetsDialog
+
+    image_path = tmp_path / "preset.png"
+    image_path.write_bytes(b"fake image")
+    calls: list[dict] = []
+
+    def fake_get_open_file_name(*_args, **kwargs):
+        calls.append(kwargs)
+        return str(image_path), "Images (*.png)"
+
+    monkeypatch.setattr(
+        "raidbot.desktop.bot_actions.presets_dialog.QFileDialog.getOpenFileName",
+        fake_get_open_file_name,
+    )
+    dialog = Slot1PresetsDialog(slot=_slot_1_config())
+    qtbot.addWidget(dialog)
+
+    selected_path = dialog._default_choose_image_file()
+
+    assert selected_path == image_path
+    assert calls
+    options = calls[-1]["options"]
+    assert bool(options & QFileDialog.Option.DontUseNativeDialog)
+
+
+def test_slot_1_presets_dialog_reports_image_picker_failure(qtbot) -> None:
+    from raidbot.desktop.bot_actions.presets_dialog import Slot1PresetsDialog
+
+    def failing_picker() -> Path | None:
+        raise RuntimeError("picker blocked")
+
+    dialog = Slot1PresetsDialog(
+        slot=_slot_1_config(),
+        choose_image_file=failing_picker,
+    )
+    qtbot.addWidget(dialog)
+    dialog.preset_list.setCurrentRow(0)
+
+    dialog.upload_image_for_selected_preset()
+
+    assert dialog.preset_image_status_label.text() == "Image picker failed: picker blocked"
 
 
 def test_slot_1_presets_dialog_tracks_finish_image(qtbot, tmp_path: Path) -> None:

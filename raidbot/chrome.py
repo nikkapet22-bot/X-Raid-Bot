@@ -24,11 +24,16 @@ class ChromeOpener:
         launcher: Callable[[list[str]], Any] = subprocess.Popen,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self.chrome_path = chrome_path
+        self.chrome_path = Path(chrome_path)
+        self._validate_chrome_path(self.chrome_path)
         self.user_data_dir = user_data_dir
         self.profile_directory = profile_directory
         self.launcher = launcher
         self.clock = clock
+
+    def _validate_chrome_path(self, chrome_path: Path) -> None:
+        if chrome_path.name.lower() != "chrome.exe":
+            raise RuntimeError(f"Chrome executable must be chrome.exe: {chrome_path}")
 
     def open(self, url: str, *, window_handle: int | None = None) -> OpenedRaidContext:
         self.launcher(
