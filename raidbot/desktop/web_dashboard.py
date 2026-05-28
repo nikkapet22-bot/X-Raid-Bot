@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -12,6 +13,10 @@ from PySide6.QtCore import QObject, QUrl, Slot
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+from raidbot.desktop.assets import app_icon_path
+
+_SIDEBAR_BRAND_ICON_SRC = "../../raidbot/desktop/assets/app_icon.png"
 
 _DASHBOARD_RUNTIME_STYLE = r"""
 <style>
@@ -56,6 +61,112 @@ _DASHBOARD_RUNTIME_STYLE = r"""
   .profile-card.failed .profile-raid-now,
   .profile-card.stopped .profile-raid-now {
     display: none;
+  }
+  .profile-card {
+    display: flex;
+    flex-direction: column;
+  }
+  .profile-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .profile-actions-bottom {
+    position: relative;
+    z-index: 1;
+    margin-top: auto;
+  }
+  .profile-error-badge {
+    display: inline-grid;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 8px;
+    place-items: center;
+    color: #fff;
+    cursor: pointer;
+    border: 1px solid rgba(255, 93, 93, .58);
+    border-radius: 999px;
+    background: linear-gradient(145deg, rgba(255, 93, 93, .95), rgba(142, 26, 26, .92));
+    box-shadow: 0 0 18px rgba(255, 93, 93, .34);
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1;
+    transition: transform .18s var(--ease), box-shadow .18s var(--ease);
+  }
+  .profile-error-badge:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 0 26px rgba(255, 93, 93, .52);
+  }
+  .profile-error-badge:active {
+    transform: translateY(0) scale(.96);
+  }
+  .profile-error-popover {
+    position: relative;
+    z-index: 3;
+    max-height: 0;
+    margin-top: 0;
+    padding: 0 16px;
+    overflow: hidden;
+    overflow-y: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-6px) scale(.98);
+    border: 1px solid rgba(255, 93, 93, .28);
+    border-radius: 16px;
+    background: rgba(12, 15, 24, .94);
+    box-shadow: 0 18px 36px rgba(0, 0, 0, .32);
+    transition:
+      opacity .22s var(--ease),
+      transform .22s var(--ease),
+      max-height .26s var(--ease),
+      margin-top .22s var(--ease),
+      padding .22s var(--ease);
+    transform-origin: top right;
+  }
+  .profile-error-popover.open {
+    max-height: 150px;
+    margin-top: 12px;
+    padding: 14px 16px 16px;
+    overflow-y: auto;
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
+  }
+  .profile-error-popover-title {
+    color: var(--red);
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  .profile-error-popover ul {
+    display: grid;
+    gap: 8px;
+    margin: 10px 0 0;
+    padding-left: 19px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .profile-error-popover li {
+    padding-right: 4px;
+    overflow-wrap: anywhere;
+  }
+  .profile-error-popover::-webkit-scrollbar {
+    width: 8px;
+  }
+  .profile-error-popover::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: rgba(255, 93, 93, .42);
+    background-clip: padding-box;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .profile-error-badge,
+    .profile-error-popover {
+      transition: none;
+    }
   }
   .profile-raid-now {
     position: relative;
@@ -427,7 +538,6 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
   };
 
   const renderCommand = (data) => {
-    renderPill(first(".command-card .state-pill"), data.connectionStateText || "Disconnected", data.connectionVariant);
     const buttons = all(".command-stack .wide-button");
     const raidNowDisabledReason = data.raidNowDisabledReason || "Raid NOW is not available right now.";
     if (buttons[0]) {
@@ -563,6 +673,14 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
         ? `<button class="icon-button" data-reset-profile="${html(profile.directory)}" aria-label="Restart">${profileIcon("reset")}</button>`
         : `<button class="icon-button" data-config-profile="${html(profile.directory)}" aria-label="Settings">${profileIcon("settings")}</button>`;
       const chips = (profile.chips || []).map((chip) => `<span class="chip ${html(chip.tone || "")}">${html(chip.label)}</span>`).join("");
+      const errorCount = Math.max(0, Number(profile.errorCount || 0));
+      const errorReasons = (profile.errorReasons || []).filter(Boolean);
+      const errorBadge = errorCount > 0
+        ? `<button class="profile-error-badge" data-error-profile="${html(profile.directory)}" aria-expanded="false" title="Show profile errors">${html(errorCount)}</button>`
+        : "";
+      const errorPopover = errorCount > 0
+        ? `<div class="profile-error-popover" data-error-popover="${html(profile.directory)}"><div class="profile-error-popover-title">Recorded errors</div><ul>${(errorReasons.length ? errorReasons : ["No reason recorded"]).map((reason) => `<li>${html(reason)}</li>`).join("")}</ul></div>`
+        : "";
       const warmup = profile.warmup ? `
         <div class="warm-progress">
           <div class="progress-meta"><span>Warmup progress</span><span>${html(profile.warmupProgress)}%</span></div>
@@ -582,16 +700,34 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
         <article class="profile-card ${html(statusClass)}" data-profile="${html(profile.directory)}">
           <div class="profile-top">
             <div class="profile-name"><span class="profile-dot ${html(dotClass)}"></span>${html(profile.label)}</div>
-            ${actionButtons}
+            <div class="profile-tools">${errorBadge}${actionButtons}</div>
           </div>
           ${preview}
-          <div class="action-chips" title="Use the gear icon to choose this profile's actions">${chips}</div>
-          ${warmup}
-          ${error}
-          ${unavailable}
-          <button class="${raidNowClasses}" data-raid-profile="${html(profile.directory)}" data-disabled-reason="${html(disabledReason)}" aria-disabled="${profile.canRaidNow ? "false" : "true"}" title="${html(disabledReason || "Run this profile now")}">${html(profile.raidNowText || "Raid NOW!")}</button>
+          ${errorPopover}
+          <div class="profile-actions-bottom">
+            <div class="action-chips" title="Use the gear icon to choose this profile's actions">${chips}</div>
+            ${warmup}
+            ${error}
+            ${unavailable}
+            <button class="${raidNowClasses}" data-raid-profile="${html(profile.directory)}" data-disabled-reason="${html(disabledReason)}" aria-disabled="${profile.canRaidNow ? "false" : "true"}" title="${html(disabledReason || "Run this profile now")}">${html(profile.raidNowText || "Raid NOW!")}</button>
+          </div>
         </article>`;
     }).join("");
+    all("[data-error-profile]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const profileDirectory = button.dataset.errorProfile;
+        all(".profile-error-popover.open").forEach((popover) => {
+          if (popover.dataset.errorPopover !== profileDirectory) {
+            popover.classList.remove("open");
+          }
+        });
+        const popover = Array.from(all("[data-error-popover]")).find((item) => item.dataset.errorPopover === profileDirectory);
+        if (!popover) return;
+        const isOpen = popover.classList.toggle("open");
+        button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      });
+    });
     all("[data-config-profile]").forEach((button) => {
       button.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -628,16 +764,34 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
     const control = first(".restart-control");
     if (!control) return;
     const button = control.querySelector(".lux-button");
-    const checkbox = control.querySelector("input");
+    const raidCheckbox = control.querySelector("[data-restart-raid]");
+    let modeCheckbox = control.querySelector("[data-24-7-mode]");
+    if (!modeCheckbox) {
+      const label = document.createElement("label");
+      label.className = "raid-check";
+      label.textContent = "24/7 Mode";
+      modeCheckbox = document.createElement("input");
+      modeCheckbox.type = "checkbox";
+      modeCheckbox.setAttribute("data-24-7-mode", "");
+      label.appendChild(modeCheckbox);
+      control.appendChild(label);
+    }
     if (button && !button.dataset.wiredRestart) {
       button.dataset.wiredRestart = "true";
       button.addEventListener("click", () => call("resetAllProfiles"));
     }
-    if (checkbox) {
-      checkbox.checked = Boolean(data.raidOnRestart);
-      if (!checkbox.dataset.wiredRestartRaid) {
-        checkbox.dataset.wiredRestartRaid = "true";
-        checkbox.addEventListener("change", () => call("setRaidOnRestart", checkbox.checked));
+    if (raidCheckbox) {
+      raidCheckbox.checked = Boolean(data.raidOnRestart);
+      if (!raidCheckbox.dataset.wiredRestartRaid) {
+        raidCheckbox.dataset.wiredRestartRaid = "true";
+        raidCheckbox.addEventListener("change", () => call("setRaidOnRestart", raidCheckbox.checked));
+      }
+    }
+    if (modeCheckbox) {
+      modeCheckbox.checked = Boolean(data.twentyFourSevenMode);
+      if (!modeCheckbox.dataset.wiredTwentyFourSevenMode) {
+        modeCheckbox.dataset.wiredTwentyFourSevenMode = "true";
+        modeCheckbox.addEventListener("change", () => call("setTwentyFourSevenMode", modeCheckbox.checked));
       }
     }
   };
@@ -929,6 +1083,22 @@ _DASHBOARD_RUNTIME_SCRIPT = r"""
 """
 
 
+def _app_icon_data_uri() -> str:
+    try:
+        data = app_icon_path().read_bytes()
+    except OSError:
+        return ""
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def inline_dashboard_assets(html: str) -> str:
+    icon_src = _app_icon_data_uri()
+    if not icon_src:
+        return html
+    return html.replace(_SIDEBAR_BRAND_ICON_SRC, icon_src)
+
+
 def default_dashboard_preview_path() -> Path:
     bundled_root = Path(getattr(sys, "_MEIPASS", "") or "")
     candidates: list[Path] = []
@@ -979,6 +1149,7 @@ class DashboardBridge(QObject):
         on_test_enabled_slots: Callable[[], None],
         on_capture_troubleshoot: Callable[[str, int], None],
         on_test_troubleshoot: Callable[[str, int], None],
+        on_set_twenty_four_seven_mode: Callable[[bool], None] | None = None,
         on_export_diagnostics: Callable[[], None] | None = None,
         parent: QObject | None = None,
     ) -> None:
@@ -994,6 +1165,9 @@ class DashboardBridge(QObject):
         self._on_reset_all_profiles = on_reset_all_profiles
         self._on_set_raid_on_restart = on_set_raid_on_restart
         self._on_set_performance_mode = on_set_performance_mode
+        self._on_set_twenty_four_seven_mode = on_set_twenty_four_seven_mode or (
+            lambda _enabled: None
+        )
         self._on_set_page_ready_timeout = on_set_page_ready_timeout
         self._on_reauthorize = on_reauthorize
         self._on_export_diagnostics = on_export_diagnostics or (lambda: None)
@@ -1055,6 +1229,10 @@ class DashboardBridge(QObject):
     @Slot(bool)
     def setPerformanceMode(self, enabled: bool) -> None:
         self._on_set_performance_mode(bool(enabled))
+
+    @Slot(bool)
+    def setTwentyFourSevenMode(self, enabled: bool) -> None:
+        self._on_set_twenty_four_seven_mode(bool(enabled))
 
     @Slot(float)
     def setPageReadyTimeout(self, seconds: float) -> None:
@@ -1155,6 +1333,7 @@ class DashboardWebView(QWidget):
         on_test_enabled_slots: Callable[[], None],
         on_capture_troubleshoot: Callable[[str, int], None],
         on_test_troubleshoot: Callable[[str, int], None],
+        on_set_twenty_four_seven_mode: Callable[[bool], None] | None = None,
         on_export_diagnostics: Callable[[], None] | None = None,
         html_path: Path | None = None,
         parent: QWidget | None = None,
@@ -1195,6 +1374,7 @@ class DashboardWebView(QWidget):
             on_set_raid_on_restart=on_set_raid_on_restart,
             on_set_performance_mode=on_set_performance_mode,
             on_set_page_ready_timeout=on_set_page_ready_timeout,
+            on_set_twenty_four_seven_mode=on_set_twenty_four_seven_mode,
             on_reauthorize=on_reauthorize,
             on_export_diagnostics=on_export_diagnostics,
             on_refresh_chats=on_refresh_chats,
@@ -1257,6 +1437,7 @@ class DashboardWebView(QWidget):
             count=1,
             flags=re.S,
         )
+        html = inline_dashboard_assets(html)
         html = html.replace("</head>", f"{_DASHBOARD_RUNTIME_STYLE}\n</head>", 1)
         html = html.replace("</body>", f"{_DASHBOARD_RUNTIME_SCRIPT}\n</body>", 1)
         return html

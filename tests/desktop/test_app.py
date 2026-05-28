@@ -129,11 +129,25 @@ def test_dashboard_preview_bot_actions_uses_compact_presets_without_health_aside
     assert "Navy soft sand surface" not in content
     assert ".activity-feed" in content
     assert "overflow-y: auto;" in content
-    assert '<div class="monogram">L8N</div>' in content
+    assert '<div class="monogram">L8N</div>' not in content
+    assert 'class="brand-mark"' in content
+    assert 'class="brand-mark-image"' in content
+    assert content.count('class="brand-mark-image"') == 1
+    assert content.index('class="brand-mark"') < content.index('class="topbar"')
+    assert 'src="../../raidbot/desktop/assets/app_icon.png"' in content
+    assert '<img class="brand-mark-image" src="../../raidbot/desktop/assets/app_icon.png" alt="" aria-hidden="true" />' in content
+    assert "0 0 26px rgba(105, 214, 255, .46)" not in content
+    assert "0 0 52px rgba(173, 108, 255, .32)" not in content
+    assert "filter: drop-shadow(0 0 12px rgba(105, 214, 255, .62))" not in content
+    assert '<h1 class="app-title">L8N Raid Bot</h1>' not in content
+    assert 'first(".command-card .state-pill")' not in runtime
+    assert '<div class="state-pill"><span class="state-dot"></span> Connected</div>' not in content
+    assert content.index('<header class="topbar">') < content.index('<div class="state-pill"><span class="state-dot"></span> Running</div>')
     assert "stroke-dasharray: 980" not in content
     assert "Survives restarts" not in content
     assert "2 captures" not in content
     assert "Randomized runtime" not in content
+    assert "Random real action" not in content
     assert "Open presets to edit the full list" in content
     assert "Template Health" not in content
     assert "troubleshoot-wide" in content
@@ -142,6 +156,48 @@ def test_dashboard_preview_bot_actions_uses_compact_presets_without_health_aside
     assert "Trouble Status" not in content
     assert "Page Ready timeout" in runtime
     assert "setPageReadyTimeout" in runtime
+
+
+def test_dashboard_runtime_inlines_sidebar_brand_icon() -> None:
+    from raidbot.desktop.web_dashboard import inline_dashboard_assets
+
+    html = '<img class="brand-mark-image" src="../../raidbot/desktop/assets/app_icon.png" alt="" aria-hidden="true" />'
+
+    rendered = inline_dashboard_assets(html)
+
+    assert 'src="data:image/png;base64,' in rendered
+    assert "../../raidbot/desktop/assets/app_icon.png" not in rendered
+
+
+def test_sidebar_brand_logo_has_no_wrapper_glow_or_square_edges() -> None:
+    content = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
+        encoding="utf-8"
+    )
+    theme = Path("raidbot/desktop/theme.py").read_text(encoding="utf-8")
+
+    brand_mark = re.search(r"\.brand-mark\s*\{(?P<body>.*?)\n    \}", content, re.S)
+    brand_glow = re.search(r"\.brand-mark::after\s*\{(?P<body>.*?)\n    \}", content, re.S)
+    native_halo = re.search(r"QFrame#shellBrandHalo \{\{(?P<body>.*?)\n    \}\}", theme, re.S)
+    native_mark = re.search(r"QLabel#shellBrandMark \{\{(?P<body>.*?)\n    \}\}", theme, re.S)
+
+    assert brand_mark is not None
+    assert brand_glow is not None
+    assert native_halo is not None
+    assert native_mark is not None
+    assert "border: 0;" in brand_mark.group("body")
+    assert "border: 0;" in brand_glow.group("body")
+    assert "padding: 0;" in brand_mark.group("body")
+    assert "background: transparent;" in brand_mark.group("body")
+    assert "box-shadow: none;" in brand_mark.group("body")
+    assert "overflow: hidden;" in brand_mark.group("body")
+    assert "border-radius: 14px;" in brand_mark.group("body")
+    assert "display: none;" in brand_glow.group("body")
+    assert "filter: none;" in content
+    assert "background-color: transparent;" in native_halo.group("body")
+    assert "background-color: transparent;" in native_mark.group("body")
+    assert "border-radius: 14px;" in native_mark.group("body")
+    assert "border: none;" in native_halo.group("body")
+    assert "border: none;" in native_mark.group("body")
 
 
 def test_dashboard_preview_exposes_performance_mode_toggle() -> None:
@@ -161,6 +217,24 @@ def test_dashboard_preview_exposes_performance_mode_toggle() -> None:
     )
     assert 'data-app-version' in content
     assert content.index('data-app-version') > content.index('data-performance-toggle')
+
+
+def test_dashboard_exposes_24_7_mode_toggle_and_profile_error_badge() -> None:
+    runtime = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
+    preview = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
+        encoding="utf-8"
+    )
+
+    for content in (runtime, preview):
+        assert "24/7 Mode" in content
+        assert "profile-error-badge" in content
+        assert "profile-error-popover" in content
+        assert "profile-actions-bottom" in content
+
+    assert "twentyFourSevenMode" in runtime
+    assert "setTwentyFourSevenMode" in runtime
+    assert 'data-error-profile="${html(profile.directory)}"' in runtime
+    assert 'data-24-7-mode' in preview
 
 
 def test_dashboard_runtime_performance_toggle_has_visible_feedback_and_immediate_ui() -> None:
@@ -287,6 +361,24 @@ def test_dashboard_runtime_profile_raid_now_disabled_state_has_feedback() -> Non
     assert 'profile.canRaidNow ? "" : "disabled"' not in content
 
 
+def test_dashboard_profile_error_popover_has_polished_spacing_and_motion() -> None:
+    runtime = Path("raidbot/desktop/web_dashboard.py").read_text(encoding="utf-8")
+    preview = Path("docs/ui-preview/dashboard-refresh-preview.html").read_text(
+        encoding="utf-8"
+    )
+
+    for content in (runtime, preview):
+        assert "padding: 14px 16px 16px;" in content
+        assert "max-height: 150px;" in content
+        assert "overflow-y: auto;" in content
+        assert "opacity: 0;" in content
+        assert "transform: translateY(-6px) scale(.98);" in content
+        assert "pointer-events: none;" in content
+        assert "opacity: 1;" in content
+        assert "transform: translateY(0) scale(1);" in content
+        assert "@media (prefers-reduced-motion: reduce)" in content
+
+
 def test_dashboard_bridge_routes_performance_mode_toggle() -> None:
     from raidbot.desktop.web_dashboard import DashboardBridge
 
@@ -321,6 +413,45 @@ def test_dashboard_bridge_routes_performance_mode_toggle() -> None:
         on_test_troubleshoot=lambda _group, _index: None,
     )
     bridge.setPerformanceMode(True)
+
+    assert calls == [True]
+
+
+def test_dashboard_bridge_routes_twenty_four_seven_mode_toggle() -> None:
+    from raidbot.desktop.web_dashboard import DashboardBridge
+
+    calls = []
+    bridge = DashboardBridge(
+        on_ready=lambda: None,
+        on_start=lambda: None,
+        on_stop=lambda: None,
+        on_toggle_pause=lambda: None,
+        on_raid_now=lambda: None,
+        on_raid_now_for_profile=lambda _profile: None,
+        on_reset_profile=lambda _profile: None,
+        on_configure_profile=lambda _profile: None,
+        on_reset_all_profiles=lambda: None,
+        on_set_raid_on_restart=lambda _enabled: None,
+        on_set_performance_mode=lambda _enabled: None,
+        on_set_twenty_four_seven_mode=calls.append,
+        on_set_page_ready_timeout=lambda _seconds: None,
+        on_reauthorize=lambda: None,
+        on_refresh_chats=lambda: None,
+        on_scan_senders=lambda: None,
+        on_add_profile=lambda: None,
+        on_move_profile=lambda _profile, _direction: None,
+        on_remove_profile=lambda _profile: None,
+        on_capture_page_template=lambda _key: None,
+        on_test_page_template=lambda _key: None,
+        on_capture_slot=lambda _slot: None,
+        on_test_slot=lambda _slot: None,
+        on_open_slot_presets=lambda _slot: None,
+        on_capture_slot_finish=lambda _slot: None,
+        on_test_enabled_slots=lambda: None,
+        on_capture_troubleshoot=lambda _group, _index: None,
+        on_test_troubleshoot=lambda _group, _index: None,
+    )
+    bridge.setTwentyFourSevenMode(True)
 
     assert calls == [True]
 
@@ -967,3 +1098,48 @@ def test_present_window_ensures_window_is_visible_on_screen() -> None:
         "raise_",
         "activateWindow",
     ]
+
+def test_main_sets_qt_application_window_icon(monkeypatch) -> None:
+    from raidbot.desktop import app as app_module
+
+    events: list[str] = []
+
+    class FakeStorage:
+        def __init__(self, _path) -> None:
+            pass
+
+        def is_first_run(self) -> bool:
+            return False
+
+    class FakeWindow:
+        def show(self) -> None:
+            pass
+
+    class FakeApplication:
+        def __init__(self, _argv) -> None:
+            events.append("app.init")
+
+        def setWindowIcon(self, _icon) -> None:
+            events.append("app.setWindowIcon")
+
+        def setStyleSheet(self, _stylesheet) -> None:
+            events.append("app.setStyleSheet")
+
+        def exec(self) -> int:
+            events.append("app.exec")
+            return 0
+
+    class FakeIcon:
+        def isNull(self) -> bool:
+            return False
+
+    monkeypatch.setattr(app_module, "QApplication", FakeApplication)
+    monkeypatch.setattr(app_module, "DesktopStorage", lambda _path: FakeStorage(_path))
+    monkeypatch.setattr(app_module, "default_base_dir", lambda: "ignored")
+    monkeypatch.setattr(app_module, "_acquire_instance_lock", lambda _base_dir: object())
+    monkeypatch.setattr(app_module, "_install_restore_server", lambda _base_dir: None)
+    monkeypatch.setattr(app_module, "create_startup_window", lambda **_kwargs: FakeWindow())
+    monkeypatch.setattr(app_module, "app_icon", lambda: FakeIcon())
+
+    assert app_module.main([]) == 0
+    assert "app.setWindowIcon" in events

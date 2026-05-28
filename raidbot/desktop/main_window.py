@@ -54,13 +54,13 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QVBoxLayout,
     QWidget,
-    QStyle,
 )
 
 from raidbot.desktop.bot_actions import BotActionsPage
 from raidbot.desktop.bot_actions.capture import SlotCaptureService
 from raidbot.desktop.bot_actions.presets_dialog import Slot1PresetsDialog
 from raidbot.desktop.animated_button import AttentionPulseButton
+from raidbot.desktop.assets import app_icon
 from raidbot.desktop.branding import APP_NAME, APP_VERSION_BADGE
 from raidbot.desktop.chrome_profiles import ChromeProfile, detect_chrome_environment
 from raidbot.desktop.diagnostics import export_diagnostics
@@ -1044,18 +1044,21 @@ class TopTabStrip(QWidget):
         layout.setContentsMargins(16, 22, 16, 22)
         layout.setSpacing(18)
 
-        monogram_halo = QFrame()
-        monogram_halo.setObjectName("shellMonogramHalo")
-        monogram_halo.setFixedSize(76, 76)
-        halo_layout = QVBoxLayout(monogram_halo)
+        brand_halo = QFrame()
+        brand_halo.setObjectName("shellBrandHalo")
+        brand_halo.setFixedSize(76, 76)
+        halo_layout = QVBoxLayout(brand_halo)
         halo_layout.setContentsMargins(11, 11, 11, 11)
         halo_layout.setSpacing(0)
-        monogram = QLabel("L8N")
-        monogram.setObjectName("shellMonogram")
-        monogram.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        monogram.setFixedSize(54, 54)
-        halo_layout.addWidget(monogram, 0, Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(monogram_halo, 0, Qt.AlignmentFlag.AlignHCenter)
+        brand_mark = QLabel("")
+        brand_mark.setObjectName("shellBrandMark")
+        brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand_mark.setFixedSize(54, 54)
+        icon = app_icon()
+        if not icon.isNull():
+            brand_mark.setPixmap(icon.pixmap(QSize(54, 54)))
+        halo_layout.addWidget(brand_mark, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(brand_halo, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addSpacing(8)
 
         self._buttons: list[QPushButton] = []
@@ -1262,6 +1265,11 @@ class MainWindow(QMainWindow):
                 "set_performance_mode_enabled",
                 lambda _enabled: None,
             ),
+            on_set_twenty_four_seven_mode=getattr(
+                self.controller,
+                "set_twenty_four_seven_mode_enabled",
+                lambda _enabled: None,
+            ),
             on_set_page_ready_timeout=getattr(
                 self.controller,
                 "set_page_ready_timeout_seconds",
@@ -1356,10 +1364,11 @@ class MainWindow(QMainWindow):
         self._sync_config(self.controller.config)
         self._render_bot_actions_status()
         self._ensure_window_icon()
+        tray_icon = self._tray_icon()
         self.tray_controller = tray_controller_factory(
             window=self,
             controller=self.controller,
-            icon=self.windowIcon(),
+            icon=tray_icon,
             initial_bot_state=self.bot_state,
         )
 
@@ -1814,6 +1823,13 @@ class MainWindow(QMainWindow):
             "performanceMode": bool(
                 getattr(self.controller.config, "performance_mode_enabled", False)
             ),
+            "twentyFourSevenMode": bool(
+                getattr(
+                    self.controller.config,
+                    "twenty_four_seven_mode_enabled",
+                    False,
+                )
+            ),
             "metrics": [
                 {"label": "Raids Completed", "value": self.raids_completed_label.text()},
                 {"label": "Raids Failed", "value": self.raids_failed_label.text()},
@@ -1958,6 +1974,11 @@ class MainWindow(QMainWindow):
                     "warmup": bool(getattr(profile, "warmup_enabled", False)),
                     "warmupProgress": self._web_warmup_progress(profile),
                     "error": state.last_error if profile_status == "failed" else None,
+                    "errorCount": max(0, int(getattr(state, "error_count", 0) or 0)),
+                    "errorReasons": [
+                        self._web_profile_failure_chip_label(reason)
+                        for reason in getattr(state, "error_reasons", ()) or ()
+                    ],
                     "raidNowFeedback": self._raid_now_feedback_by_profile.get(
                         profile.profile_directory,
                         "",
@@ -2007,7 +2028,6 @@ class MainWindow(QMainWindow):
         if bool(getattr(profile, "warmup_enabled", False)):
             return [
                 {"label": "Warm me up baby", "tone": "warm"},
-                {"label": "Random real action", "tone": ""},
             ]
         chips = []
         for field_name, label, _slot_key in raid_profile_action_specs():
@@ -2025,6 +2045,7 @@ class MainWindow(QMainWindow):
             "window_close_failed": "Window close failed",
             "bot_action_not_configured": "Bot action not configured",
             "page_ready_not_found": "Page ready not found",
+            "ui_did_not_change": "UI did not change",
         }
         if normalized_reason in labels:
             return labels[normalized_reason]
@@ -2986,10 +3007,16 @@ class MainWindow(QMainWindow):
             return f"{hours}h {minutes}m"
         return f"{minutes}m"
 
+    def _tray_icon(self) -> QIcon:
+        icon = app_icon()
+        if not icon.isNull():
+            return icon
+        return QIcon()
+
     def _ensure_window_icon(self) -> None:
         if not self.windowIcon().isNull():
             return
-        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        icon = app_icon()
         if not icon.isNull():
             self.setWindowIcon(icon)
 

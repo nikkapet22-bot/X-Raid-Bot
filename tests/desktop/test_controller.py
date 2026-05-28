@@ -521,6 +521,23 @@ def test_controller_set_performance_mode_enabled_persists_config(qtbot) -> None:
     assert controller.config.performance_mode_enabled is True
 
 
+def test_controller_set_twenty_four_seven_mode_enabled_persists_config(qtbot) -> None:
+    from raidbot.desktop.controller import DesktopController
+
+    storage = FakeStorage()
+    controller = DesktopController(
+        storage=storage,
+        config=build_config(),
+        worker_factory=lambda **kwargs: FakeWorker(**kwargs),
+        runner_factory=lambda: SubmitExecutingRunner(),
+    )
+
+    controller.set_twenty_four_seven_mode_enabled(True)
+
+    assert storage.saved_configs[-1].twenty_four_seven_mode_enabled is True
+    assert controller.config.twenty_four_seven_mode_enabled is True
+
+
 def test_controller_reset_all_raid_profiles_submits_worker_command_with_replay_enabled(
     qtbot,
 ) -> None:

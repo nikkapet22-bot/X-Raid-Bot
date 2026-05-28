@@ -162,26 +162,15 @@ def build_application_stylesheet() -> str:
         background-color: #060b16;
         border-right: 1px solid {BORDER};
     }}
-    QFrame#shellMonogramHalo {{
-        background-color: qradialgradient(cx: 0.5, cy: 0.5, radius: 0.55,
-            fx: 0.5, fy: 0.5,
-            stop: 0 rgba(184, 167, 122, 0.12),
-            stop: 0.62 rgba(184, 167, 122, 0.08),
-            stop: 1 rgba(184, 167, 122, 0.02));
-        border: 1px solid rgba(184, 167, 122, 0.10);
-        border-radius: 38px;
+    QFrame#shellBrandHalo {{
+        background-color: transparent;
+        border: none;
+        border-radius: 0px;
     }}
-    QLabel#shellMonogram {{
-        background-color: qradialgradient(cx: 0.35, cy: 0.25, radius: 1.0,
-            fx: 0.35, fy: 0.25,
-            stop: 0 #eee6d0,
-            stop: 0.58 #b8a77a,
-            stop: 1 #746643);
-        border: 1px solid {ACCENT_HOVER};
-        border-radius: 18px;
-        color: {PRIMARY_TEXT};
-        font-size: 18px;
-        font-weight: 900;
+    QLabel#shellBrandMark {{
+        background-color: transparent;
+        border: none;
+        border-radius: 14px;
     }}
     QPushButton#shellTabButton,
     QPushButton#shellAccountButton {{

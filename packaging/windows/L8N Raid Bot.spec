@@ -21,6 +21,14 @@ a = Analysis(
             str(repo_root / "docs" / "ui-preview" / "dashboard-refresh-preview.html"),
             "docs/ui-preview",
         ),
+        (
+            str(repo_root / "raidbot" / "desktop" / "assets" / "app_icon.png"),
+            "raidbot/desktop/assets",
+        ),
+        (
+            str(repo_root / "raidbot" / "desktop" / "assets" / "app_icon.ico"),
+            "raidbot/desktop/assets",
+        ),
     ],
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -48,6 +56,7 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
+    icon=str(repo_root / "raidbot" / "desktop" / "assets" / "app_icon.ico"),
     disable_windowed_traceback=False,
 )
 coll = COLLECT(

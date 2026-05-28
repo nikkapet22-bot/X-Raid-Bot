@@ -118,6 +118,7 @@ class DesktopStorage:
             "auto_run_enabled": config.auto_run_enabled,
             "raid_on_restart_enabled": config.raid_on_restart_enabled,
             "performance_mode_enabled": config.performance_mode_enabled,
+            "twenty_four_seven_mode_enabled": config.twenty_four_seven_mode_enabled,
             "default_auto_sequence_id": config.default_auto_sequence_id,
             "auto_run_settle_ms": config.auto_run_settle_ms,
             "slot_1_finish_delay_seconds": config.slot_1_finish_delay_seconds,
@@ -189,6 +190,10 @@ class DesktopStorage:
             ),
             performance_mode_enabled=self._maybe_bool(
                 data.get("performance_mode_enabled"),
+                default=False,
+            ),
+            twenty_four_seven_mode_enabled=self._maybe_bool(
+                data.get("twenty_four_seven_mode_enabled"),
                 default=False,
             ),
             default_auto_sequence_id=data.get("default_auto_sequence_id"),
@@ -717,12 +722,35 @@ class DesktopStorage:
             return 0
         return min(max(normalized, 0), 20)
 
+    def _normalize_profile_error_count(self, value: Any) -> int:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(normalized, 0)
+
+    def _normalize_profile_error_reasons(self, value: Any) -> tuple[str, ...]:
+        if not isinstance(value, (list, tuple)):
+            return ()
+        reasons: list[str] = []
+        for item in value:
+            reason = str(item or "").strip()
+            if reason:
+                reasons.append(reason)
+        return tuple(reasons[-20:])
+
     def _raid_profile_state_to_data(self, profile_state: RaidProfileState) -> dict[str, Any]:
         return {
             "profile_directory": profile_state.profile_directory,
             "label": profile_state.label,
             "status": profile_state.status,
             "last_error": profile_state.last_error,
+            "error_count": self._normalize_profile_error_count(
+                profile_state.error_count
+            ),
+            "error_reasons": list(
+                self._normalize_profile_error_reasons(profile_state.error_reasons)
+            ),
         }
 
     def _raid_profile_state_from_data(self, data: dict[str, Any]) -> RaidProfileState:
@@ -732,6 +760,10 @@ class DesktopStorage:
             label=str(data.get("label") or profile_directory).strip() or profile_directory,
             status=str(data.get("status") or "green"),
             last_error=data.get("last_error"),
+            error_count=self._normalize_profile_error_count(data.get("error_count")),
+            error_reasons=self._normalize_profile_error_reasons(
+                data.get("error_reasons")
+            ),
         )
 
     def _normalize_raid_profile_states(
@@ -750,6 +782,12 @@ class DesktopStorage:
                 label=str(profile_state.label).strip() or profile_directory,
                 status=str(profile_state.status or "green"),
                 last_error=profile_state.last_error,
+                error_count=self._normalize_profile_error_count(
+                    profile_state.error_count
+                ),
+                error_reasons=self._normalize_profile_error_reasons(
+                    profile_state.error_reasons
+                ),
             )
         if config is None:
             return tuple(provided_states.values())
@@ -763,6 +801,12 @@ class DesktopStorage:
                     status=existing_state.status if existing_state is not None else "green",
                     last_error=(
                         existing_state.last_error if existing_state is not None else None
+                    ),
+                    error_count=(
+                        existing_state.error_count if existing_state is not None else 0
+                    ),
+                    error_reasons=(
+                        existing_state.error_reasons if existing_state is not None else ()
                     ),
                 )
             )

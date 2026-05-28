@@ -60,6 +60,7 @@ def test_config_round_trip(tmp_path) -> None:
         default_action_bookmark=True,
         default_action_reply=False,
         auto_run_enabled=True,
+        twenty_four_seven_mode_enabled=True,
         default_auto_sequence_id="seq-1",
         auto_run_settle_ms=2750,
         bot_action_slots=(
@@ -84,6 +85,7 @@ def test_config_round_trip(tmp_path) -> None:
     assert storage.is_first_run() is False
     assert storage.config_path.exists()
     assert loaded.auto_run_settle_ms == 2750
+    assert loaded.twenty_four_seven_mode_enabled is True
     assert loaded.bot_action_slots == (
         BotActionSlotConfig(key="slot_1_r", label="R", enabled=True),
         BotActionSlotConfig(
@@ -1008,6 +1010,8 @@ def test_storage_round_trips_raid_profile_states(tmp_path) -> None:
                 label="Maria",
                 status="red",
                 last_error="not_logged_in",
+                error_count=2,
+                error_reasons=("not_logged_in", "window_close_failed"),
             ),
         )
     )
@@ -1028,6 +1032,8 @@ def test_storage_round_trips_raid_profile_states(tmp_path) -> None:
             label="Maria",
             status="red",
             last_error="not_logged_in",
+            error_count=2,
+            error_reasons=("not_logged_in", "window_close_failed"),
         ),
     )
 

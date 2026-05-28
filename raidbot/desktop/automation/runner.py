@@ -627,14 +627,42 @@ class SequenceRunner:
             )
             if stopped_result is not None:
                 return stopped_result
-            stopped_result = self._try_input_action(
-                lambda: self.input_driver.paste_text(step.preset_text),
-                window,
+            self._emit_slot_1_event(
+                "slot1_text_paste_started",
                 step_index,
-                step_phase="slot1_after_open_click",
+                text_length=len(step.preset_text),
+                window_handle=window.handle,
             )
+            try:
+                stopped_result = self._try_input_action(
+                    lambda: self.input_driver.paste_text(step.preset_text),
+                    window,
+                    step_index,
+                    step_phase="slot1_after_open_click",
+                )
+            except Exception as exc:
+                self._emit_slot_1_event(
+                    "slot1_text_paste_failed",
+                    step_index,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                    window_handle=window.handle,
+                )
+                raise
             if stopped_result is not None:
+                self._emit_slot_1_event(
+                    "slot1_text_paste_stopped",
+                    step_index,
+                    reason=stopped_result.failure_reason,
+                    window_handle=window.handle,
+                )
                 return stopped_result
+            self._emit_slot_1_event(
+                "slot1_text_paste_succeeded",
+                step_index,
+                text_length=len(step.preset_text),
+                window_handle=window.handle,
+            )
         if step.preset_text is not None and (skip_text_paste or self._stop_requested):
             if self._stop_requested:
                 return self._stopped_result(
@@ -671,14 +699,44 @@ class SequenceRunner:
             )
             if stopped_result is not None:
                 return stopped_result
-            stopped_result = self._try_input_action(
-                lambda: self.input_driver.paste_image_file(Path(step.preset_image_path)),
-                window,
+            self._emit_slot_1_event(
+                "slot1_image_paste_started",
                 step_index,
-                step_phase="slot1_after_text",
+                image_path=str(step.preset_image_path),
+                window_handle=window.handle,
             )
+            try:
+                stopped_result = self._try_input_action(
+                    lambda: self.input_driver.paste_image_file(Path(step.preset_image_path)),
+                    window,
+                    step_index,
+                    step_phase="slot1_after_text",
+                )
+            except Exception as exc:
+                self._emit_slot_1_event(
+                    "slot1_image_paste_failed",
+                    step_index,
+                    image_path=str(step.preset_image_path),
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                    window_handle=window.handle,
+                )
+                raise
             if stopped_result is not None:
+                self._emit_slot_1_event(
+                    "slot1_image_paste_stopped",
+                    step_index,
+                    image_path=str(step.preset_image_path),
+                    reason=stopped_result.failure_reason,
+                    window_handle=window.handle,
+                )
                 return stopped_result
+            self._emit_slot_1_event(
+                "slot1_image_paste_succeeded",
+                step_index,
+                image_path=str(step.preset_image_path),
+                window_handle=window.handle,
+            )
             stopped_result = self._sleep_or_stop(
                 1.0,
                 window,
@@ -731,12 +789,43 @@ class SequenceRunner:
         )
         finish_location = prepared_finish_location
         if finish_location is None:
+            self._emit_slot_1_event(
+                "slot1_finish_search_started",
+                step_index,
+                phase="final",
+                window_handle=window.handle,
+            )
             finish_location = self._find_match_for_template(
                 window,
                 finish_search_step,
                 step_index,
                 finish_template,
             )
+            if not isinstance(finish_location, RunResult):
+                found_window, _found_frame, found_match = finish_location
+                self._emit_slot_1_event(
+                    "slot1_finish_search_found",
+                    step_index,
+                    phase="final",
+                    score=found_match.score,
+                    center=[found_match.center_x, found_match.center_y],
+                    window_handle=found_window.handle,
+                )
+            elif finish_location.failure_reason == "match_not_found":
+                self._emit_slot_1_event(
+                    "slot1_finish_search_not_found",
+                    step_index,
+                    phase="final",
+                    window_handle=finish_location.window_handle,
+                )
+            else:
+                self._emit_slot_1_event(
+                    "slot1_finish_search_failed",
+                    step_index,
+                    phase="final",
+                    reason=finish_location.failure_reason,
+                    window_handle=finish_location.window_handle,
+                )
         if isinstance(finish_location, RunResult):
             return finish_location
         finish_window, finish_frame, finish_match = finish_location
@@ -751,6 +840,12 @@ class SequenceRunner:
         )
         if isinstance(finish_point, RunResult):
             return finish_point
+        self._emit_slot_1_event(
+            "slot1_finish_click_started",
+            step_index,
+            point=finish_point,
+            window_handle=finish_window.handle,
+        )
         stopped_result = self._try_input_action(
             lambda: self.input_driver.move_click(
                 finish_point, delay_seconds=_SLOT_1_FINISH_CLICK_DELAY_SECONDS
@@ -761,6 +856,12 @@ class SequenceRunner:
         )
         if stopped_result is not None:
             return stopped_result
+        self._emit_slot_1_event(
+            "slot1_finish_click_succeeded",
+            step_index,
+            point=finish_point,
+            window_handle=finish_window.handle,
+        )
         self.emit_event(
             {
                 "type": "step_clicked",
@@ -837,6 +938,14 @@ class SequenceRunner:
                 }
             )
             return None
+        self._emit_slot_1_event(
+            "slot1_finish_click_confirmation_failed",
+            step_index,
+            point=finish_point,
+            score=finish_match.score,
+            center=[finish_match.center_x, finish_match.center_y],
+            window_handle=finish_window.handle,
+        )
         return RunResult(
             status="failed",
             failure_reason="ui_did_not_change",
@@ -987,6 +1096,12 @@ class SequenceRunner:
             max_search_seconds=_SLOT_1_FINISH_AFTER_TEXT_SEARCH_SECONDS,
             max_scroll_attempts=0,
         )
+        self._emit_slot_1_event(
+            "slot1_finish_search_started",
+            step_index,
+            phase="after_image",
+            window_handle=window.handle,
+        )
         finish_location = self._find_match_for_template(
             window,
             finish_probe_step,
@@ -994,6 +1109,15 @@ class SequenceRunner:
             finish_template,
         )
         if not isinstance(finish_location, RunResult):
+            found_window, _found_frame, found_match = finish_location
+            self._emit_slot_1_event(
+                "slot1_finish_search_found",
+                step_index,
+                phase="after_image",
+                score=found_match.score,
+                center=[found_match.center_x, found_match.center_y],
+                window_handle=found_window.handle,
+            )
             return finish_location
         if finish_location.failure_reason != "match_not_found":
             return finish_location
@@ -1158,6 +1282,11 @@ class SequenceRunner:
             max_search_seconds=_SLOT_1_REPLY_SUBMIT_RECHECK_SECONDS,
             max_scroll_attempts=0,
         )
+        self._emit_slot_1_event(
+            "slot1_finish_recheck_started",
+            step_index,
+            window_handle=window.handle,
+        )
         finish_still_visible = self._find_match_for_template(
             window,
             reply_check_step,
@@ -1166,6 +1295,11 @@ class SequenceRunner:
         )
         if isinstance(finish_still_visible, RunResult):
             if finish_still_visible.failure_reason == "match_not_found":
+                self._emit_slot_1_event(
+                    "slot1_finish_recheck_gone",
+                    step_index,
+                    window_handle=finish_still_visible.window_handle,
+                )
                 return (window, finish_frame, finish_match, False)
             return finish_still_visible
         retry_window, retry_frame, retry_match = finish_still_visible
@@ -1174,7 +1308,21 @@ class SequenceRunner:
             retry_frame,
             finish_match,
         ):
+            self._emit_slot_1_event(
+                "slot1_finish_recheck_changed",
+                step_index,
+                score=retry_match.score,
+                center=[retry_match.center_x, retry_match.center_y],
+                window_handle=retry_window.handle,
+            )
             return (window, finish_frame, finish_match, False)
+        self._emit_slot_1_event(
+            "slot1_finish_recheck_still_visible",
+            step_index,
+            score=retry_match.score,
+            center=[retry_match.center_x, retry_match.center_y],
+            window_handle=retry_window.handle,
+        )
         retry_window = self._refresh_active_window(retry_window, step_index)
         if isinstance(retry_window, RunResult):
             return retry_window
@@ -1186,6 +1334,12 @@ class SequenceRunner:
         )
         if isinstance(retry_point, RunResult):
             return retry_point
+        self._emit_slot_1_event(
+            "slot1_finish_reclick_started",
+            step_index,
+            point=retry_point,
+            window_handle=retry_window.handle,
+        )
         stopped_result = self._try_input_action(
             lambda: self.input_driver.move_click(
                 retry_point, delay_seconds=_SLOT_1_FINISH_CLICK_DELAY_SECONDS
@@ -1195,6 +1349,12 @@ class SequenceRunner:
         )
         if stopped_result is not None:
             return stopped_result
+        self._emit_slot_1_event(
+            "slot1_finish_reclick_succeeded",
+            step_index,
+            point=retry_point,
+            window_handle=retry_window.handle,
+        )
         self.emit_event(
             {
                 "type": "step_clicked",
@@ -1342,6 +1502,20 @@ class SequenceRunner:
         if next_match is None:
             return True
         return self._has_material_shift(previous_match, next_match)
+
+    def _emit_slot_1_event(
+        self,
+        event_type: str,
+        step_index: int,
+        **fields: Any,
+    ) -> None:
+        self.emit_event(
+            {
+                "type": event_type,
+                "step_index": step_index,
+                **fields,
+            }
+        )
 
     def _confirm_ui_changed_after_click(
         self,

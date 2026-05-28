@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -173,6 +174,7 @@ class FakeController(QObject):
         self.reset_all_raid_profiles_calls = 0
         self.set_raid_on_restart_enabled_calls = []
         self.set_performance_mode_enabled_calls = []
+        self.set_twenty_four_seven_mode_enabled_calls = []
         self.toggle_pause_resume_calls = 0
         self.dashboard_metric_reset_requests = []
         self.sender_candidate_scan_calls = []
@@ -433,6 +435,12 @@ class FakeController(QObject):
     def set_performance_mode_enabled(self, enabled: bool) -> None:
         self.set_performance_mode_enabled_calls.append(bool(enabled))
         self.apply_config(replace(self.config, performance_mode_enabled=bool(enabled)))
+
+    def set_twenty_four_seven_mode_enabled(self, enabled: bool) -> None:
+        self.set_twenty_four_seven_mode_enabled_calls.append(bool(enabled))
+        self.apply_config(
+            replace(self.config, twenty_four_seven_mode_enabled=bool(enabled))
+        )
 
     def toggle_pause_resume(self) -> None:
         self.toggle_pause_resume_calls += 1
@@ -1644,6 +1652,12 @@ def test_main_window_uses_l8n_raid_bot_branding(qtbot) -> None:
 
     assert window.windowTitle() == "L8N Raid Bot"
     assert window.findChild(QLabel, "appName") is None
+    assert window.top_tabs.findChild(QLabel, "shellMonogram") is None
+    brand_mark = window.top_tabs.findChild(QLabel, "shellBrandMark")
+    assert brand_mark is not None
+    assert brand_mark.text() == ""
+    assert brand_mark.pixmap() is not None
+    assert not brand_mark.pixmap().isNull()
     assert window.top_tabs.findChild(QLabel, "shellSessionStamp").text() == APP_VERSION_BADGE
 
 
@@ -3042,6 +3056,51 @@ def test_main_window_web_state_exposes_performance_mode(qtbot) -> None:
     assert web_state["performanceMode"] is True
 
 
+def test_main_window_web_state_exposes_twenty_four_seven_mode(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(twenty_four_seven_mode_enabled=True)
+    )
+    window = build_window(controller, FakeStorage(config=controller.config))
+    qtbot.addWidget(window)
+
+    web_state = window._build_web_dashboard_state()
+
+    assert web_state["twentyFourSevenMode"] is True
+
+
+def test_main_window_web_state_keeps_24_7_failures_green_with_badge(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            raid_profiles=(RaidProfileConfig("Profile 3", "Maria"),),
+            twenty_four_seven_mode_enabled=True,
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState(
+                    "Profile 3",
+                    "Maria",
+                    "green",
+                    "ui_did_not_change",
+                    error_count=2,
+                    error_reasons=("ui_did_not_change", "window_close_failed"),
+                ),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    profile = window._build_web_dashboard_state()["profiles"][0]
+
+    assert profile["statusClass"] == "healthy"
+    assert profile["error"] is None
+    assert profile["errorCount"] == 2
+    assert profile["errorReasons"] == ["UI did not change", "Window close failed"]
+
+
 def test_main_window_web_state_exposes_app_version(qtbot) -> None:
     from raidbot.desktop.branding import APP_VERSION_BADGE
 
@@ -3521,6 +3580,36 @@ def test_main_window_web_profile_raid_now_allows_warmup_when_running_and_connect
         assert web_profile["raidNowDisabledReason"] == ""
     finally:
         controller.botStateChanged.emit("stopped")
+
+
+def test_main_window_web_warmup_profile_hides_random_real_action_chip(qtbot) -> None:
+    controller = FakeController(
+        config=build_config(
+            chrome_profile_directory="Profile 3",
+            raid_profiles=(
+                RaidProfileConfig(
+                    "Profile 3",
+                    "Maria",
+                    True,
+                    warmup_enabled=True,
+                ),
+            ),
+        )
+    )
+    storage = FakeStorage(
+        config=controller.config,
+        state=DesktopAppState(
+            raid_profile_states=(
+                RaidProfileState("Profile 3", "Maria", "green", None),
+            )
+        ),
+    )
+    window = build_window(controller, storage)
+    qtbot.addWidget(window)
+
+    web_profile = window._build_web_dashboard_state()["profiles"][0]
+
+    assert web_profile["chips"] == [{"label": "Warm me up baby", "tone": "warm"}]
 
 
 def test_main_window_web_profile_raid_now_explains_missing_profile_actions(
@@ -4063,6 +4152,21 @@ def test_main_window_uses_visible_fallback_icon_for_tray(qtbot) -> None:
 
     assert captured["icon_is_null"] is False
     assert window.windowIcon().isNull() is False
+
+
+def test_app_icon_asset_loads_exact_supplied_logo_for_window_and_tray(qtbot) -> None:
+    from raidbot.desktop.assets import app_icon, app_icon_path
+
+    _ = qtbot
+    icon_path = app_icon_path()
+    icon = app_icon()
+
+    assert icon_path.exists()
+    assert icon_path.name == "app_icon.png"
+    assert hashlib.sha256(icon_path.read_bytes()).hexdigest() == (
+        "6d0796574bb87f5900fa0302ba89c98983dfc0c78568ca1f1c83653ee0bfac61"
+    )
+    assert icon.isNull() is False
 
 
 def test_main_window_buttons_reflect_stopped_state_variants(qtbot) -> None:

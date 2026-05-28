@@ -36,6 +36,14 @@ def test_windows_spec_exists_for_l8n_raid_bot() -> None:
     assert spec_path.exists()
 
 
+def test_windows_spec_bundles_and_applies_app_icon() -> None:
+    content = Path("packaging/windows/L8N Raid Bot.spec").read_text(encoding="utf-8")
+
+    assert "app_icon.ico" in content
+    assert "raidbot/desktop/assets" in content
+    assert "icon=str(repo_root / \"raidbot\" / \"desktop\" / \"assets\" / \"app_icon.ico\")" in content
+
+
 def test_build_script_references_spec_and_versioned_zip_name() -> None:
     content = Path("scripts/build_windows_beta.py").read_text(encoding="utf-8")
 

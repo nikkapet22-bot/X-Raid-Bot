@@ -200,6 +200,12 @@ class DesktopController(QObject):
             resolve_sender_entries=False,
         )
 
+    def set_twenty_four_seven_mode_enabled(self, enabled: bool) -> None:
+        self._persist_config(
+            replace(self.config, twenty_four_seven_mode_enabled=bool(enabled)),
+            resolve_sender_entries=False,
+        )
+
     def set_default_auto_sequence_id(self, sequence_id: str | None) -> None:
         self.apply_config(replace(self.config, default_auto_sequence_id=sequence_id))
 

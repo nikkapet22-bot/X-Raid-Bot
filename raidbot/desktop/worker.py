@@ -56,6 +56,10 @@ from raidbot.telegram_client import TelegramRaidListener
 
 _PAGE_READY_POST_MATCH_DELAY_SECONDS = 0.5
 _PAGE_READY_MAX_SEARCH_SECONDS = 12.0
+_ACTION_READY_MATCH_SEARCH_SECONDS = 2.0
+_ACTION_READY_STABILITY_DELAY_SECONDS = 0.5
+_ACTION_READY_STABILITY_ATTEMPTS = 3
+_ACTION_READY_CENTER_TOLERANCE_PIXELS = 8
 _PAGE_EXIT_MAX_SEARCH_SECONDS = 1.0
 _WINDOW_CLOSE_CONFIRM_SECONDS = 0.75
 _WINDOW_CLOSE_CONFIRM_POLL_SECONDS = 0.05
@@ -75,6 +79,7 @@ _PAUSE_WAIT_POLL_SECONDS = 0.1
 _HELD_KEY_REPEAT_INTERVAL_SECONDS = 0.2
 _OPENED_WINDOW_DISCOVERY_TIMEOUT_SECONDS = 5.0
 _OPENED_WINDOW_DISCOVERY_INTERVAL_SECONDS = 0.25
+_PROFILE_ERROR_HISTORY_LIMIT = 20
 
 
 EmitEvent = Callable[[dict[str, Any]], None]
@@ -125,6 +130,23 @@ class PausedExecutionSnapshot:
     recovery_performed: bool
     failure_recorded: bool
     last_failure_reason: str | None
+
+
+@dataclass(frozen=True)
+class AutomationDiagnosticContext:
+    sequence_id: str
+    url: str
+    profile_directory: str
+    profile_label: str
+    window_handle: int | None
+    step_names: tuple[str, ...]
+
+    def step_name_for(self, step_index: int | None) -> str | None:
+        if step_index is None:
+            return None
+        if step_index < 0 or step_index >= len(self.step_names):
+            return None
+        return self.step_names[step_index]
 
 
 class DesktopBotWorker:
@@ -190,6 +212,8 @@ class DesktopBotWorker:
         self._paused_execution: PausedExecutionSnapshot | None = None
         self._active_execution_source: str | None = None
         self._active_execution_url: str | None = None
+        self._active_automation_diagnostic_context: AutomationDiagnosticContext | None = None
+        self._last_automation_runtime_event: dict[str, Any] | None = None
         self._pending_profile_run_starts: dict[tuple[str, str], datetime] = {}
         self._sync_raid_profile_states(save=False, emit=False)
 
@@ -619,6 +643,39 @@ class DesktopBotWorker:
 
     def _receive_automation_runtime_event(self, event: dict[str, Any]) -> None:
         self._emit("automation_runtime_event", event=event)
+        context = self._active_automation_diagnostic_context
+        runtime_event = dict(event)
+        step_index = self._runtime_event_step_index(runtime_event)
+        step_name = context.step_name_for(step_index) if context is not None else None
+        runtime_event_type = runtime_event.get("type")
+        diagnostic_record: dict[str, Any] = {
+            "runtime_event_type": runtime_event_type,
+            "runtime_event": runtime_event,
+        }
+        if context is not None:
+            diagnostic_record.update(
+                {
+                    "sequence_id": context.sequence_id,
+                    "url": context.url,
+                    "profile_directory": context.profile_directory,
+                    "profile_label": context.profile_label,
+                    "window_handle": context.window_handle,
+                }
+            )
+        if step_index is not None:
+            diagnostic_record["step_index"] = step_index
+        if step_name is not None:
+            diagnostic_record["step_name"] = step_name
+        self._last_automation_runtime_event = dict(diagnostic_record)
+        self._log_diagnostic("automation_runtime_event", **diagnostic_record)
+
+    def _runtime_event_step_index(self, event: dict[str, Any]) -> int | None:
+        if "step_index" not in event:
+            return None
+        try:
+            return int(event["step_index"])
+        except (TypeError, ValueError):
+            return None
 
     def _snapshot_target_windows(self):
         runtime = self._automation_runtime
@@ -1001,6 +1058,16 @@ class DesktopBotWorker:
             started = False
             start_step_phase = None
 
+        self._active_automation_diagnostic_context = AutomationDiagnosticContext(
+            sequence_id=sequence_id,
+            url=item.normalized_url,
+            profile_directory=profile.profile_directory,
+            profile_label=profile.label,
+            window_handle=getattr(opened_window, "handle", None),
+            step_names=tuple(str(step.name) for step in sequence.steps),
+        )
+        self._last_automation_runtime_event = None
+
         if resume_snapshot is None or resume_snapshot.mode != "sequence":
             page_ready_failure_reason, scroll_anchor = self._wait_for_page_ready(
                 runtime,
@@ -1036,23 +1103,45 @@ class DesktopBotWorker:
                     if troubleshoot_failure_reason == "stopped":
                         raise UserPauseRequested(snapshot=sequence_snapshot(started=started))
                     page_ready_failure_reason = troubleshoot_failure_reason
-                self._record_raid_profile_failure(
+                self._record_opened_profile_failure(
                     item,
                     profile,
                     page_ready_failure_reason,
+                    runtime=runtime,
+                    opened_window=opened_window,
                     sequence_id=sequence_id,
                 )
                 return "failed", True, page_ready_failure_reason
+            if self.config.page_ready_template_path is not None:
+                action_ready_failure_reason = self._wait_for_first_action_capture_stable(
+                    runtime,
+                    opened_window,
+                    sequence,
+                )
+                if action_ready_failure_reason == "stopped":
+                    raise UserPauseRequested(snapshot=sequence_snapshot(started=started))
+                if action_ready_failure_reason is not None:
+                    self._record_opened_profile_failure(
+                        item,
+                        profile,
+                        action_ready_failure_reason,
+                        runtime=runtime,
+                        opened_window=opened_window,
+                        sequence_id=sequence_id,
+                    )
+                    return "failed", True, action_ready_failure_reason
             anchor_failure_reason = self._move_cursor_to_scroll_anchor(
                 runtime,
                 opened_window,
                 scroll_anchor,
             )
             if anchor_failure_reason is not None:
-                self._record_raid_profile_failure(
+                self._record_opened_profile_failure(
                     item,
                     profile,
                     anchor_failure_reason,
+                    runtime=runtime,
+                    opened_window=opened_window,
                     sequence_id=sequence_id,
                 )
                 return "failed", True, anchor_failure_reason
@@ -1093,10 +1182,12 @@ class DesktopBotWorker:
                 exc,
                 "automation_execution_failed",
             )
-            self._record_raid_profile_failure(
+            self._record_opened_profile_failure(
                 item,
                 profile,
                 failure_reason,
+                runtime=runtime,
+                opened_window=opened_window,
                 sequence_id=sequence_id,
             )
             return "failed", True, failure_reason
@@ -1113,10 +1204,12 @@ class DesktopBotWorker:
             )
         if status != "completed":
             failure_reason = failure_reason or "automation_execution_failed"
-            self._record_raid_profile_failure(
+            self._record_opened_profile_failure(
                 item,
                 profile,
                 failure_reason,
+                runtime=runtime,
+                opened_window=opened_window,
                 sequence_id=sequence_id,
             )
             return "failed", True, failure_reason
@@ -1805,6 +1898,135 @@ class DesktopBotWorker:
         )
         return failure_reason, None
 
+    def _wait_for_first_action_capture_stable(
+        self,
+        runtime: Any,
+        opened_window: Any,
+        sequence: AutomationSequence,
+    ) -> str | None:
+        if not sequence.steps:
+            self._log_diagnostic(
+                "action_ready_stability_result",
+                status="skipped",
+                reason="sequence_empty",
+                window=self._window_debug_data(opened_window),
+            )
+            return None
+        if not hasattr(runtime, "wait_for_step_match"):
+            self._log_diagnostic(
+                "action_ready_stability_result",
+                status="failed",
+                reason="automation_runtime_unavailable",
+                window=self._window_debug_data(opened_window),
+            )
+            return "automation_runtime_unavailable"
+
+        first_step = sequence.steps[0]
+        probe_step = replace(
+            first_step,
+            max_search_seconds=_ACTION_READY_MATCH_SEARCH_SECONDS,
+            max_scroll_attempts=0,
+            max_click_attempts=1,
+            post_click_settle_ms=0,
+        )
+        self._log_diagnostic(
+            "action_ready_stability_start",
+            step_name=first_step.name,
+            template_path=first_step.template_path,
+            window=self._window_debug_data(opened_window),
+        )
+
+        previous_match = None
+        for attempt in range(1, _ACTION_READY_STABILITY_ATTEMPTS + 1):
+            result = runtime.wait_for_step_match(
+                probe_step,
+                opened_window.handle,
+                require_interactable_window=True,
+            )
+            status = getattr(result, "status", None)
+            match = getattr(result, "match", None)
+            center = self._match_center(match)
+            self._log_diagnostic(
+                "action_ready_stability_probe",
+                attempt=attempt,
+                status=status,
+                step_name=first_step.name,
+                center=center,
+                window=self._window_debug_data(
+                    self._find_runtime_window_by_handle(runtime, opened_window.handle)
+                    or opened_window
+                ),
+            )
+            if status == "stopped":
+                return "stopped"
+            if status != "dry_run_match_found" or center is None:
+                failure_reason = getattr(result, "failure_reason", None)
+                if failure_reason in {None, "match_not_found"}:
+                    self._log_diagnostic(
+                        "action_ready_stability_result",
+                        status="skipped",
+                        reason="first_action_not_visible",
+                        step_name=first_step.name,
+                        window=self._window_debug_data(opened_window),
+                    )
+                    return None
+                self._log_diagnostic(
+                    "action_ready_stability_result",
+                    status="failed",
+                    reason=str(failure_reason),
+                    step_name=first_step.name,
+                    window=self._window_debug_data(opened_window),
+                )
+                return str(failure_reason)
+            if previous_match is not None and self._match_centers_are_stable(
+                previous_match,
+                center,
+            ):
+                self._log_diagnostic(
+                    "action_ready_stability_result",
+                    status="stable",
+                    step_name=first_step.name,
+                    center=center,
+                    window=self._window_debug_data(
+                        self._find_runtime_window_by_handle(runtime, opened_window.handle)
+                        or opened_window
+                    ),
+                )
+                return None
+            previous_match = center
+            if attempt < _ACTION_READY_STABILITY_ATTEMPTS:
+                self.auto_run_wait(_ACTION_READY_STABILITY_DELAY_SECONDS)
+
+        self._log_diagnostic(
+            "action_ready_stability_result",
+            status="failed",
+            reason="action_capture_not_stable",
+            step_name=first_step.name,
+            window=self._window_debug_data(opened_window),
+        )
+        return "action_capture_not_stable"
+
+    @staticmethod
+    def _match_center(match: Any) -> tuple[int, int] | None:
+        if match is None:
+            return None
+        try:
+            return (int(match.center_x), int(match.center_y))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    @staticmethod
+    def _match_centers_are_stable(
+        previous_center: tuple[int, int],
+        current_center: tuple[int, int],
+    ) -> bool:
+        return (
+            abs(previous_center[0] - current_center[0])
+            <= _ACTION_READY_CENTER_TOLERANCE_PIXELS
+            and abs(previous_center[1] - current_center[1])
+            <= _ACTION_READY_CENTER_TOLERANCE_PIXELS
+        )
+
     def _run_sequence_with_runtime_resume(
         self,
         runtime: Any,
@@ -2371,10 +2593,12 @@ class DesktopBotWorker:
                 ),
             )
             if warmup_failure_reason is not None:
-                self._record_raid_profile_failure(
+                self._record_opened_profile_failure(
                     item,
                     profile,
                     warmup_failure_reason,
+                    runtime=runtime,
+                    opened_window=opened_window,
                     sequence_id="warmup-mode",
                 )
                 return "failed", True, warmup_failure_reason
@@ -2382,6 +2606,7 @@ class DesktopBotWorker:
 
         if current_mode == "warmup_feed_open":
             self._raise_if_pause_requested(warmup_snapshot("warmup_feed_open"))
+            home_window = opened_window
             opened_window, open_feed_failure_reason = self._open_url_in_existing_profile_window(
                 runtime,
                 profile,
@@ -2390,10 +2615,12 @@ class DesktopBotWorker:
             )
             if open_feed_failure_reason is not None or opened_window is None:
                 failure_reason = open_feed_failure_reason or "target_window_not_found"
-                self._record_raid_profile_failure(
+                self._record_opened_profile_failure(
                     item,
                     profile,
                     failure_reason,
+                    runtime=runtime,
+                    opened_window=opened_window or home_window,
                     sequence_id="warmup-mode",
                 )
                 return "failed", True, failure_reason
@@ -2415,10 +2642,12 @@ class DesktopBotWorker:
             ),
         )
         if warmup_failure_reason is not None:
-            self._record_raid_profile_failure(
+            self._record_opened_profile_failure(
                 item,
                 profile,
                 warmup_failure_reason,
+                runtime=runtime,
+                opened_window=opened_window,
                 sequence_id="warmup-mode",
             )
             return "failed", True, warmup_failure_reason
@@ -2584,6 +2813,36 @@ class DesktopBotWorker:
             profile_directory=profile.profile_directory,
         )
 
+    def _record_opened_profile_failure(
+        self,
+        item: PendingRaidWorkItem,
+        profile: RaidProfileConfig,
+        reason: str,
+        *,
+        runtime: Any,
+        opened_window: Any,
+        sequence_id: str,
+    ) -> None:
+        close_failure_reason = self._close_automation_window_for_profile(
+            runtime,
+            opened_window,
+        )
+        if close_failure_reason is not None:
+            self._log_diagnostic(
+                "failed_profile_window_close_failed",
+                sequence_id=sequence_id,
+                profile_directory=profile.profile_directory,
+                url=item.normalized_url,
+                reason=reason,
+                close_failure_reason=close_failure_reason,
+            )
+        self._record_raid_profile_failure(
+            item,
+            profile,
+            reason,
+            sequence_id=sequence_id,
+        )
+
     def _record_raid_profile_failure(
         self,
         item: PendingRaidWorkItem,
@@ -2597,19 +2856,48 @@ class DesktopBotWorker:
             profile.profile_directory,
         )
         translated_reason = self._translate_automation_reason(reason) or "automation_execution_failed"
+        last_runtime_event = self._matching_last_runtime_event(item, profile)
+        diagnostic_fields: dict[str, Any] = {
+            "sequence_id": sequence_id,
+            "profile_directory": profile.profile_directory,
+            "url": item.normalized_url,
+            "reason": translated_reason,
+            "raw_reason": reason,
+        }
+        if last_runtime_event is not None:
+            diagnostic_fields.update(
+                {
+                    "last_runtime_event": last_runtime_event.get("runtime_event"),
+                    "last_runtime_event_type": last_runtime_event.get("runtime_event_type"),
+                    "last_runtime_step_index": last_runtime_event.get("step_index"),
+                    "last_runtime_step_name": last_runtime_event.get("step_name"),
+                    "last_runtime_window_handle": last_runtime_event.get("window_handle"),
+                }
+            )
         self._log_diagnostic(
             "profile_run_failed",
-            sequence_id=sequence_id,
-            profile_directory=profile.profile_directory,
-            url=item.normalized_url,
-            reason=translated_reason,
-            raw_reason=reason,
+            **diagnostic_fields,
         )
         self.state.raids_failed += 1
+        if getattr(self.config, "twenty_four_seven_mode_enabled", False):
+            existing_state = self._profile_state_for(profile.profile_directory)
+            error_count = max(0, existing_state.error_count if existing_state else 0) + 1
+            error_reasons = (
+                (*existing_state.error_reasons, translated_reason)
+                if existing_state is not None
+                else (translated_reason,)
+            )[-_PROFILE_ERROR_HISTORY_LIMIT:]
+            target_status = "green"
+        else:
+            error_count = 0
+            error_reasons = ()
+            target_status = "red"
         self._set_raid_profile_state(
             profile,
-            status="red",
+            status=target_status,
             last_error=translated_reason,
+            error_count=error_count,
+            error_reasons=error_reasons,
         )
         self._record_activity(
             "automation_failed",
@@ -2627,13 +2915,39 @@ class DesktopBotWorker:
             profile_directory=profile.profile_directory,
         )
 
+    def _matching_last_runtime_event(
+        self,
+        item: PendingRaidWorkItem,
+        profile: RaidProfileConfig,
+    ) -> dict[str, Any] | None:
+        last_event = self._last_automation_runtime_event
+        if not last_event:
+            return None
+        if last_event.get("profile_directory") != profile.profile_directory:
+            return None
+        if last_event.get("url") != item.normalized_url:
+            return None
+        return dict(last_event)
+
+    def _profile_state_for(self, profile_directory: str) -> RaidProfileState | None:
+        for profile_state in self.state.raid_profile_states:
+            if profile_state.profile_directory == profile_directory:
+                return profile_state
+        return None
+
     def _set_raid_profile_state(
         self,
         profile: RaidProfileConfig,
         *,
         status: str,
         last_error: str | None,
+        error_count: int = 0,
+        error_reasons: tuple[str, ...] = (),
     ) -> None:
+        normalized_error_count = max(int(error_count), 0)
+        normalized_error_reasons = tuple(
+            str(reason).strip() for reason in error_reasons if str(reason).strip()
+        )[-_PROFILE_ERROR_HISTORY_LIMIT:]
         updated_states: list[RaidProfileState] = []
         updated = False
         for profile_state in self.state.raid_profile_states:
@@ -2647,6 +2961,8 @@ class DesktopBotWorker:
                     label=profile.label,
                     status=status,
                     last_error=last_error,
+                    error_count=normalized_error_count,
+                    error_reasons=normalized_error_reasons,
                 )
             )
         if not updated:
@@ -2656,6 +2972,8 @@ class DesktopBotWorker:
                     label=profile.label,
                     status=status,
                     last_error=last_error,
+                    error_count=normalized_error_count,
+                    error_reasons=normalized_error_reasons,
                 )
             )
         self.state.raid_profile_states = tuple(updated_states)
@@ -2680,6 +2998,16 @@ class DesktopBotWorker:
                     existing_states[profile.profile_directory].last_error
                     if profile.profile_directory in existing_states
                     else None
+                ),
+                error_count=(
+                    existing_states[profile.profile_directory].error_count
+                    if profile.profile_directory in existing_states
+                    else 0
+                ),
+                error_reasons=(
+                    existing_states[profile.profile_directory].error_reasons
+                    if profile.profile_directory in existing_states
+                    else ()
                 ),
             )
             for profile in self.config.raid_profiles

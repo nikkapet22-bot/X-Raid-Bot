@@ -62,6 +62,8 @@ class RaidProfileState:
     label: str
     status: str = "green"
     last_error: str | None = None
+    error_count: int = 0
+    error_reasons: tuple[str, ...] = ()
 
 
 _DEFAULT_BOT_ACTION_SLOT_LAYOUT: tuple[tuple[str, str], ...] = (
@@ -147,6 +149,7 @@ class DesktopAppConfig:
     auto_run_enabled: bool
     raid_on_restart_enabled: bool
     performance_mode_enabled: bool
+    twenty_four_seven_mode_enabled: bool
     default_auto_sequence_id: str | None
     auto_run_settle_ms: int
     slot_1_finish_delay_seconds: int
@@ -180,6 +183,7 @@ class DesktopAppConfig:
         auto_run_enabled: bool = False,
         raid_on_restart_enabled: bool = False,
         performance_mode_enabled: bool = False,
+        twenty_four_seven_mode_enabled: bool = False,
         default_auto_sequence_id: str | None = None,
         auto_run_settle_ms: int = 1500,
         slot_1_finish_delay_seconds: int = 2,
@@ -218,6 +222,7 @@ class DesktopAppConfig:
         self.auto_run_enabled = auto_run_enabled
         self.raid_on_restart_enabled = raid_on_restart_enabled
         self.performance_mode_enabled = bool(performance_mode_enabled)
+        self.twenty_four_seven_mode_enabled = bool(twenty_four_seven_mode_enabled)
         self.default_auto_sequence_id = default_auto_sequence_id
         self.auto_run_settle_ms = auto_run_settle_ms
         self.slot_1_finish_delay_seconds = int(slot_1_finish_delay_seconds)

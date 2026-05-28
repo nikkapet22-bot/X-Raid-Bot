@@ -634,6 +634,7 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
 ) -> None:
     clock = FakeClock()
     input_driver = FakeInputDriver()
+    events: list[dict] = []
     reply_image_path = tmp_path / "reply.png"
     reply_image_path.write_bytes(b"reply image")
     finish_template_path = tmp_path / "finish.png"
@@ -646,6 +647,7 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
         template_loader=lambda _path: np.zeros((10, 10), dtype=np.uint8),
         now=clock.now,
         sleep=clock.sleep,
+        emit_event=events.append,
     )
 
     result = runner.run_sequence(
@@ -666,6 +668,25 @@ def test_runner_slot_1_pastes_text_optional_image_and_clicks_finish_template(
     assert input_driver.file_pasted_images == [reply_image_path]
     assert input_driver.pasted_images == []
     assert input_driver.clicks == [(25, 15), (45, 15)]
+    slot_events = [
+        event
+        for event in events
+        if event["type"].startswith("slot1_")
+    ]
+    assert [event["type"] for event in slot_events] == [
+        "slot1_text_paste_started",
+        "slot1_text_paste_succeeded",
+        "slot1_image_paste_started",
+        "slot1_image_paste_succeeded",
+        "slot1_finish_search_started",
+        "slot1_finish_search_found",
+        "slot1_finish_click_started",
+        "slot1_finish_click_succeeded",
+        "slot1_finish_recheck_started",
+        "slot1_finish_recheck_gone",
+    ]
+    assert slot_events[0]["text_length"] == 2
+    assert slot_events[2]["image_path"] == str(reply_image_path)
 
 
 def test_runner_slot_1_pastes_image_before_finish_probe(

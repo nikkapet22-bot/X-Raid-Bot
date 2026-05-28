@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import ctypes
 import hashlib
 from pathlib import Path
+import sys
 
 from PySide6.QtCore import QLockFile
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QMessageBox, QStyle
+from PySide6.QtWidgets import QApplication, QMessageBox
 
+from raidbot.desktop.assets import app_icon
 from raidbot.desktop.branding import APP_NAME
 from raidbot.desktop.controller import DesktopController
 from raidbot.desktop.diagnostics import DiagnosticsLogger
@@ -92,7 +95,6 @@ def _wire_wizard_completion(
 
 def _present_window(window) -> None:
     _retain_window_reference(window)
-    _ensure_window_icon(window)
     window.show()
     if hasattr(window, "ensure_visible_on_screen"):
         window.ensure_visible_on_screen()
@@ -196,16 +198,6 @@ def _restore_retained_window() -> None:
         window.activateWindow()
 
 
-def _ensure_window_icon(window) -> None:
-    if not all(hasattr(window, name) for name in ("windowIcon", "setWindowIcon", "style")):
-        return
-    if not window.windowIcon().isNull():
-        return
-    icon = window.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
-    if not icon.isNull():
-        window.setWindowIcon(icon)
-
-
 def _build_telegram_setup_service(api_id: int, api_hash: str, session_path):
     return TelegramSetupService(
         api_id=api_id,
@@ -215,11 +207,16 @@ def _build_telegram_setup_service(api_id: int, api_hash: str, session_path):
 
 
 def main(argv: list[str] | None = None) -> int:
+    _set_windows_app_user_model_id()
     app = QApplication(argv or [])
     if hasattr(app, "setApplicationName"):
         app.setApplicationName(APP_NAME)
     if hasattr(app, "setApplicationDisplayName"):
         app.setApplicationDisplayName(APP_NAME)
+    if hasattr(app, "setWindowIcon"):
+        icon = app_icon()
+        if not icon.isNull():
+            app.setWindowIcon(icon)
     app.setStyleSheet(build_application_stylesheet())
     base_dir = default_base_dir()
     if _acquire_instance_lock(base_dir) is None:
@@ -231,6 +228,15 @@ def main(argv: list[str] | None = None) -> int:
     storage = DesktopStorage(base_dir)
     show_startup_window(storage=storage)
     return app.exec()
+
+
+def _set_windows_app_user_model_id() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("L8N.RaidBot")
+    except Exception:
+        return
 
 
 if __name__ == "__main__":
